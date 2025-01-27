@@ -1,0 +1,85 @@
+[project]
+name = "goal"
+version="0.0.1"
+description = "(G)eometric (O)ptimiz(A)tion (L)ibraries"
+dependencies = [
+    "jax",
+    "optax",
+    "matplotlib",
+    "scipy",
+    "scikit-learn",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",  # For coverage reporting
+]
+
+benchmark = [
+    "torchvision",
+]
+
+gpu = [
+    "jax[cuda12]",
+]
+
+[build-system]
+# These are standard for modern Python projects:
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+requires-python = ">=3.12"
+# Add your dependencies:
+[tool.setuptools.packages.find]
+where = ["src"]
+include =["goal*"]
+
+[tool.setuptools.package-data]
+goal = ["py.typed"]
+
+[tool.pyright]
+include = ["src/goal", "examples", "tests"]
+extraPaths = ["src"]
+typeCheckingMode = "recommended"
+venvPath = "."
+venv = ".uvenv"
+reportUnknownParameterType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportAny = "none"
+reportExplicitAny = "none"
+reportMissingSuperCall = "none"
+
+[tool.ruff]
+src = ["src"]
+output-format="concise"
+exclude = ["node_modules", "__pycache__"]
+lint.select = [
+    "F",  # Pyflakes
+    "E",  # PEP8
+    "W",  # PEP8
+    "C90",  # McCabe
+    "D",  # Pydocstyle
+    "R",  # Ruff-specific
+    "N",  # Naming
+    "I",  # Import conventions
+    "SIM",  # flake8-simplify
+    "UP",  # pyupgrade
+    "RUF",  # ruff-specific rules
+    "ARG",  # flake8-unused-arguments
+    "TRY",  # tryceratops
+    "PLR0402", # import a.b as b -> from a import b
+]
+
+lint.ignore = [
+    "E501",  # Example: Ignore line length warnings
+    "D",     # Ignore all docstring-related warnings
+    "ARG002",# Ignore unused-argument in method > problematic eg when required by parent class / interface
+    "ARG003",# Unused parameters
+    "TRY003",# Allow to write exception messages in place instead of subclassing
+    # "RUF001",# Allow confusable characters (eg σ)
+    "F722",  # spurious errors because of jaxtyping
+]
+
+[tool.ruff.format]
+docstring-code-format = true
