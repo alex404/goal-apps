@@ -1,23 +1,18 @@
 [project]
-name = "goal"
+name = "goal-apps"
 version="0.0.1"
-description = "(G)eometric (O)ptimiz(A)tion (L)ibraries"
+description = "High-level applications built on GOAL"
 dependencies = [
-    "jax",
-    "optax",
+    "goal-jax",
     "matplotlib",
-    "scipy",
     "scikit-learn",
+    "torchvision",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=7.0",
     "pytest-cov>=4.0",  # For coverage reporting
-]
-
-benchmark = [
-    "torchvision",
 ]
 
 gpu = [
@@ -32,17 +27,17 @@ requires-python = ">=3.12"
 # Add your dependencies:
 [tool.setuptools.packages.find]
 where = ["src"]
-include =["goal*"]
+include =["apps*"]
 
 [tool.setuptools.package-data]
 goal = ["py.typed"]
 
 [tool.pyright]
-include = ["src/goal", "examples", "tests"]
+include = ["src/apps"]
 extraPaths = ["src"]
 typeCheckingMode = "recommended"
 venvPath = "."
-venv = ".uvenv"
+venv = ".venv"
 reportUnknownParameterType = "none"
 reportUnknownMemberType = "none"
 reportUnknownArgumentType = "none"
