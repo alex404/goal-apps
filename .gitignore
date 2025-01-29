@@ -1,6 +1,7 @@
 # Local results
 scratch/
 experiments/
+.cache/
 
 
 # Python

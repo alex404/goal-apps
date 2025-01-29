@@ -26,15 +26,14 @@ build-backend = "setuptools.build_meta"
 requires-python = ">=3.12"
 # Add your dependencies:
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
 include =["apps*"]
 
 [tool.setuptools.package-data]
 goal = ["py.typed"]
 
 [tool.pyright]
-include = ["src/apps"]
-extraPaths = ["src"]
+include = ["apps"]
 typeCheckingMode = "recommended"
 venvPath = "."
 venv = ".venv"

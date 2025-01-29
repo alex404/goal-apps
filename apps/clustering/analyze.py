@@ -6,17 +6,16 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from jax import Array
-
 from goal.geometry import Natural, Point, PositiveDefinite
 from goal.models import DifferentiableHMoG
+from jax import Array
 
-from ...shared import ExamplePaths, initialize_paths
+from ..shared import ExperimentPaths, example_paths
 from .run import create_model, load_mnist
 from .types import MNISTData
 
 
-def load_results(paths: ExamplePaths) -> tuple[Any, MNISTData]:
+def load_results(paths: ExperimentPaths) -> tuple[Any, MNISTData]:
     """Load training results and data."""
     with open(paths.analysis_path) as f:
         results = json.load(f)
@@ -58,7 +57,7 @@ def extract_component_prototypes[ObsRep: PositiveDefinite, LatRep: PositiveDefin
 
 
 def visualize_prototypes(
-    prototypes: Array, n_components: int, paths: ExamplePaths
+    prototypes: Array, n_components: int, paths: ExperimentPaths
 ) -> None:
     """Create a grid visualization of the prototype digits."""
     # Compute grid dimensions
@@ -93,7 +92,7 @@ def visualize_prototypes(
 
 def main() -> None:
     """Run analysis on trained model."""
-    paths = initialize_paths(__file__)
+    paths = example_paths(__file__)
 
     # Load results and reconstruct model
     results, data = load_results(paths)

@@ -5,13 +5,12 @@ from argparse import ArgumentParser
 import jax
 import jax.numpy as jnp
 import numpy as np
+from goal.geometry import Diagonal
+from goal.models import differentiable_hmog
 from numpy.typing import NDArray
 from torchvision import datasets, transforms
 
-from goal.geometry import Diagonal
-from goal.models import differentiable_hmog
-
-from ...shared import ExamplePaths, initialize_jax, initialize_paths, save_results
+from ..shared import ExperimentPaths, initialize_jax
 from .hmog_alg import GradientDescentHMoG, MinibatchHMoG
 from .scipy_alg import PCAGMM
 from .types import MNISTData
@@ -86,7 +85,7 @@ def create_parser() -> ArgumentParser:
     return parser
 
 
-def load_mnist(paths: ExamplePaths) -> MNISTData:
+def load_mnist(paths: ExperimentPaths) -> MNISTData:
     """Load and preprocess MNIST dataset."""
 
     def transform_tensor(x: NDArray[np.uint8]) -> NDArray[np.float32]:
@@ -175,7 +174,7 @@ def main() -> None:
     print(f"Running experiment: {experiment}")
     print(f"with JIT: {args.jit}")
     initialize_jax(device=args.device, disable_jit=not (args.jit))
-    paths = initialize_paths(__file__, experiment)
+    paths = ExperimentPaths(experiment)
     key = jax.random.PRNGKey(0)
 
     n_epochs = args.stage1_epochs + args.stage2_epochs + args.stage3_epochs
@@ -194,7 +193,7 @@ def main() -> None:
 
     results = model.evaluate(key, data)
 
-    save_results(results, paths)
+    paths.save_analysis(results, "training_results")
 
 
 if __name__ == "__main__":

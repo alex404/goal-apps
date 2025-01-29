@@ -8,8 +8,6 @@ from typing import Any, override
 
 import jax
 import jax.numpy as jnp
-from jax import Array, debug
-
 from goal.geometry import (
     Natural,
     Optimizer,
@@ -24,6 +22,7 @@ from goal.models import (
     LinearGaussianModel,
     Normal,
 )
+from jax import Array, debug
 
 from .common import evaluate_clustering
 from .types import MNISTData, ProbabilisticResults
