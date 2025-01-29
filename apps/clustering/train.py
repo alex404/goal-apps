@@ -20,6 +20,14 @@ def create_parser() -> ArgumentParser:
     """Create argument parser for MNIST benchmarks."""
     parser = ArgumentParser(description="Run MNIST benchmarking experiments")
 
+    model_group = parser.add_argument_group("Experiment Configuration")
+    model_group.add_argument(
+        "--experiment",
+        type=str,
+        help="Name of experiment",
+        required=True,
+    )
+
     model_group = parser.add_argument_group("Model Configuration")
     model_group.add_argument(
         "--model",
@@ -169,7 +177,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Save results with configuration in filename
-    experiment = f"model_{args.model}_ld{args.latent_dim}_nc{args.n_clusters}"
+    experiment = args.experiment
 
     print(f"Running experiment: {experiment}")
     print(f"with JIT: {args.jit}")
