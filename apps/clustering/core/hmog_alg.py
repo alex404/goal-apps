@@ -251,6 +251,44 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](ABC):
             training_time=time() - start_time,
         )
 
+    # Add this method to the HMoGBase class
+    def get_component_prototypes(
+        self,
+        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+    ) -> Array:
+        r"""Extract the mean image for each mixture component.
+
+        For HMoG models, the prototype for each component k is:
+        $$
+        \mu_k = A_k \mu_k^z + b_k
+        $$
+        where $A_k, b_k$ are the linear transformation parameters for component k,
+        and $\mu_k^z$ is the mean of the latent distribution for component k.
+
+        Returns:
+            Array of shape (n_components, obs_dim) containing the mean
+            observation for each mixture component.
+        """
+        # Split into likelihood and mixture parameters
+        lkl_params, mix_params = self.model.split_conjugated(params)
+
+        # Extract components from mixture
+        comp_lats, _ = self.model.upr_hrm.split_natural_mixture(mix_params)
+
+        # For each component, compute the observable distribution and get its mean
+        prototypes = []
+        for comp_lat_params in comp_lats:
+            # Get latent mean for this component
+            with self.model.lwr_hrm as lh:
+                lwr_hrm_params = lh.join_conjugated(lkl_params, comp_lat_params)
+                lwr_hrm_means = lh.to_mean(lwr_hrm_params)
+                lwr_hrm_obs = lh.split_params(lwr_hrm_means)[0]
+                obs_means = lh.obs_man.split_mean_second_moment(lwr_hrm_obs)[0].array
+
+            prototypes.append(obs_means)
+
+        return jnp.stack(prototypes)
+
 
 @dataclass(frozen=True)
 class GradientDescentHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](

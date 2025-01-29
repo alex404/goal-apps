@@ -43,6 +43,7 @@ reportUnknownArgumentType = "none"
 reportAny = "none"
 reportExplicitAny = "none"
 reportMissingSuperCall = "none"
+reportUnusedCallResult = "none" 
 
 [tool.ruff]
 src = ["src"]

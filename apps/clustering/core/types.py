@@ -52,6 +52,15 @@ class BaseModel[P, B](Protocol):
 
     def evaluate(self, key: Array, data: MNISTData) -> B: ...
 
+    def get_component_prototypes(self, params: P) -> Array:
+        """Get a representative sample for each mixture component.
+
+        Returns:
+            Array with shape (n_components, *data_dims) containing a prototype
+            for each mixture component in the observation space.
+        """
+        ...
+
 
 ModelType = Literal["probabilistic", "two_stage"]
 

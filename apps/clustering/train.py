@@ -11,9 +11,9 @@ from numpy.typing import NDArray
 from torchvision import datasets, transforms
 
 from ..shared import ExperimentPaths, initialize_jax
-from .hmog_alg import GradientDescentHMoG, MinibatchHMoG
-from .scipy_alg import PCAGMM
-from .types import MNISTData
+from .core.hmog_alg import GradientDescentHMoG, MinibatchHMoG
+from .core.scipy_alg import PCAGMM
+from .core.types import MNISTData
 
 
 def create_parser() -> ArgumentParser:
@@ -21,19 +21,19 @@ def create_parser() -> ArgumentParser:
     parser = ArgumentParser(description="Run MNIST benchmarking experiments")
 
     model_group = parser.add_argument_group("Model Configuration")
-    _ = model_group.add_argument(
+    model_group.add_argument(
         "--model",
         choices=["pcagmm", "hmog"],
         default="hmog",
         help="Model architecture to evaluate",
     )
-    _ = model_group.add_argument(
+    model_group.add_argument(
         "--latent-dim",
         type=int,
         default=10,
         help="Dimensionality of latent space",
     )
-    _ = model_group.add_argument(
+    model_group.add_argument(
         "--n-clusters",
         type=int,
         default=10,
@@ -42,33 +42,33 @@ def create_parser() -> ArgumentParser:
 
     training_group = parser.add_argument_group("Training Configuration")
     # stage 1 epochs
-    _ = training_group.add_argument(
+    training_group.add_argument(
         "--stage1-epochs",
         type=int,
         default=100,
         help="Number of training epochs for stage 1",
     )
     # stage 2 epochs
-    _ = training_group.add_argument(
+    training_group.add_argument(
         "--stage2-epochs",
         type=int,
         default=100,
         help="Number of training epochs for stage 2",
     )
-    _ = training_group.add_argument(
+    training_group.add_argument(
         "--stage3-epochs",
         type=int,
         default=100,
         help="Number of training epochs",
     )
-    _ = training_group.add_argument(
+    training_group.add_argument(
         "--device",
         choices=["cpu", "gpu"],
         default="cpu",
         help="Device to run computations on",
     )
     # batch size, default 0 means full batch
-    _ = training_group.add_argument(
+    training_group.add_argument(
         "--batch-size",
         type=int,
         default=0,
@@ -76,7 +76,7 @@ def create_parser() -> ArgumentParser:
     )
 
     # Jit disabled by default, flag for true
-    _ = training_group.add_argument(
+    training_group.add_argument(
         "--jit",
         action="store_true",
         help="Enable JIT compilation for JAX functions",
