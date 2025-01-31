@@ -280,6 +280,9 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         train_clusters = self.cluster_assignments(final_params, data.train_images)
         test_clusters = self.cluster_assignments(final_params, data.test_images)
 
+        # Get prototypes
+        prototypes = self.get_component_prototypes(final_params)
+
         return ProbabilisticResults(
             model_name=self.__class__.__name__,
             train_log_likelihood=train_lls.tolist(),
@@ -295,6 +298,7 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             n_clusters=self.n_clusters,
             n_parameters=self.model.dim,
             training_time=time() - start_time,
+            prototypes=prototypes.tolist(),  # Add prototypes to results
         )
 
     # Add this method to the HMoGBase class

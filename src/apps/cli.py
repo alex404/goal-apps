@@ -6,6 +6,7 @@ from omegaconf import DictConfig
 from plugins import register_plugins
 
 from apps.clustering.core.config import ClusteringConfig
+from apps.experiments import Experiment
 
 main = typer.Typer()
 clustering_app = typer.Typer()
@@ -37,6 +38,22 @@ def train(overrides: list[str] = train_overrides):
     from apps.clustering.train import train
 
     train(cfg)
+
+
+analyze_overrides = typer.Argument(
+    default=None, help="Configuration overrides (e.g., dataset=mnist model=hmog)"
+)
+
+
+# In cli.py
+@clustering_app.command()
+def analyze(overrides: list[str] = analyze_overrides):
+    """Analyze results from a trained clustering model."""
+    from apps.clustering.analyze import analyze
+
+    cfg = compose_config(overrides)
+
+    analyze(Experiment(cfg.experiment))
 
 
 if __name__ == "__main__":

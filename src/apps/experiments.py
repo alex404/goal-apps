@@ -18,7 +18,7 @@ class Experiment:
 
     @property
     def project_root(self) -> Path:
-        return Path(__file__).parents[1]
+        return Path(__file__).parents[2]
 
     @property
     def experiments_dir(self) -> Path:

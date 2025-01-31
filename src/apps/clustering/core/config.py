@@ -1,4 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
+
+from omegaconf import MISSING
 
 
 @dataclass
@@ -17,12 +20,16 @@ class ModelConfig:
     n_clusters: int
 
 
+defaults = [{"dataset": MISSING}, {"model": MISSING}]
+
+
 @dataclass
 class ClusteringConfig:
     """Base configuration for clustering experiments."""
 
+    experiment: str
     dataset: DatasetConfig
     model: ModelConfig
-    experiment: str
+    defaults: list[Any] = field(default_factory=lambda: defaults)
     device: str = "gpu"
     jit: bool = True

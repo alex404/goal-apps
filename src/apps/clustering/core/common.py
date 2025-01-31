@@ -34,6 +34,7 @@ class ProbabilisticResults(TypedDict):
     n_clusters: int
     n_parameters: int
     training_time: float
+    prototypes: list[list[float]]  # Add this field
 
 
 class TwoStageResults(TypedDict):
