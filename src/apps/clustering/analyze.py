@@ -19,6 +19,22 @@ def analyze(paths: Experiment) -> None:
 
     # Create visualization of prototypes
     visualize_prototypes(results, paths)
+    plot_learning_curves(results, paths)
+
+
+def plot_learning_curves(results: ProbabilisticResults, paths: Experiment) -> None:
+    """Plot training metrics over time."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    epochs = range(len(results["train_log_likelihood"]))
+    ax.plot(epochs, results["train_log_likelihood"], label="Training Log-Likelihood")
+
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Log-Likelihood")
+    ax.set_title(f"{results['model_name']} Training Progress")
+    ax.legend()
+
+    paths.save_plot(fig, "learning_curves")
 
 
 def visualize_prototypes(results: ProbabilisticResults, paths: Experiment) -> None:

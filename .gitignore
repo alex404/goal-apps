@@ -3,15 +3,6 @@ scratch/
 experiments/
 .cache/
 
-# Plugins
-# Ignore all plugins
-plugins/*
-
-# But keep specific files
-!plugins/__init__.py
-!plugins/datasets/mnist.py
-!plugins/models/hmog.py
-
 # Python
 __pycache__/
 *.py[cod]
