@@ -36,17 +36,10 @@ from apps.clustering.core.datasets import SupervisedDataset
 from apps.clustering.core.models import Model
 
 
-class RepresentationType(str, Enum):
-    SCALE = "scale"
-    DIAGONAL = "diagonal"
-    POSITIVE_DEFINITE = "positive_definite"
-
-
-REP_TYPE_MAP = {
-    RepresentationType.SCALE: Scale,
-    RepresentationType.DIAGONAL: Diagonal,
-    RepresentationType.POSITIVE_DEFINITE: PositiveDefinite,
-}
+class RepresentationType(Enum):
+    scale = Scale
+    diagonal = Diagonal
+    positive_definite = PositiveDefinite
 
 
 @dataclass
@@ -57,8 +50,8 @@ class HMoGConfig(ModelConfig):
     data_dim: int = MISSING
     latent_dim: int = 10
     n_clusters: int = 10
-    obs_rep: RepresentationType = RepresentationType.DIAGONAL
-    lat_rep: RepresentationType = RepresentationType.DIAGONAL
+    obs_rep: RepresentationType = RepresentationType.diagonal
+    lat_rep: RepresentationType = RepresentationType.diagonal
     stage1_epochs: int = 100
     stage2_epochs: int = 100
     stage3_epochs: int = 100
@@ -349,24 +342,6 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 ):
     """Minibatch training implementation of HMoG."""
 
-    # def __init__( self, stage1_epo
-
-    #         return MinibatchHMoG(
-    #             stage1_epochs=stage1_epochs,
-    #             stage2_epochs=stage2_epochs,
-    #             n_epochs=n_epochs,
-    #             stage2_learning_rate=1e-3,
-    #             stage3_learning_rate=3e-4,
-    #             model=differentiable_hmog(
-    #                 obs_dim=data_dim,
-    #                 obs_rep=Diagonal,
-    #                 lat_dim=latent_dim,
-    #                 n_components=n_clusters,
-    #                 lat_rep=Diagonal,
-    #             ),
-    #             stage2_batch_size=batch_size,
-    #             stage3_batch_size=batch_size,
-    #         )
     def __init__(
         self,
         data_dim: int,
@@ -390,8 +365,8 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         self.stage2_batch_size: int = stage2_batch_size
         self.stage3_batch_size: int = stage3_batch_size
 
-        obs_rep_type = REP_TYPE_MAP[obs_rep]
-        lat_rep_type = REP_TYPE_MAP[lat_rep]
+        obs_rep_type = obs_rep.value
+        lat_rep_type = lat_rep.value
 
         self.model: DifferentiableHMoG[ObsRep, LatRep] = differentiable_hmog(  # pyright: ignore[reportAttributeAccessIssue]
             obs_dim=data_dim,
