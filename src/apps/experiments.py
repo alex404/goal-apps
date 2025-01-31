@@ -3,21 +3,18 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any
 
 import jax
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
-# Custom type aliases
-Bounds2D: TypeAlias = tuple[float, float, float, float]  # (x_min, x_max, y_min, y_max)
-
 ### Initialization and Path Management ###
 
 
 @dataclass(frozen=True)
-class ExperimentPaths:
-    experiment_name: str
+class Experiment:
+    name: str
 
     @property
     def project_root(self) -> Path:
@@ -25,7 +22,7 @@ class ExperimentPaths:
 
     @property
     def experiments_dir(self) -> Path:
-        return self.project_root / "experiments" / self.experiment_name
+        return self.project_root / "experiments" / self.name
 
     @property
     def cache_dir(self) -> Path:

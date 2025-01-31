@@ -1,3 +1,5 @@
+from typing import TypedDict
+
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
@@ -19,3 +21,26 @@ def evaluate_clustering(cluster_assignments: Array, true_labels: Array) -> float
     predicted_labels = jnp.array([cluster_to_class[i] for i in cluster_assignments])
 
     return float(accuracy_score(true_labels, predicted_labels))
+
+
+class ProbabilisticResults(TypedDict):
+    model_name: str
+    train_log_likelihood: list[float]
+    final_train_log_likelihood: float
+    final_test_log_likelihood: float
+    train_accuracy: float
+    test_accuracy: float
+    latent_dim: int
+    n_clusters: int
+    n_parameters: int
+    training_time: float
+
+
+class TwoStageResults(TypedDict):
+    model_name: str
+    reconstruction_error: float  # Single value from one-shot optimization
+    train_accuracy: float
+    test_accuracy: float
+    latent_dim: int
+    n_clusters: int
+    training_time: float

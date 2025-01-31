@@ -7,7 +7,11 @@ dependencies = [
     "matplotlib",
     "scikit-learn",
     "torchvision",
+    "hydra-core",
 ]
+
+[project.scripts]
+goal = "apps.cli:main"
 
 [project.optional-dependencies]
 test = [
@@ -26,14 +30,14 @@ build-backend = "setuptools.build_meta"
 requires-python = ">=3.12"
 # Add your dependencies:
 [tool.setuptools.packages.find]
-where = ["."]
-include =["apps*"]
+where = ["src", "."]
+include =["apps*", "plugins*"]
 
 [tool.setuptools.package-data]
 goal = ["py.typed"]
 
 [tool.pyright]
-include = ["apps"]
+include = ["src/apps", "plugins"]
 typeCheckingMode = "recommended"
 venvPath = "."
 venv = ".venv"

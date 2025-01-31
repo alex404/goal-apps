@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 from functools import partial
 from time import time
 from typing import Any, override
@@ -9,11 +10,13 @@ from typing import Any, override
 import jax
 import jax.numpy as jnp
 from goal.geometry import (
+    Diagonal,
     Natural,
     Optimizer,
     OptState,
     Point,
     PositiveDefinite,
+    Scale,
 )
 from goal.models import (
     DifferentiableHMoG,
@@ -21,11 +24,54 @@ from goal.models import (
     FullNormal,
     LinearGaussianModel,
     Normal,
+    differentiable_hmog,
 )
+from hydra.core.config_store import ConfigStore
 from jax import Array, debug
+from omegaconf import MISSING
 
-from .common import evaluate_clustering
-from .types import MNISTData, ProbabilisticResults
+from apps.clustering.core.common import ProbabilisticResults, evaluate_clustering
+from apps.clustering.core.config import ModelConfig
+from apps.clustering.core.datasets import SupervisedDataset
+from apps.clustering.core.models import Model
+
+
+class RepresentationType(str, Enum):
+    SCALE = "scale"
+    DIAGONAL = "diagonal"
+    POSITIVE_DEFINITE = "positive_definite"
+
+
+REP_TYPE_MAP = {
+    RepresentationType.SCALE: Scale,
+    RepresentationType.DIAGONAL: Diagonal,
+    RepresentationType.POSITIVE_DEFINITE: PositiveDefinite,
+}
+
+
+@dataclass
+class HMoGConfig(ModelConfig):
+    """Configuration for Hierarchical Mixture of Gaussians model."""
+
+    _target_: str = "plugins.models.hmog.MinibatchHMoG"
+    data_dim: int = MISSING
+    latent_dim: int = 10
+    n_clusters: int = 10
+    obs_rep: RepresentationType = RepresentationType.DIAGONAL
+    lat_rep: RepresentationType = RepresentationType.DIAGONAL
+    stage1_epochs: int = 100
+    stage2_epochs: int = 100
+    stage3_epochs: int = 100
+    stage2_batch_size: int = 256
+    stage3_batch_size: int = 256
+    stage2_learning_rate: float = 1e-3
+    stage3_learning_rate: float = 3e-4
+
+
+# Register config
+cs = ConfigStore.instance()
+cs.store(group="model", name="hmog", node=HMoGConfig)
+
 
 OBS_JITTER = 1e-7
 OBS_MIN_VAR = 1e-6
@@ -141,8 +187,9 @@ def initialize_gmm_components(
 ### ABC ###
 
 
-@dataclass(frozen=True)
-class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](ABC):
+class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
+    Model[Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]], ABC
+):
     """Base class for HMoG implementations."""
 
     # Fields
@@ -153,15 +200,18 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](ABC):
     # Properties
 
     @property
+    @override
     def latent_dim(self) -> int:
         return self.model.lat_man.obs_man.data_dim
 
     @property
+    @override
     def n_clusters(self) -> int:
         return self.model.lat_man.lat_man.dim + 1
 
     # Methods
 
+    @override
     def initialize(
         self, key: Array, data: Array
     ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
@@ -202,6 +252,7 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](ABC):
     ) -> Array:
         return self.model.average_log_observable_density(params, data)
 
+    @override
     def generate(
         self,
         params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
@@ -210,6 +261,7 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](ABC):
     ) -> Array:
         return self.model.observable_sample(key, params, n_samples)
 
+    @override
     def cluster_assignments(
         self, params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], data: Array
     ) -> Array:
@@ -222,10 +274,11 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](ABC):
 
         return jax.vmap(data_point_cluster)(data)
 
+    @override
     def evaluate(
         self,
         key: Array,
-        data: MNISTData,
+        data: SupervisedDataset,
     ) -> ProbabilisticResults:
         start_time = time()
         params = self.initialize(key, data.train_images)
@@ -252,6 +305,7 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](ABC):
         )
 
     # Add this method to the HMoGBase class
+    @override
     def get_component_prototypes(
         self,
         params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
@@ -290,151 +344,62 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](ABC):
         return jnp.stack(prototypes)
 
 
-@dataclass(frozen=True)
-class GradientDescentHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
-    HMoGBase[ObsRep, LatRep]
-):
-    """Original gradient-based HMoG implementation."""
-
-    stage1_epochs: int
-    stage2_epochs: int
-    stage2_learning_rate: float
-    stage3_learning_rate: float
-
-    @property
-    def stage3_epochs(self) -> int:
-        return self.n_epochs - self.stage1_epochs - self.stage2_epochs
-
-    @partial(jax.jit, static_argnums=(0,))
-    @override
-    def fit(
-        self,
-        params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-        sample: Array,
-    ) -> tuple[Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array]:
-        """Three-stage training process combining EM and gradient descent."""
-        lkl_params0, mix_params0 = self.model.split_conjugated(params0)
-
-        # Stage 1: EM for LinearGaussianModel
-        with self.model.lwr_hrm as lh:
-            z = lh.lat_man.standard_normal()
-            lgm_params0 = lh.join_conjugated(lkl_params0, lh.lat_man.to_natural(z))
-
-            def stage1_step(
-                params: Point[Natural, LinearGaussianModel[ObsRep]], _: Any
-            ) -> tuple[Point[Natural, LinearGaussianModel[ObsRep]], Array]:
-                ll = lh.average_log_observable_density(params, sample)
-                means = lh.expectation_step(params, sample)
-                obs_means, int_means, lat_means = lh.split_params(means)
-                obs_means = lh.obs_man.regularize_covariance(
-                    obs_means, OBS_JITTER, OBS_MIN_VAR
-                )
-                means = lh.join_params(obs_means, int_means, lat_means)
-                params1 = lh.to_natural(means)
-                lkl_params = lh.likelihood_function(params1)
-                z = lh.lat_man.to_natural(lh.lat_man.standard_normal())
-                next_params = lh.join_conjugated(lkl_params, z)
-                debug.print("Stage 1 LL: {}", ll)
-                return next_params, ll
-
-            lgm_params1, lls1 = jax.lax.scan(
-                stage1_step, lgm_params0, None, length=self.stage1_epochs
-            )
-            lkl_params1 = lh.likelihood_function(lgm_params1)
-
-        # Stage 2: Gradient descent for mixture components
-        stage2_optimizer: Optimizer[
-            Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]
-        ] = Optimizer.adam(learning_rate=self.stage2_learning_rate)
-        stage2_opt_state = stage2_optimizer.init(mix_params0)
-
-        def stage2_loss(
-            params: Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
-        ) -> Array:
-            hmog_params = self.model.join_conjugated(lkl_params1, params)
-            return -self.model.average_log_observable_density(hmog_params, sample)
-
-        def stage2_step(
-            opt_state_and_params: tuple[
-                OptState,
-                Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
-            ],
-            _: Any,
-        ) -> tuple[
-            tuple[
-                OptState,
-                Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
-            ],
-            Array,
-        ]:
-            opt_state, params = opt_state_and_params
-            ll, grads = self.model.upr_hrm.value_and_grad(stage2_loss, params)
-            opt_state, params = stage2_optimizer.update(opt_state, grads, params)
-            debug.print("Stage 2 LL: {}", -ll)
-            return (opt_state, params), -ll
-
-        (_, mix_params1), lls2 = jax.lax.scan(
-            stage2_step,
-            (stage2_opt_state, mix_params0),
-            None,
-            length=self.stage2_epochs,
-        )
-
-        # Stage 3: Gradient descent for full model
-        params1 = self.model.join_conjugated(lkl_params1, mix_params1)
-        stage3_optimizer: Optimizer[Natural, DifferentiableHMoG[ObsRep, LatRep]] = (
-            Optimizer.adam(learning_rate=self.stage3_learning_rate)
-        )
-        stage3_opt_state = stage3_optimizer.init(params1)
-
-        def stage3_loss(
-            params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-        ) -> Array:
-            return -self.model.average_log_observable_density(params, sample)
-
-        def stage3_step(
-            opt_state_and_params: tuple[
-                OptState,
-                Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-            ],
-            _: Any,
-        ) -> tuple[
-            tuple[
-                OptState,
-                Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-            ],
-            Array,
-        ]:
-            opt_state, params = opt_state_and_params
-            ll, grads = self.model.value_and_grad(stage3_loss, params)
-            opt_state, params = stage3_optimizer.update(opt_state, grads, params)
-            debug.print("Stage 3 LL: {}", -ll)
-            return (opt_state, params), -ll
-
-        (_, final_params), lls3 = jax.lax.scan(
-            stage3_step, (stage3_opt_state, params1), None, length=self.stage3_epochs
-        )
-
-        lls = jnp.concatenate([lls1, lls2, lls3])
-        return final_params, lls.ravel()
-
-
-@dataclass(frozen=True)
 class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     HMoGBase[ObsRep, LatRep]
 ):
     """Minibatch training implementation of HMoG."""
 
-    stage1_epochs: int
-    stage2_epochs: int
-    stage2_batch_size: int
-    stage3_batch_size: int
-    stage2_learning_rate: float
-    stage3_learning_rate: float
+    # def __init__( self, stage1_epo
 
-    @property
-    def stage3_epochs(self) -> int:
-        return self.n_epochs - self.stage1_epochs - self.stage2_epochs
+    #         return MinibatchHMoG(
+    #             stage1_epochs=stage1_epochs,
+    #             stage2_epochs=stage2_epochs,
+    #             n_epochs=n_epochs,
+    #             stage2_learning_rate=1e-3,
+    #             stage3_learning_rate=3e-4,
+    #             model=differentiable_hmog(
+    #                 obs_dim=data_dim,
+    #                 obs_rep=Diagonal,
+    #                 lat_dim=latent_dim,
+    #                 n_components=n_clusters,
+    #                 lat_rep=Diagonal,
+    #             ),
+    #             stage2_batch_size=batch_size,
+    #             stage3_batch_size=batch_size,
+    #         )
+    def __init__(
+        self,
+        data_dim: int,
+        latent_dim: int,
+        n_clusters: int,
+        obs_rep: RepresentationType,
+        lat_rep: RepresentationType,
+        stage1_epochs: int,
+        stage2_epochs: int,
+        stage3_epochs: int,
+        stage2_batch_size: int,
+        stage3_batch_size: int,
+        stage2_learning_rate: float,
+        stage3_learning_rate: float,
+    ) -> None:
+        self.stage1_epochs: int = stage1_epochs
+        self.stage2_epochs: int = stage2_epochs
+        self.stage3_epochs: int = stage3_epochs
+        self.stage2_learning_rate: float = stage2_learning_rate
+        self.stage3_learning_rate: float = stage3_learning_rate
+        self.stage2_batch_size: int = stage2_batch_size
+        self.stage3_batch_size: int = stage3_batch_size
+
+        obs_rep_type = REP_TYPE_MAP[obs_rep]
+        lat_rep_type = REP_TYPE_MAP[lat_rep]
+
+        self.model: DifferentiableHMoG[ObsRep, LatRep] = differentiable_hmog(  # pyright: ignore[reportAttributeAccessIssue]
+            obs_dim=data_dim,
+            obs_rep=obs_rep_type,
+            lat_dim=latent_dim,
+            n_components=n_clusters,
+            lat_rep=lat_rep_type,
+        )
 
     @partial(jax.jit, static_argnums=(0,))
     @override
@@ -519,30 +484,6 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             opt_state, params = carry
             grad = self.model.upr_hrm.grad(lambda p: stage2_loss(p, batch), params)
 
-            # def _save_state(
-            #     params_array: Array, batch_data: Array, has_nans: bool
-            # ) -> None:
-            #     if has_nans:
-            #         diagnostic_data = {
-            #             "parameters": params_array.tolist(),
-            #             "batch_data": batch_data.tolist(),
-            #         }
-            #         pathlib.Path("diagnostics").mkdir(parents=True, exist_ok=True)
-            #         with open("diagnostics/hmog_failure.json", "w") as f:
-            #             json.dump(diagnostic_data, f)
-            #         raise ValueError(
-            #             "Non-finite gradients detected - terminating training"
-            #         )
-            #
-            # has_bad_grads = ~jnp.all(jnp.isfinite(grad.array))
-            # hmog_params = self.model.join_conjugated(lkl_params1, params)
-            # io_callback(
-            #     _save_state,
-            #     None,
-            #     hmog_params.array,
-            #     batch,
-            #     has_bad_grads,
-            # )
             opt_state, params = stage2_optimizer.update(opt_state, grad, params)
             params = bound_mixture_probabilities(self.model.upr_hrm, params)
             return ((opt_state, params), None)
@@ -668,3 +609,213 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         lls = jnp.concatenate([lls1, lls2, lls3])
         return final_params, lls.ravel()
+
+
+# Graveyard
+
+
+# def _save_state(
+#     params_array: Array, batch_data: Array, has_nans: bool
+# ) -> None:
+#     if has_nans:
+#         diagnostic_data = {
+#             "parameters": params_array.tolist(),
+#             "batch_data": batch_data.tolist(),
+#         }
+#         pathlib.Path("diagnostics").mkdir(parents=True, exist_ok=True)
+#         with open("diagnostics/hmog_failure.json", "w") as f:
+#             json.dump(diagnostic_data, f)
+#         raise ValueError(
+#             "Non-finite gradients detected - terminating training"
+#         )
+#
+# has_bad_grads = ~jnp.all(jnp.isfinite(grad.array))
+# hmog_params = self.model.join_conjugated(lkl_params1, params)
+# io_callback(
+#     _save_state,
+#     None,
+#     hmog_params.array,
+#     batch,
+#     has_bad_grads,
+# )
+
+# def create_model(
+#     model_name: str,
+#     latent_dim: int,
+#     n_clusters: int,
+#     data_dim: int,
+#     stage1_epochs: int,
+#     stage2_epochs: int,
+#     n_epochs: int,
+#     batch_size: int,
+# ):
+#     """Create model instance based on configuration."""
+#     if model_name == "pcagmm":
+#         return PCAGMM(latent_dim, n_clusters)
+#     if model_name == "hmog":
+#         if batch_size == 0:
+#             return GradientDescentHMoG(
+#                 stage1_epochs=stage1_epochs,
+#                 stage2_epochs=stage2_epochs,
+#                 n_epochs=n_epochs,
+#                 stage2_learning_rate=1e-3,
+#                 stage3_learning_rate=3e-4,
+#                 model=differentiable_hmog(
+#                     obs_dim=data_dim,
+#                     obs_rep=Diagonal,
+#                     lat_dim=latent_dim,
+#                     n_components=n_clusters,
+#                     lat_rep=Diagonal,
+#                 ),
+#             )
+#         return MinibatchHMoG(
+#             stage1_epochs=stage1_epochs,
+#             stage2_epochs=stage2_epochs,
+#             n_epochs=n_epochs,
+#             stage2_learning_rate=1e-3,
+#             stage3_learning_rate=3e-4,
+#             model=differentiable_hmog(
+#                 obs_dim=data_dim,
+#                 obs_rep=Diagonal,
+#                 lat_dim=latent_dim,
+#                 n_components=n_clusters,
+#                 lat_rep=Diagonal,
+#             ),
+#             stage2_batch_size=batch_size,
+#             stage3_batch_size=batch_size,
+#         )
+#
+# raise ValueError(f"Unknown model: {model_name}")
+### Constants ###
+
+
+# @dataclass(frozen=True)
+# class GradientDescentHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
+#     HMoGBase[ObsRep, LatRep]
+# ):
+#     """Original gradient-based HMoG implementation."""
+#
+#     stage1_epochs: int
+#     stage2_epochs: int
+#     stage2_learning_rate: float
+#     stage3_learning_rate: float
+#
+#     @property
+#     def stage3_epochs(self) -> int:
+#         return self.n_epochs - self.stage1_epochs - self.stage2_epochs
+#
+#     @partial(jax.jit, static_argnums=(0,))
+#     @override
+#     def fit(
+#         self,
+#         params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+#         sample: Array,
+#     ) -> tuple[Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array]:
+#         """Three-stage training process combining EM and gradient descent."""
+#         lkl_params0, mix_params0 = self.model.split_conjugated(params0)
+#
+#         # Stage 1: EM for LinearGaussianModel
+#         with self.model.lwr_hrm as lh:
+#             z = lh.lat_man.standard_normal()
+#             lgm_params0 = lh.join_conjugated(lkl_params0, lh.lat_man.to_natural(z))
+#
+#             def stage1_step(
+#                 params: Point[Natural, LinearGaussianModel[ObsRep]], _: Any
+#             ) -> tuple[Point[Natural, LinearGaussianModel[ObsRep]], Array]:
+#                 ll = lh.average_log_observable_density(params, sample)
+#                 means = lh.expectation_step(params, sample)
+#                 obs_means, int_means, lat_means = lh.split_params(means)
+#                 obs_means = lh.obs_man.regularize_covariance(
+#                     obs_means, OBS_JITTER, OBS_MIN_VAR
+#                 )
+#                 means = lh.join_params(obs_means, int_means, lat_means)
+#                 params1 = lh.to_natural(means)
+#                 lkl_params = lh.likelihood_function(params1)
+#                 z = lh.lat_man.to_natural(lh.lat_man.standard_normal())
+#                 next_params = lh.join_conjugated(lkl_params, z)
+#                 debug.print("Stage 1 LL: {}", ll)
+#                 return next_params, ll
+#
+#             lgm_params1, lls1 = jax.lax.scan(
+#                 stage1_step, lgm_params0, None, length=self.stage1_epochs
+#             )
+#             lkl_params1 = lh.likelihood_function(lgm_params1)
+#
+#         # Stage 2: Gradient descent for mixture components
+#         stage2_optimizer: Optimizer[
+#             Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]
+#         ] = Optimizer.adam(learning_rate=self.stage2_learning_rate)
+#         stage2_opt_state = stage2_optimizer.init(mix_params0)
+#
+#         def stage2_loss(
+#             params: Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
+#         ) -> Array:
+#             hmog_params = self.model.join_conjugated(lkl_params1, params)
+#             return -self.model.average_log_observable_density(hmog_params, sample)
+#
+#         def stage2_step(
+#             opt_state_and_params: tuple[
+#                 OptState,
+#                 Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
+#             ],
+#             _: Any,
+#         ) -> tuple[
+#             tuple[
+#                 OptState,
+#                 Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
+#             ],
+#             Array,
+#         ]:
+#             opt_state, params = opt_state_and_params
+#             ll, grads = self.model.upr_hrm.value_and_grad(stage2_loss, params)
+#             opt_state, params = stage2_optimizer.update(opt_state, grads, params)
+#             debug.print("Stage 2 LL: {}", -ll)
+#             return (opt_state, params), -ll
+#
+#         (_, mix_params1), lls2 = jax.lax.scan(
+#             stage2_step,
+#             (stage2_opt_state, mix_params0),
+#             None,
+#             length=self.stage2_epochs,
+#         )
+#
+#         # Stage 3: Gradient descent for full model
+#         params1 = self.model.join_conjugated(lkl_params1, mix_params1)
+#         stage3_optimizer: Optimizer[Natural, DifferentiableHMoG[ObsRep, LatRep]] = (
+#             Optimizer.adam(learning_rate=self.stage3_learning_rate)
+#         )
+#         stage3_opt_state = stage3_optimizer.init(params1)
+#
+#         def stage3_loss(
+#             params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+#         ) -> Array:
+#             return -self.model.average_log_observable_density(params, sample)
+#
+#         def stage3_step(
+#             opt_state_and_params: tuple[
+#                 OptState,
+#                 Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+#             ],
+#             _: Any,
+#         ) -> tuple[
+#             tuple[
+#                 OptState,
+#                 Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+#             ],
+#             Array,
+#         ]:
+#             opt_state, params = opt_state_and_params
+#             ll, grads = self.model.value_and_grad(stage3_loss, params)
+#             opt_state, params = stage3_optimizer.update(opt_state, grads, params)
+#             debug.print("Stage 3 LL: {}", -ll)
+#             return (opt_state, params), -ll
+#
+#         (_, final_params), lls3 = jax.lax.scan(
+#             stage3_step, (stage3_opt_state, params1), None, length=self.stage3_epochs
+#         )
+#
+#         lls = jnp.concatenate([lls1, lls2, lls3])
+#         return final_params, lls.ravel()
+#
+#
+#
