@@ -44,7 +44,24 @@ class RepresentationType(Enum):
 
 @dataclass
 class HMoGConfig(ModelConfig):
-    """Configuration for Hierarchical Mixture of Gaussians model."""
+    """Configuration for Hierarchical Mixture of Gaussians model.
+
+    Model Architecture:
+        latent_dim: Dimension of latent space [default: 10]
+        n_clusters: Number of mixture components [default: 10]
+        data_dim: Dimension of input data [set by dataset]
+        obs_rep: Representation type for observations. Options: scale, diagonal, positive_definite [default: diagonal]
+        lat_rep: Representation type for latents. Options: scale, diagonal, positive_definite [default: diagonal]
+
+    Training Parameters:
+        stage1_epochs: Number of epochs for EM initialization [default: 100]
+        stage2_epochs: Number of epochs for mixture component training [default: 100]
+        stage3_epochs: Number of epochs for full model training [default: 100]
+        stage2_batch_size: Batch size for stage 2 [default: 256]
+        stage3_batch_size: Batch size for stage 3 [default: 256]
+        stage2_learning_rate: Learning rate for stage 2 [default: 0.001]
+        stage3_learning_rate: Learning rate for stage 3 [default: 0.0003]
+    """
 
     _target_: str = "plugins.models.hmog.MinibatchHMoG"
     data_dim: int = MISSING

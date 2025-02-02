@@ -19,7 +19,12 @@ from apps.clustering.core.datasets import SupervisedDataset
 
 @dataclass
 class MNISTConfig(DatasetConfig):
-    """Configuration for MNIST dataset."""
+    """Configuration for MNIST dataset.
+
+    Parameters:
+        None
+
+    """
 
     _target_: str = "plugins.datasets.mnist.MNISTDataset"
 

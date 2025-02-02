@@ -19,8 +19,9 @@ class ModelConfig:
     """Base configuration for models."""
 
     _target_: str
-    latent_dim: int
-    n_clusters: int
+    data_dim: int = MISSING
+    latent_dim: int = MISSING
+    n_clusters: int = MISSING
 
 
 @dataclass
