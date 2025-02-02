@@ -30,7 +30,9 @@ class Model[P](ABC):
 
     @partial(jax.jit, static_argnums=(0,))
     @abstractmethod
-    def fit(self, params0: P, data: Array) -> tuple[P, Array]:
+    def fit(
+        self, params0: P, train_sample: Array, test_kample: Array
+    ) -> tuple[P, Array, Array]:
         """Train model parameters, returning final parameters and training metrics."""
 
     @abstractmethod

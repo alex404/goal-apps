@@ -4,7 +4,7 @@ import hydra
 import jax
 from omegaconf import DictConfig
 
-from ..experiments import Experiment, initialize_jax
+from ..experiments import ExperimentHandler, initialize_jax
 
 
 def train(cfg: DictConfig) -> None:
@@ -18,7 +18,7 @@ def train(cfg: DictConfig) -> None:
 
     # Initialize environment
     initialize_jax(device=cfg.device, disable_jit=not cfg.jit)
-    paths = Experiment(cfg.experiment)
+    paths = ExperimentHandler(cfg.experiment)
     key = jax.random.PRNGKey(0)
 
     # Instantiate dataset and model using Hydra

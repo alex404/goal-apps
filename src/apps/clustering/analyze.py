@@ -3,12 +3,12 @@
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-from apps.experiments import Experiment
+from apps.experiments import ExperimentHandler
 
 from .core.common import ProbabilisticResults
 
 
-def analyze(paths: Experiment) -> None:
+def analyze(paths: ExperimentHandler) -> None:
     """Analyze results from a trained model.
 
     Args:
@@ -22,7 +22,9 @@ def analyze(paths: Experiment) -> None:
     plot_learning_curves(results, paths)
 
 
-def plot_learning_curves(results: ProbabilisticResults, paths: Experiment) -> None:
+def plot_learning_curves(
+    results: ProbabilisticResults, paths: ExperimentHandler
+) -> None:
     """Plot training metrics over time."""
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -37,7 +39,9 @@ def plot_learning_curves(results: ProbabilisticResults, paths: Experiment) -> No
     paths.save_plot(fig, "learning_curves")
 
 
-def visualize_prototypes(results: ProbabilisticResults, paths: Experiment) -> None:
+def visualize_prototypes(
+    results: ProbabilisticResults, paths: ExperimentHandler
+) -> None:
     """Visualize model prototypes.
 
     Args:

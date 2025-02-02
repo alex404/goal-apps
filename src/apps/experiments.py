@@ -9,11 +9,22 @@ import jax
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
+
+@dataclass
+class ExperimentConfig:
+    """Base configuration for clustering experiments."""
+
+    experiment: str
+    device: str
+    jit: bool
+    wandb: bool
+
+
 ### Initialization and Path Management ###
 
 
 @dataclass(frozen=True)
-class Experiment:
+class ExperimentHandler:
     name: str
 
     @property

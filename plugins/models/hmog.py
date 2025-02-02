@@ -1,6 +1,6 @@
 """Base class for HMoG implementations."""
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
@@ -230,16 +230,6 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         )
         return self.model.join_conjugated(lkl_params, mix_params)
 
-    @partial(jax.jit, static_argnums=(0,))
-    @abstractmethod
-    def fit(
-        self,
-        params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-        data: Array,
-    ) -> tuple[Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array]:
-        """Train model through all three stages."""
-        ...
-
     def log_likelihood(
         self, params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], data: Array
     ) -> Array:
@@ -275,7 +265,9 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     ) -> ProbabilisticResults:
         start_time = time()
         params = self.initialize(key, data.train_images)
-        final_params, train_lls = self.fit(params, data.train_images)
+        final_params, train_lls, test_lls = self.fit(
+            params, data.train_images, data.test_images
+        )
 
         train_clusters = self.cluster_assignments(final_params, data.train_images)
         test_clusters = self.cluster_assignments(final_params, data.test_images)
@@ -286,6 +278,7 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         return ProbabilisticResults(
             model_name=self.__class__.__name__,
             train_log_likelihood=train_lls.tolist(),
+            test_log_likelihood=test_lls.tolist(),
             final_train_log_likelihood=float(train_lls[-1]),
             final_test_log_likelihood=float(
                 self.log_likelihood(final_params, data.test_images)
@@ -380,13 +373,14 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             lat_rep=lat_rep_type,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
     @override
+    @partial(jax.jit, static_argnums=(0,))
     def fit(
         self,
         params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-        sample: Array,
-    ) -> tuple[Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array]:
+        train_sample: Array,
+        test_sample: Array,
+    ) -> tuple[Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array, Array]:
         """Three-stage minibatch training process."""
         lkl_params0, mix_params0 = self.model.split_conjugated(params0)
         key = jax.random.PRNGKey(0)
@@ -398,9 +392,12 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
             def stage1_step(
                 params: Point[Natural, LinearGaussianModel[ObsRep]], _: Any
-            ) -> tuple[Point[Natural, LinearGaussianModel[ObsRep]], Array]:
-                ll = lh.average_log_observable_density(params, sample)
-                means = lh.expectation_step(params, sample)
+            ) -> tuple[
+                Point[Natural, LinearGaussianModel[ObsRep]], tuple[Array, Array]
+            ]:
+                train_ll = lh.average_log_observable_density(params, train_sample)
+                test_ll = lh.average_log_observable_density(params, test_sample)
+                means = lh.expectation_step(params, train_sample)
                 obs_means, int_means, lat_means = lh.split_params(means)
                 obs_means = lh.obs_man.regularize_covariance(
                     obs_means, OBS_JITTER, OBS_MIN_VAR
@@ -409,30 +406,13 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 params1 = lh.to_natural(means)
                 lkl_params = lh.likelihood_function(params1)
                 next_params = lh.join_conjugated(lkl_params, z)
-                debug.print("Stage 1 LL: {}", ll)
-                return next_params, ll
+                debug.print("Stage 1 Train LL: {}; Test LL: {}", train_ll, test_ll)
+                return next_params, (train_ll, test_ll)
 
-            lgm_params1, lls1 = jax.lax.scan(
+            lgm_params1, (train_lls1, test_lls1) = jax.lax.scan(
                 stage1_step, lgm_params0, None, length=self.stage1_epochs
             )
             lkl_params1 = lh.likelihood_function(lgm_params1)
-
-        # K means initialization
-        # with self.model.lwr_hrm as lh:
-        #     lgm_params1 = lh.join_conjugated(lkl_params1, z)
-        #
-        #     def get_posterior_mean(x: Array) -> Array:
-        #         nrm_params = lh.posterior_at(lgm_params1, x)
-        #         return lh.lat_man.split_mean_second_moment(
-        #             lh.lat_man.to_mean(nrm_params)
-        #         )[0].array
-        #
-        #     lat_means = jax.vmap(get_posterior_mean)(sample)
-        #     comps = initialize_gmm_components(
-        #         key, lat_means, lh.lat_man, self.n_clusters
-        #     )
-        # _, cat0 = self.model.upr_hrm.split_natural_mixture(mix_params0)
-        # mix_params0 = self.model.upr_hrm.join_natural_mixture(comps, cat0)
 
         # Stage 2: Gradient descent for mixture components
         stage2_optimizer: Optimizer[
@@ -480,19 +460,19 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
                 Array,
             ],
-            Array,
+            tuple[Array, Array],
         ]:
             opt_state, params, key = carry
 
             # Shuffle data and truncate to fit batches evenly
             return_key, shuffle_key = jax.random.split(key)
-            n_complete_batches = sample.shape[0] // self.stage2_batch_size
+            n_complete_batches = train_sample.shape[0] // self.stage2_batch_size
             n_samples_to_use = n_complete_batches * self.stage2_batch_size
 
-            shuffled_indices = jax.random.permutation(shuffle_key, sample.shape[0])[
-                :n_samples_to_use
-            ]
-            batched_data = sample[shuffled_indices].reshape(
+            shuffled_indices = jax.random.permutation(
+                shuffle_key, train_sample.shape[0]
+            )[:n_samples_to_use]
+            batched_data = train_sample[shuffled_indices].reshape(
                 (n_complete_batches, self.stage2_batch_size, -1)
             )
 
@@ -506,12 +486,19 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
             # Compute full dataset likelihood
             hmog_params = self.model.join_conjugated(lkl_params1, params)
-            epoch_ll = self.model.average_log_observable_density(hmog_params, sample)
-            debug.print("Stage 2 epoch LL: {}", epoch_ll)
+            epoch_train_ll = self.model.average_log_observable_density(
+                hmog_params, train_sample
+            )
+            epoch_test_ll = self.model.average_log_observable_density(
+                hmog_params, test_sample
+            )
+            debug.print(
+                "Stage 2 epoch train LL: {}; test LL: {}", epoch_train_ll, epoch_test_ll
+            )
 
-            return (opt_state, params, return_key), epoch_ll
+            return (opt_state, params, return_key), (epoch_train_ll, epoch_test_ll)
 
-        (_, mix_params1, key), lls2 = jax.lax.scan(
+        (_, mix_params1, key), (train_lls2, test_lls2) = jax.lax.scan(
             stage2_epoch,
             (stage2_opt_state, mix_params0, key),
             None,
@@ -550,19 +537,19 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             _: Any,
         ) -> tuple[
             tuple[OptState, Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array],
-            Array,
+            tuple[Array, Array],
         ]:
             opt_state, params, key = carry
 
             # Shuffle and batch data
             return_key, shuffle_key = jax.random.split(key)
-            n_complete_batches = sample.shape[0] // self.stage3_batch_size
+            n_complete_batches = train_sample.shape[0] // self.stage3_batch_size
             n_samples_to_use = n_complete_batches * self.stage3_batch_size
 
-            shuffled_indices = jax.random.permutation(shuffle_key, sample.shape[0])[
-                :n_samples_to_use
-            ]
-            batched_data = sample[shuffled_indices].reshape(
+            shuffled_indices = jax.random.permutation(
+                shuffle_key, train_sample.shape[0]
+            )[:n_samples_to_use]
+            batched_data = train_sample[shuffled_indices].reshape(
                 (n_complete_batches, self.stage3_batch_size, -1)
             )
 
@@ -574,17 +561,25 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             )
 
             # Compute likelihood
-            epoch_ll = self.model.average_log_observable_density(params, sample)
-            debug.print("Stage 3 epoch LL: {}", epoch_ll)
+            epoch_train_ll = self.model.average_log_observable_density(
+                params, train_sample
+            )
+            epoch_test_ll = self.model.average_log_observable_density(
+                params, test_sample
+            )
+            debug.print(
+                "Stage 3 epoch train LL: {}; test LL: {}", epoch_train_ll, epoch_test_ll
+            )
 
-            return (opt_state, params, return_key), epoch_ll
+            return (opt_state, params, return_key), (epoch_train_ll, epoch_test_ll)
 
-        (_, final_params, _), lls3 = jax.lax.scan(
+        (_, final_params, _), (train_lls3, test_lls3) = jax.lax.scan(
             stage3_epoch,
             (stage3_opt_state, params1, key),
             None,
             length=self.stage3_epochs,
         )
 
-        lls = jnp.concatenate([lls1, lls2, lls3])
-        return final_params, lls.ravel()
+        train_lls = jnp.concatenate([train_lls1, train_lls2, train_lls3])
+        test_lls = jnp.concatenate([test_lls1, test_lls2, test_lls3])
+        return final_params, train_lls.ravel(), test_lls.ravel()

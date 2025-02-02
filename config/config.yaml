@@ -1,0 +1,10 @@
+defaults:
+  - config_schema
+  - model: ???
+  - dataset: ???
+  - _self_
+
+experiment: ???
+device: gpu
+jit: true
+wandb: false
