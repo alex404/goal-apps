@@ -3,28 +3,26 @@
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-from apps.experiments import ExperimentHandler
+from apps.runtime import RunHandler
 
 from .core.common import ProbabilisticResults
 
 
-def analyze(paths: ExperimentHandler) -> None:
+def analyze(handler: RunHandler) -> None:
     """Analyze results from a trained model.
 
     Args:
-        paths: Experiment paths containing training results
+        handler: Run handler for loading training results and saving outputs
     """
     # Load training results
-    results: ProbabilisticResults = paths.load_analysis("training_results")
+    results: ProbabilisticResults = handler.load_analysis("training_results")
 
     # Create visualization of prototypes
-    visualize_prototypes(results, paths)
-    plot_learning_curves(results, paths)
+    visualize_prototypes(results, handler)
+    plot_learning_curves(results, handler)
 
 
-def plot_learning_curves(
-    results: ProbabilisticResults, paths: ExperimentHandler
-) -> None:
+def plot_learning_curves(results: ProbabilisticResults, handler: RunHandler) -> None:
     """Plot training metrics over time."""
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -36,17 +34,15 @@ def plot_learning_curves(
     ax.set_title(f"{results['model_name']} Training Progress")
     ax.legend()
 
-    paths.save_plot(fig, "learning_curves")
+    handler.save_plot(fig, "learning_curves")
 
 
-def visualize_prototypes(
-    results: ProbabilisticResults, paths: ExperimentHandler
-) -> None:
+def visualize_prototypes(results: ProbabilisticResults, handler: RunHandler) -> None:
     """Visualize model prototypes.
 
     Args:
         results: Training results containing model info and parameters
-        paths: Experiment paths for saving outputs
+        handler: Run handler for saving output files
     """
     n_components = results["n_clusters"]
     grid_size = int(jnp.ceil(jnp.sqrt(n_components)))
@@ -76,4 +72,4 @@ def visualize_prototypes(
 
     # Save figure
     plt.tight_layout()
-    paths.save_plot(fig, "prototypes")
+    handler.save_plot(fig, "prototypes")

@@ -4,15 +4,42 @@ from typing import Any
 
 from hydra.core.config_store import ConfigStore
 from rich.table import Table
+from rich.tree import Tree
+
+
+def config_tree(data: dict[str, Any] | list[Any] | Any) -> Tree:
+    """Create a rich tree from a dictionary."""
+    tree = Tree("[bold]config[/bold]")
+    _build_tree(tree, data)
+    return tree
+
+
+def _build_tree(tree: Tree, data: dict[str, Any] | list[Any] | Any) -> None:
+    """Recursively build a compact tree from a dictionary or list."""
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, (dict, list)):  # Only nest if necessary
+                branch = tree.add(f"[bold]{key}[/bold]")
+                _build_tree(branch, value)
+            else:
+                tree.add(f"[bold]{key}[/bold]: [cyan]{value}[/cyan]")  # Inline values
+    elif isinstance(data, list):
+        for item in data:
+            tree.add(f"[list] [cyan]{item}[/cyan]")  # Show list items inline
+    else:
+        tree.add(
+            f"[cyan]{data}[/cyan]"
+        )  # For direct values (shouldn't be hit at top-level)
+
 
 ### Preamable ###
-
-cs = ConfigStore.instance()
 
 
 def get_store_groups() -> dict[str, list[str]]:
     """Get available configs from ConfigStore by group."""
     groups: dict[str, list[str]] = {}
+
+    cs = ConfigStore.instance()
 
     for name, node in cs.repo.items():
         # Handle the case where node is a dict
@@ -45,7 +72,7 @@ def format_config_table(name: str, params: dict[str, Any]) -> tuple[str | None, 
     table = Table(title=f"{name.upper()} Parameters")
     table.add_column("Parameter", style="cyan")
     table.add_column("Type", style="green")
-    table.add_column("Default", style="yellow")
+    table.add_column("Value", style="yellow")
 
     # Extract target
     target = params.get("_target_")

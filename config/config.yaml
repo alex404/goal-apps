@@ -4,7 +4,10 @@ defaults:
   - dataset: ???
   - _self_
 
-experiment: ???
+run_name: ${now:%Y%m%d_%H%M%S}
 device: gpu
 jit: true
-wandb: false
+
+wandb:
+  enabled: false 
+  project: "goal"

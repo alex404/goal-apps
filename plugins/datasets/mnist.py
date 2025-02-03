@@ -13,8 +13,8 @@ from matplotlib.axes import Axes
 from numpy.typing import NDArray
 from torchvision import datasets, transforms
 
-from apps.clustering.core.config import DatasetConfig
 from apps.clustering.core.datasets import SupervisedDataset
+from apps.config import DatasetConfig
 
 
 @dataclass

@@ -31,9 +31,9 @@ from jax import Array, debug
 from omegaconf import MISSING
 
 from apps.clustering.core.common import ProbabilisticResults, evaluate_clustering
-from apps.clustering.core.config import ModelConfig
 from apps.clustering.core.datasets import SupervisedDataset
 from apps.clustering.core.models import Model
+from apps.config import ModelConfig
 
 
 class RepresentationType(Enum):
