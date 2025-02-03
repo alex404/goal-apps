@@ -6,6 +6,7 @@ from typing import Any
 
 import jax
 import typer
+import wandb
 from hydra.core.config_store import ConfigNode, ConfigStore
 from omegaconf import OmegaConf
 from plugins import register_plugins
@@ -14,7 +15,13 @@ from rich.table import Table
 
 from .config import ClusteringConfig
 from .runtime import initialize_run
-from .util import format_config_table, get_store_groups
+from .util import (
+    create_sweep_config,
+    format_config_table,
+    get_store_groups,
+    print_config_tree,
+    print_sweep_tree,
+)
 
 ### Preamable ###
 
@@ -48,9 +55,12 @@ overrides = typer.Argument(
     default=None, help="Configuration overrides (e.g., dataset=mnist model=hmog)"
 )
 
+train_dry_run = typer.Option(False, "--dry-run", help="Print hydra config and exit")
+sweep_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and exit")
+
 
 @clustering_com.command()
-def train(overrides: list[str] = overrides):
+def train(overrides: list[str] = overrides, dry_run: bool = train_dry_run):
     """Train a clustering model.
 
     Train a model using the specified dataset and model configuration.
@@ -62,10 +72,32 @@ def train(overrides: list[str] = overrides):
 
     handler, cfg = initialize_run(ClusteringConfig, overrides)
     key = jax.random.PRNGKey(int.from_bytes(os.urandom(4), byteorder="big"))
+    print_config_tree(OmegaConf.to_container(cfg, resolve=True))
+    if dry_run:
+        return
 
     from apps.clustering.train import train
 
     train(key, handler, cfg)
+
+
+@clustering_com.command()
+def sweep(
+    overrides: list[str] = overrides,
+    dry_run: bool = sweep_dry_run,
+):
+    """Launch a wandb hyperparameter sweep.
+
+    Example:
+        goal clustering sweep latent_dim=[4,8,12,16,20] n_clusters=[4,8,16]
+    """
+    sweep_config = create_sweep_config(overrides)
+
+    # Create config tree visualization
+    print_sweep_tree(sweep_config)
+
+    if not dry_run:
+        wandb.sweep(sweep_config)
 
 
 @clustering_com.command()

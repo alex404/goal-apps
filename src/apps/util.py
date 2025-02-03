@@ -3,14 +3,98 @@
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
+from rich import print
+from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
 
+### Sweep Management ###
 
-def config_tree(data: dict[str, Any] | list[Any] | Any) -> Tree:
+
+def create_sweep_config(overrides: list[str]) -> dict[str, Any]:
+    """Create wandb sweep config from override strings.
+
+    Parses overrides of the form:
+    - param=value for single values
+    - param=val1,val2,val3 for sweep values
+
+    Example:
+        ["latent_dim=4,8,12,16", "n_clusters=4,8,16", "device=cpu"]
+        ->
+        {
+            "program": "goal",
+            "method": "grid",
+            "parameters": {
+                "latent_dim": {"values": [4, 8, 12, 16]},
+                "n_clusters": {"values": [4, 8, 16]},
+                "device": {"value": "cpu"}
+            },
+            "command": [
+                "${env}",
+                "${interpreter}",
+                "${program}",
+                "clustering",
+                "train",
+                "${args_no_hyphens}"
+            ]
+        }
+    """
+    parameters = {}
+
+    for override in overrides:
+        if "=" not in override:
+            continue
+
+        param, value = override.split("=", 1)
+        if "," in value:
+            try:
+                # Try to parse as list of numbers first
+                values = [float(x) if "." in x else int(x) for x in value.split(",")]
+                parameters[param] = {"values": values}
+            except ValueError:
+                # If number parsing fails, treat as list of strings
+                values = [x.strip() for x in value.split(",")]
+                if len(values) > 1:
+                    parameters[param] = {"values": values}
+                else:
+                    parameters[param] = {"value": value}
+        else:
+            # Single value
+            parameters[param] = {"value": value}
+
+    return {
+        "program": "goal clustering train",
+        "method": "grid",
+        "parameters": parameters,
+        "command": [
+            "${env}",
+            "${interpreter}",
+            "${program}",
+            "${args_no_hyphens}",
+        ],
+    }
+
+
+### Pretty Print Configs ###
+
+
+def print_config_tree(data: dict[str, Any] | list[Any] | Any) -> Tree:
     """Create a rich tree from a dictionary."""
     tree = Tree("[bold]config[/bold]")
     _build_tree(tree, data)
+
+    # Print it inside a panel for extra clarity
+    print(Panel(tree, title="Hydra Config Overview", border_style="green"))
+    return tree
+
+
+def print_sweep_tree(data: dict[str, Any] | list[Any] | Any) -> Tree:
+    """Create a rich tree from a dictionary."""
+    tree = Tree("[bold]sweep[/bold]")
+    _build_tree(tree, data)
+
+    # Print it inside a panel for extra clarity
+    print(Panel(tree, title="Sweep Config Overview", border_style="green"))
     return tree
 
 
@@ -32,7 +116,7 @@ def _build_tree(tree: Tree, data: dict[str, Any] | list[Any] | Any) -> None:
         )  # For direct values (shouldn't be hit at top-level)
 
 
-### Preamable ###
+### Plugin Inspection ###
 
 
 def get_store_groups() -> dict[str, list[str]]:
