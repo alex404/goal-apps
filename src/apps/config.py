@@ -26,13 +26,10 @@ class WandbConfig:
 
     enabled: bool = False
     project: str = "goal"
-    entity: str | None = None
     group: str | None = None
+    job_type: str | None = None
     tags: list[str] = field(default_factory=list)
     notes: str | None = None
-    mode: str = "online"
-    save_code: bool = False
-    job_type: str | None = None
 
 
 @dataclass

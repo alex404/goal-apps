@@ -56,7 +56,6 @@ overrides = typer.Argument(
 )
 
 train_dry_run = typer.Option(False, "--dry-run", help="Print hydra config and exit")
-sweep_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and exit")
 
 
 @clustering_com.command()
@@ -81,9 +80,14 @@ def train(overrides: list[str] = overrides, dry_run: bool = train_dry_run):
     train(key, handler, cfg)
 
 
+sweep_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and exit")
+project = typer.Option("goal", "--project", "-p", help="W&B project name")
+
+
 @clustering_com.command()
 def sweep(
     overrides: list[str] = overrides,
+    project: str = project,
     dry_run: bool = sweep_dry_run,
 ):
     """Launch a wandb hyperparameter sweep.
@@ -97,7 +101,7 @@ def sweep(
     print_sweep_tree(sweep_config)
 
     if not dry_run:
-        wandb.sweep(sweep_config)
+        wandb.sweep(sweep_config, project=project)
 
 
 @clustering_com.command()
