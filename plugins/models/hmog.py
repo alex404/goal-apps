@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from time import time
-from typing import Any, override
+from typing import override
 
 import jax
 import jax.numpy as jnp
+import matplotlib.pyplot as plt
 from goal.geometry import (
     Diagonal,
     Natural,
@@ -31,9 +32,10 @@ from jax import Array, debug
 from omegaconf import MISSING
 
 from apps.clustering.core.common import ProbabilisticResults, evaluate_clustering
-from apps.clustering.core.datasets import SupervisedDataset
+from apps.clustering.core.datasets import Dataset, SupervisedDataset
 from apps.clustering.core.models import Model
 from apps.config import ModelConfig
+from apps.runtime import RunHandler
 
 
 class RepresentationType(Enum):
@@ -278,16 +280,17 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     def evaluate(
         self,
         key: Array,
-        data: SupervisedDataset,
+        handler: RunHandler,
+        dataset: SupervisedDataset,
     ) -> ProbabilisticResults:
         start_time = time()
-        params = self.initialize(key, data.train_images)
+        params = self.initialize(key, dataset.train_images)
         final_params, train_lls, test_lls = self.fit(
-            params, data.train_images, data.test_images
+            handler, dataset, params, dataset.train_images, dataset.test_images
         )
 
-        train_clusters = self.cluster_assignments(final_params, data.train_images)
-        test_clusters = self.cluster_assignments(final_params, data.test_images)
+        train_clusters = self.cluster_assignments(final_params, dataset.train_images)
+        test_clusters = self.cluster_assignments(final_params, dataset.test_images)
 
         # Get prototypes
         prototypes = self.get_component_prototypes(final_params)
@@ -298,12 +301,14 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             test_log_likelihood=test_lls.tolist(),
             final_train_log_likelihood=float(train_lls[-1]),
             final_test_log_likelihood=float(
-                self.log_likelihood(final_params, data.test_images)
+                self.log_likelihood(final_params, dataset.test_images)
             ),
             train_accuracy=float(
-                evaluate_clustering(train_clusters, data.train_labels)
+                evaluate_clustering(train_clusters, dataset.train_labels)
             ),
-            test_accuracy=float(evaluate_clustering(test_clusters, data.test_labels)),
+            test_accuracy=float(
+                evaluate_clustering(test_clusters, dataset.test_labels)
+            ),
             latent_dim=self.latent_dim,
             n_clusters=self.n_clusters,
             n_parameters=self.model.dim,
@@ -350,6 +355,39 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         return jnp.stack(prototypes)
 
+    def log_epoch_metrics(
+        self,
+        handler: RunHandler,
+        epoch: Array,
+        train_ll: Array,
+        test_ll: Array,
+    ) -> None:
+        """Log metrics for an epoch."""
+        metrics = {
+            "training/train_log_likelihood": float(train_ll),
+            "training/test_log_likelihood": float(test_ll),
+            "training/bic": float(-2 * test_ll + jnp.log(self.model.dim)),
+            "epoch": epoch,
+        }
+        handler.log_metrics(metrics)
+
+    def log_prototypes(
+        self,
+        handler: RunHandler,
+        dataset: Dataset,
+        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+    ) -> None:
+        """Log component prototypes using dataset visualization."""
+        prototypes = self.get_component_prototypes(params)
+
+        for i, prototype in enumerate(prototypes):
+            fig, ax = plt.subplots()
+            dataset.visualize_observable(prototype, ax=ax)
+            handler.log_image(
+                f"prototypes/prototype_{i}", fig, f"Component {i} prototype"
+            )
+            plt.close(fig)
+
 
 class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     HMoGBase[ObsRep, LatRep]
@@ -391,9 +429,11 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         )
 
     @override
-    @partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0, 1, 2))
     def fit(
         self,
+        handler: RunHandler,
+        dataset: Dataset,
         params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
         train_sample: Array,
         test_sample: Array,
@@ -408,12 +448,14 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             lgm_params0 = lh.join_conjugated(lkl_params0, z)
 
             def stage1_step(
-                params: Point[Natural, LinearGaussianModel[ObsRep]], _: Any
+                params: Point[Natural, LinearGaussianModel[ObsRep]], epoch: Array
             ) -> tuple[
                 Point[Natural, LinearGaussianModel[ObsRep]], tuple[Array, Array]
             ]:
                 train_ll = lh.average_log_observable_density(params, train_sample)
                 test_ll = lh.average_log_observable_density(params, test_sample)
+                self.log_epoch_metrics(handler, epoch, train_ll, test_ll)
+
                 means = lh.expectation_step(params, train_sample)
                 obs_means, int_means, lat_means = lh.split_params(means)
                 obs_means = lh.obs_man.regularize_covariance(
@@ -423,11 +465,15 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 params1 = lh.to_natural(means)
                 lkl_params = lh.likelihood_function(params1)
                 next_params = lh.join_conjugated(lkl_params, z)
-                debug.print("Stage 1 Train LL: {}; Test LL: {}", train_ll, test_ll)
+                # debug.print("Stage 1 Train LL: {}; Test LL: {}", train_ll, test_ll)
                 return next_params, (train_ll, test_ll)
 
+            xs = jnp.arange(self.stage1_epochs)
+
             lgm_params1, (train_lls1, test_lls1) = jax.lax.scan(
-                stage1_step, lgm_params0, None, length=self.stage1_epochs
+                stage1_step,
+                lgm_params0,
+                xs,
             )
             lkl_params1 = lh.likelihood_function(lgm_params1)
 
@@ -470,7 +516,7 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
                 Array,
             ],
-            _: Any,
+            epoch: Array,
         ) -> tuple[
             tuple[
                 OptState,
@@ -509,21 +555,28 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             epoch_test_ll = self.model.average_log_observable_density(
                 hmog_params, test_sample
             )
-            debug.print(
-                "Stage 2 epoch train LL: {}; test LL: {}", epoch_train_ll, epoch_test_ll
+            self.log_epoch_metrics(
+                handler,
+                epoch + self.stage1_epochs,  # Offset by stage1 epochs
+                epoch_train_ll,
+                epoch_test_ll,
             )
+            # debug.print(
+            #     "Stage 2 epoch train LL: {}; test LL: {}", epoch_train_ll, epoch_test_ll
+            # )
 
             return (opt_state, params, return_key), (epoch_train_ll, epoch_test_ll)
 
         (_, mix_params1, key), (train_lls2, test_lls2) = jax.lax.scan(
             stage2_epoch,
             (stage2_opt_state, mix_params0, key),
-            None,
-            length=self.stage2_epochs,
+            jnp.arange(self.stage2_epochs),
         )
 
         # Stage 3: Similar structure to stage 2
         params1 = self.model.join_conjugated(lkl_params1, mix_params1)
+        self.log_prototypes(handler, dataset, params1)
+
         stage3_optimizer: Optimizer[Natural, DifferentiableHMoG[ObsRep, LatRep]] = (
             Optimizer.adam(learning_rate=self.stage3_learning_rate)
         )
@@ -551,7 +604,7 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             carry: tuple[
                 OptState, Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array
             ],
-            _: Any,
+            epoch: Array,
         ) -> tuple[
             tuple[OptState, Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array],
             tuple[Array, Array],
@@ -584,6 +637,12 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             epoch_test_ll = self.model.average_log_observable_density(
                 params, test_sample
             )
+            self.log_epoch_metrics(
+                handler,
+                epoch + self.stage1_epochs + self.stage2_epochs,
+                epoch_train_ll,
+                epoch_test_ll,
+            )
             debug.print(
                 "Stage 3 epoch train LL: {}; test LL: {}", epoch_train_ll, epoch_test_ll
             )
@@ -596,7 +655,7 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             None,
             length=self.stage3_epochs,
         )
-
+        self.log_prototypes(handler, dataset, final_params)
         train_lls = jnp.concatenate([train_lls1, train_lls2, train_lls3])
         test_lls = jnp.concatenate([test_lls1, test_lls2, test_lls3])
         return final_params, train_lls.ravel(), test_lls.ravel()

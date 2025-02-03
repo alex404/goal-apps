@@ -15,16 +15,14 @@ class WandbConfig:
     Attributes:
         enabled: Whether to use wandb logging
         project: Name of the wandb project
-        entity: Username or team name in wandb
         group: Optional group name for organizing related runs (e.g. sweeps)
+        job_type: Type of job (e.g. 'training', 'evaluation')
         tags: List of tags to apply to the run
         notes: Optional notes about the run
-        mode: Wandb run mode - 'online', 'offline', or 'disabled'
         save_code: Whether to save code to wandb
-        job_type: Type of job (e.g. 'training', 'evaluation')
     """
 
-    enabled: bool = False
+    enabled: bool = True
     project: str = "goal"
     group: str | None = None
     job_type: str | None = None

@@ -7,8 +7,9 @@ from typing import override
 import jax
 from jax import Array
 
+from ...runtime import RunHandler
 from .common import ProbabilisticResults, TwoStageResults
-from .datasets import SupervisedDataset
+from .datasets import Dataset, SupervisedDataset
 
 
 class Model[P](ABC):
@@ -28,10 +29,15 @@ class Model[P](ABC):
     def initialize(self, key: Array, data: Array) -> P:
         """Initialize model parameters based on data dimensions and statistics."""
 
-    @partial(jax.jit, static_argnums=(0,))
+    @partial(jax.jit, static_argnums=(0, 1, 2))
     @abstractmethod
     def fit(
-        self, params0: P, train_sample: Array, test_sample: Array
+        self,
+        handler: RunHandler,
+        dataset: Dataset,
+        params0: P,
+        train_sample: Array,
+        test_sample: Array,
     ) -> tuple[P, Array, Array]:
         """Train model parameters, returning final parameters and training metrics."""
 
@@ -45,7 +51,7 @@ class Model[P](ABC):
 
     @abstractmethod
     def evaluate(
-        self, key: Array, data: SupervisedDataset
+        self, key: Array, handler: RunHandler, dataset: SupervisedDataset
     ) -> ProbabilisticResults | TwoStageResults:
         """Evaluate model on dataset."""
 
@@ -68,7 +74,9 @@ class ProbabilisticModel[P](Model[P], ABC):
 
     @abstractmethod
     @override
-    def evaluate(self, key: Array, data: SupervisedDataset) -> ProbabilisticResults:
+    def evaluate(
+        self, key: Array, handler: RunHandler, dataset: SupervisedDataset
+    ) -> ProbabilisticResults:
         """Evaluate probabilistic model on dataset."""
 
 
@@ -81,5 +89,7 @@ class TwoStageModel[P](Model[P], ABC):
 
     @abstractmethod
     @override
-    def evaluate(self, key: Array, data: SupervisedDataset) -> TwoStageResults:
+    def evaluate(
+        self, key: Array, handler: RunHandler, dataset: SupervisedDataset
+    ) -> TwoStageResults:
         """Evaluate two-stage model on dataset."""

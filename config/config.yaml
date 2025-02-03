@@ -9,4 +9,4 @@ device: gpu
 jit: true
 
 wandb:
-  enabled: false 
+  enabled: true

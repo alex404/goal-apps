@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import wandb
 from hydra import compose, initialize_config_dir
 from hydra.core.config_store import ConfigStore
+from jax import Array
 from matplotlib.figure import Figure
 from omegaconf import DictConfig, OmegaConf
 
@@ -63,6 +64,14 @@ class RunHandler:
             return
         wandb.log(metrics)
 
+    def log_image(
+        self, key: str, image: Array | Figure, caption: str | None = None
+    ) -> None:
+        """Log an image to wandb if enabled."""
+        if not wandb.run:
+            return
+        wandb.log({key: wandb.Image(image, caption=caption)})
+
     def finish(self) -> None:
         """Clean up wandb run if active."""
         if wandb.run:
@@ -98,13 +107,11 @@ def initialize_run(
     if cfg.wandb.enabled:
         wandb.init(
             project=cfg.wandb.project,
-            entity=cfg.wandb.entity,
             name=handler.name,
             group=cfg.wandb.group,
+            job_type=cfg.wandb.job_type,
             tags=cfg.wandb.tags,
             notes=cfg.wandb.notes,
-            mode=cfg.wandb.mode,
-            job_type=cfg.wandb.job_type,
             config=OmegaConf.to_container(cfg, resolve=True),  # pyright: ignore[reportArgumentType]
         )
 
