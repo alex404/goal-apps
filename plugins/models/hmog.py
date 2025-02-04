@@ -383,6 +383,7 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         for i, prototype in enumerate(prototypes):
             fig, ax = plt.subplots()
             dataset.visualize_observable(prototype, ax=ax)
+
             handler.log_image(
                 f"prototypes/prototype_{i}", fig, f"Component {i} prototype"
             )
@@ -575,7 +576,7 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         # Stage 3: Similar structure to stage 2
         params1 = self.model.join_conjugated(lkl_params1, mix_params1)
-        self.log_prototypes(handler, dataset, params1)
+        # self.log_prototypes(handler, dataset, params1)
 
         stage3_optimizer: Optimizer[Natural, DifferentiableHMoG[ObsRep, LatRep]] = (
             Optimizer.adam(learning_rate=self.stage3_learning_rate)
@@ -652,10 +653,10 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         (_, final_params, _), (train_lls3, test_lls3) = jax.lax.scan(
             stage3_epoch,
             (stage3_opt_state, params1, key),
-            None,
+            jnp.arange(self.stage2_epochs),
             length=self.stage3_epochs,
         )
-        self.log_prototypes(handler, dataset, final_params)
+        # self.log_prototypes(handler, dataset, final_params)
         train_lls = jnp.concatenate([train_lls1, train_lls2, train_lls3])
         test_lls = jnp.concatenate([test_lls1, test_lls2, test_lls3])
         return final_params, train_lls.ravel(), test_lls.ravel()

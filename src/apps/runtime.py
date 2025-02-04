@@ -2,11 +2,13 @@
 
 import json
 import os
-from dataclasses import dataclass
+from abc import ABC
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import wandb
 from hydra import compose, initialize_config_dir
@@ -16,6 +18,106 @@ from matplotlib.figure import Figure
 from omegaconf import DictConfig, OmegaConf
 
 from .config import RunConfig
+
+### Loggers ###
+
+
+@dataclass(frozen=True)
+class Logger(ABC):
+    """Protocol defining interface for metric logging.
+
+    Attributes:
+        metrics: List of metric names to track
+        steps: Number of logging steps expected in simulation
+    """
+
+    metrics: list[str]
+    steps: int
+
+    def log_metrics(self, values: dict[str, Array], step: int) -> None:
+        """Log metrics for current step.
+
+        Args:
+            values: Dictionary mapping metric names to values
+            step: Current step number (0-based)
+
+        Raises:
+            ValueError: If metrics don't match those specified at initialization
+        """
+        if set(values.keys()) != set(self.metrics):
+            raise ValueError(
+                f"Logged metrics {set(values.keys())} do not match "
+                f"specified metrics {set(self.metrics)}"
+            )
+        if not 0 <= step < self.steps:
+            raise ValueError(f"Step {step} out of range [0, {self.steps})")
+
+
+@dataclass(frozen=True)
+class WandbLogger(Logger):
+    """Logger implementation using Weights & Biases.
+
+    Logs metrics in real-time to wandb platform.
+    """
+
+    metrics: list[str]
+    steps: int
+
+    def log_metrics(self, values: dict[str, Array], step: int) -> None:
+        super().log_metrics(values, step)
+        wandb.log({k: float(v) for k, v in values.items()}, step=step)
+
+    def log_array(self, key: str, array: Array) -> None:
+        """Log array data to wandb."""
+        wandb.log({key: wandb.Image(array)})
+
+    def finalize(self) -> None:
+        """Clean up wandb run."""
+        wandb.finish()
+
+
+@dataclass(frozen=True)
+class LocalLogger(Logger):
+    """Logger implementation for local storage.
+
+    Stores metrics in memory and provides debug output.
+    """
+
+    metrics: list[str]
+    steps: int
+
+    # Initialize buffer for each metric
+    buffers: dict[str, Array] = field(init=False)
+
+    def __post_init__(self) -> None:
+        # Create zero-initialized buffer for each metric
+        buffers = {metric: jnp.zeros(self.steps) for metric in self.metrics}
+        # Set buffers through __setattr__ to work with frozen dataclass
+        object.__setattr__(self, "buffers", buffers)
+
+    def log_metrics(self, values: dict[str, Array], step: int) -> None:
+        """Log metrics to internal buffers and print debug output."""
+        super().log_metrics(values, step)
+
+        # Update buffers
+        for metric, value in values.items():
+            self.buffers[metric] = self.buffers[metric].at[step].set(float(value))
+
+        # Print debug output
+        debug_str = f"Step {step}: " + ", ".join(
+            f"{k}={float(v):.6f}" for k, v in values.items()
+        )
+        print(debug_str)
+
+    def log_array(self, key: str, array: Array) -> None:
+        """Store array data locally."""
+        # Note: Implementation depends on specific needs
+        pass
+
+    def finalize(self) -> dict[str, Array]:
+        """Return complete history of all metrics."""
+        return dict(self.buffers)
+
 
 ### Path and IO Handler ###
 
