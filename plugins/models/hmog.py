@@ -364,9 +364,9 @@ class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     ) -> None:
         """Log metrics for an epoch."""
         metrics = {
-            "training/train_log_likelihood": float(train_ll),
-            "training/test_log_likelihood": float(test_ll),
-            "training/bic": float(-2 * test_ll + jnp.log(self.model.dim)),
+            "training/train_log_likelihood": train_ll,
+            "training/test_log_likelihood": test_ll,
+            "training/bic": -2 * test_ll + jnp.log(self.model.dim),
             "epoch": epoch,
         }
         handler.log_metrics(metrics)

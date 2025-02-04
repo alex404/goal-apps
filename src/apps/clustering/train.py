@@ -18,7 +18,6 @@ def train[P](key: Array, handler: RunHandler, cfg: DictConfig) -> None:
     dataset: SupervisedDataset = hydra.utils.instantiate(
         cfg.dataset, cache_dir=handler.cache_dir
     )
-    print(f"Dataset cache_dir: {dataset.cache_dir}")
 
     # Instantiate model
     model: Model[P] = hydra.utils.instantiate(cfg.model, data_dim=dataset.data_dim)

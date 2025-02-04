@@ -2,6 +2,7 @@
 scratch/
 experiments/
 .cache/
+wandb/
 
 # Python
 __pycache__/

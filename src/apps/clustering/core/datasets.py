@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, override
+from typing import Any
 
 from jax import Array
 from matplotlib.axes import Axes
 
 
-@dataclass
 class Dataset(ABC):
     """Abstract base class for datasets used in clustering applications."""
 
@@ -31,14 +29,6 @@ class Dataset(ABC):
         """Dimensionality of each data point."""
 
     @abstractmethod
-    def __init__(self, cache_dir: Path) -> None:
-        """Initialize dataset.
-
-        Args:
-            cache_dir: Directory for caching downloaded data
-        """
-
-    @abstractmethod
     def visualize_observable(
         self, observable: Array, ax: Axes | None = None, **kwargs: Any
     ) -> Axes:
@@ -56,15 +46,6 @@ class Dataset(ABC):
 
 class SupervisedDataset(Dataset, ABC):
     """Abstract base class for datasets with labels."""
-
-    @abstractmethod
-    @override
-    def __init__(self, cache_dir: Path) -> None:
-        """Initialize dataset.
-
-        Args:
-            cache_dir: Directory for caching downloaded data
-        """
 
     @property
     @abstractmethod

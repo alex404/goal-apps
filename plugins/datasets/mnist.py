@@ -52,7 +52,7 @@ class MNISTDataset(SupervisedDataset):
             Loaded MNIST dataset
         """
 
-        super().__init__(cache_dir)
+        self.cache_dir: Path = cache_dir
 
         def transform_tensor(x: NDArray[np.uint8]) -> NDArray[np.float32]:
             return x.reshape(-1).astype(np.float32)
