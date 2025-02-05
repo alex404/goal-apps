@@ -24,7 +24,6 @@ from .util import (
 
 ### Preamable ###
 
-
 package_root = Path(__file__).parents[3]
 
 register_plugins()

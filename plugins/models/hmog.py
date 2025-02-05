@@ -25,7 +25,7 @@ from goal.models import (
     differentiable_hmog,
 )
 from hydra.core.config_store import ConfigStore
-from jax import Array, debug
+from jax import Array
 from omegaconf import MISSING
 
 from apps.clustering.plugins import (
@@ -34,7 +34,7 @@ from apps.clustering.plugins import (
 )
 from apps.configs import ClusteringModelConfig
 from apps.runtime.handler import RunHandler
-from apps.runtime.logger import Logger
+from apps.runtime.logger import JaxLogger
 
 
 class RepresentationType(Enum):
@@ -129,74 +129,6 @@ def bound_hmog_mixture_probabilities[
         model.upr_hrm, mix_params, min_prob
     )
     return model.join_conjugated(lkl_params, bounded_mix_params)
-
-
-def initialize_gmm_components(
-    key: Array, data: Array, nor_man: FullNormal, n_components: int
-) -> list[Point[Natural, FullNormal]]:
-    debug.print(
-        "Data stats - Shape: {}, Mean: {}, Std: {}",
-        data.shape,
-        jnp.mean(data),
-        jnp.std(data),
-    )
-
-    keys = jax.random.split(key, 2)
-    n_samples = data.shape[0]
-
-    # K-means++ initialization
-    def kmeans_plus_plus(key: Array):
-        centers = [data[jax.random.randint(key, (), 0, n_samples)]]
-        for _ in range(n_components - 1):
-            dists = jnp.min(
-                jnp.array(
-                    [jnp.sum((data - center) ** 2, axis=1) for center in centers]
-                ),
-                axis=0,
-            )
-
-            probs = dists / jnp.sum(dists)
-            next_idx = jax.random.choice(key, n_samples, p=probs)
-            centers.append(data[next_idx])
-
-        return jnp.stack(centers)
-
-    means = kmeans_plus_plus(keys[0])
-    debug.print(
-        "Means shape: {}, stats: {}", means.shape, [jnp.mean(means), jnp.std(means)]
-    )
-
-    def estimate_local_cov(center: Array):
-        dists = jnp.sum((data - center) ** 2, axis=1)
-        nearest = jnp.argsort(dists)[: n_samples // n_components]
-        local_data = data[nearest]
-        return jnp.cov(local_data.T) + jnp.eye(data.shape[1]) * 1e-6
-
-    covs = jax.vmap(estimate_local_cov)(means)
-    debug.print(
-        "Covs shape: {}, eigenvalue ranges: {}",
-        covs.shape,
-        [
-            (jnp.min(jnp.linalg.eigvalsh(c)), jnp.max(jnp.linalg.eigvalsh(c)))
-            for c in covs
-        ],
-    )
-
-    nrms: list[Point[Natural, FullNormal]] = []
-    for i in range(n_components):
-        mean = nor_man.loc_man.mean_point(means[i])
-        cov = nor_man.cov_man.from_dense(covs[i])
-        nrm = nor_man.to_natural(nor_man.join_mean_covariance(mean, cov))
-        debug.print(
-            "Component {} natural params - Shape: {}, Range: [{}, {}]",
-            i,
-            nrm.array.shape,
-            jnp.min(nrm.array),
-            jnp.max(nrm.array),
-        )
-        nrms.append(nrm)
-
-    return nrms
 
 
 ### ABC ###
@@ -321,7 +253,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        logger: Logger,
+        logger: JaxLogger,
     ) -> None:
         params = self.initialize_model(key, dataset.train_images)
         final_params = self.fit(  # pyright: ignore[reportUnknownVariableType]
@@ -373,7 +305,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
     def log_epoch_metrics(
         self,
-        logger: Logger,
+        logger: JaxLogger,
         epoch: int,
         train_ll: Array,
         test_ll: Array,
@@ -382,7 +314,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         metrics = {
             "train_log_likelihood": train_ll,
             "test_log_likelihood": test_ll,
-            "bic": -2 * test_ll + jnp.log(self.model.dim),
+            "test_bic": -2 * test_ll + jnp.log(self.model.dim),
         }
         logger.log_metrics(metrics, epoch)
 
@@ -409,7 +341,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     @partial(jax.jit, static_argnums=(0, 1))
     def fit(
         self,
-        logger: Logger,
+        logger: JaxLogger,
         init_params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
         train_sample: Array,
         test_sample: Array,

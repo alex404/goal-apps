@@ -3,7 +3,7 @@
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
-from rich import print
+from rich import print as rprint
 from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
@@ -84,7 +84,7 @@ def print_config_tree(data: dict[str, Any] | list[Any] | Any) -> Tree:
     _build_tree(tree, data)
 
     # Print it inside a panel for extra clarity
-    print(Panel(tree, title="Hydra Config Overview", border_style="green"))
+    rprint(Panel(tree, title="Hydra Config Overview", border_style="green"))
     return tree
 
 
@@ -94,7 +94,7 @@ def print_sweep_tree(data: dict[str, Any] | list[Any] | Any) -> Tree:
     _build_tree(tree, data)
 
     # Print it inside a panel for extra clarity
-    print(Panel(tree, title="Sweep Config Overview", border_style="green"))
+    rprint(Panel(tree, title="Sweep Config Overview", border_style="green"))
     return tree
 
 

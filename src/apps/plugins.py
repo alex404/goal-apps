@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from jax import Array
 
 from .runtime.handler import RunHandler
-from .runtime.logger import Logger
+from .runtime.logger import JaxLogger
 
 
 class Dataset(ABC):
@@ -36,7 +36,7 @@ class Model[D: Dataset](ABC):
         key: Array,
         handler: RunHandler,
         dataset: D,
-        logger: Logger,
+        logger: JaxLogger,
     ) -> None:
         """Evaluate model on dataset."""
 

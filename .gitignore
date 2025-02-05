@@ -1,6 +1,6 @@
 # Local results
 scratch/
-experiments/
+runs/
 .cache/
 wandb/
 

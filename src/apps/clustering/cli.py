@@ -4,7 +4,7 @@ from jax import Array
 
 from ..plugins import Dataset, Model
 from ..runtime.handler import RunHandler
-from ..runtime.logger import Logger
+from ..runtime.logger import JaxLogger
 
 
 def train(
@@ -12,15 +12,12 @@ def train(
     handler: RunHandler,
     dataset: Dataset,
     model: Model[Dataset],
-    logger: Logger,
+    logger: JaxLogger,
 ) -> None:
     """train model and save results."""
 
     # Train model
-    results = model.run_experiment(key, handler, dataset, logger)
-
-    # Save results
-    handler.save_json(results, "training_results")
+    model.run_experiment(key, handler, dataset, logger)
 
     logger.finalize(handler)
 

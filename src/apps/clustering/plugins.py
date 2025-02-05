@@ -9,7 +9,7 @@ from matplotlib.axes import Axes
 
 from ..plugins import Dataset, Model
 from ..runtime.handler import RunHandler
-from ..runtime.logger import Logger
+from ..runtime.logger import JaxLogger
 
 ### Datasets ###
 
@@ -75,7 +75,7 @@ class ClusteringModel(Model[ClusteringDataset], ABC):
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        logger: Logger,
+        logger: JaxLogger,
     ) -> None:
         """Evaluate model on dataset."""
 

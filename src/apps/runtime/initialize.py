@@ -1,5 +1,6 @@
 """Shared utilities for GOAL examples."""
 
+import logging
 from pathlib import Path
 
 import hydra
@@ -11,10 +12,13 @@ from ..configs import RunConfig
 from ..plugins import Dataset, Model
 from ..util import print_config_tree
 from .handler import RunHandler
-from .logger import Logger
+from .logger import JaxLogger, setup_logging
 
-### Loggers ###
+### Preamble ###
 
+logging.getLogger("jax._src.xla_bridge").addFilter(lambda _: False)
+
+log = logging.getLogger(__name__)
 
 ### Initialization ###
 
@@ -28,7 +32,7 @@ def _initialize_jax(device: str = "cpu", disable_jit: bool = False) -> None:
 def initialize_run(
     run_type: type[RunConfig],
     overrides: list[str],
-) -> tuple[RunHandler, Dataset, Model[Dataset], Logger]:
+) -> tuple[RunHandler, Dataset, Model[Dataset], JaxLogger]:
     """Initialize a new run with hydra config and wandb logging."""
     cs = ConfigStore.instance()
     cs.store(name="config_schema", node=run_type)
@@ -40,9 +44,6 @@ def initialize_run(
     ):
         cfg = hydra.compose(config_name="config", overrides=overrides)
 
-    print(f"Run name: {cfg.run_name}")
-    print(f"with JIT: {cfg.jit}")
-
     print_config_tree(OmegaConf.to_container(cfg, resolve=True))
 
     # Initialize JAX
@@ -51,6 +52,14 @@ def initialize_run(
     # Initialize run handler
     handler = RunHandler(name=cfg.run_name, project_root=proot)
 
+    # Save config to run directory
+    OmegaConf.save(cfg, handler.run_dir / "config.yaml")
+
+    setup_logging(handler.run_dir)
+
+    log.info(f"Run name: {cfg.run_name}")
+    log.info(f"with JIT: {cfg.jit}")
+
     dataset: Dataset = hydra.utils.instantiate(cfg.dataset, cache_dir=handler.cache_dir)
 
     # Instantiate model
@@ -58,7 +67,7 @@ def initialize_run(
         cfg.model, data_dim=dataset.data_dim
     )
 
-    logger: Logger = hydra.utils.instantiate(
+    logger: JaxLogger = hydra.utils.instantiate(
         cfg.logger,
         metrics=model.metrics,
         run_name=cfg.run_name,

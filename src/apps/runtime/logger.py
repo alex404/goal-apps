@@ -1,5 +1,6 @@
 """Shared utilities for GOAL examples."""
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,8 +9,67 @@ from typing import Any, override
 import jax
 import wandb
 from jax import Array
+from rich.console import Console
+from rich.logging import RichHandler
+from rich.theme import Theme
 
 from .handler import RunHandler
+
+### Logging ###
+
+
+# Custom theme for our logging
+THEME = Theme(
+    {
+        "info": "cyan",
+        "warning": "yellow",
+        "error": "red",
+        "critical": "red reverse",
+        "metric": "green",
+        "step": "blue",
+        "value": "yellow",
+    }
+)
+
+
+def setup_logging(run_dir: Path) -> None:
+    """Configure logging for the entire application with pretty formatting."""
+    # Remove all handlers associated with the root logger object
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+
+    # Create console with our theme
+    console = Console(theme=THEME)
+
+    # Console handler using Rich
+    console_handler = RichHandler(
+        console=console,
+        show_time=True,
+        show_level=True,
+        show_path=False,  # We'll show this in the format string instead
+        rich_tracebacks=True,
+        tracebacks_width=None,  # Use full width
+        markup=True,  # Enable rich markup in log messages
+    )
+
+    # Create formatters
+    # Rich handler already handles the time, so we don't include it in the format
+    console_format = "%(name)-20s | %(message)s"
+    file_format = "%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s"
+
+    console_handler.setFormatter(logging.Formatter(console_format))
+    console_handler.setLevel(logging.INFO)
+
+    # File handler (keeping this as standard logging for clean logs)
+    log_file = run_dir / "training.log"
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter(file_format))
+    file_handler.setLevel(logging.INFO)
+
+    # Set up root logger
+    logging.root.handlers = [console_handler, file_handler]
+    logging.root.setLevel(logging.INFO)
+
 
 ### Global state for metric buffering ###
 
@@ -17,11 +77,11 @@ from .handler import RunHandler
 _metric_buffer: dict[str, list[tuple[int, float]]] = {}
 
 
-### Loggers ###
+### Jit-Compatible Loggers ###
 
 
 @dataclass(frozen=True)
-class Logger(ABC):
+class JaxLogger(ABC):
     """Interface for metric logging.
 
     Note: __init__ and finalize take RunHandler and should never be called
@@ -47,7 +107,7 @@ class Logger(ABC):
 
 
 @dataclass(frozen=True)
-class WandbLogger(Logger):
+class WandbLogger(JaxLogger):
     """Logger implementation using Weights & Biases.
 
     Logs metrics in real-time to wandb platform.
@@ -85,7 +145,7 @@ class WandbLogger(Logger):
 
 
 @dataclass(frozen=True)
-class LocalLogger(Logger):
+class LocalLogger(JaxLogger):
     """Local filesystem logger with metric buffering.
 
     Note: Uses global state for metric buffering to maintain compatibility with
@@ -106,7 +166,8 @@ class LocalLogger(Logger):
             float_val = float(value)  # Do the float conversion here
             _metric_buffer[metric].append((step, float_val))
             # Do the string formatting here too
-            print(f"{self.run_name} - Step {step}: {metric}={float_val:.6f}")
+            log = logging.getLogger(__name__)
+            log.info("Step %4d | %20s | %10.6f", step, metric, float_val)
 
         for metric, value in values.items():
             jax.debug.callback(_log_value, metric, value, step)
@@ -125,7 +186,7 @@ class LocalLogger(Logger):
 
 
 @dataclass(frozen=True)
-class NullLogger(Logger):
+class NullLogger(JaxLogger):
     """Logger implementation that does nothing."""
 
     @override
