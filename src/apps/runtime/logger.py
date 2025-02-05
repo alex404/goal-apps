@@ -4,7 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, override
+from typing import override
 
 import jax
 import wandb
@@ -92,9 +92,18 @@ class JaxLogger(ABC):
     run_name: str
     run_dir: Path
 
-    @abstractmethod
     def log_metrics(self, values: dict[str, Array], step: int) -> None:
-        """Log metrics for current step. Safe for jit."""
+        """Log metrics using callbacks to handle traced values."""
+
+        def _log_values(values_dict: dict[str, Array], step: int) -> None:
+            float_values = {k: float(v) for k, v in values_dict.items()}
+            self._log_metrics(float_values, step)
+
+        jax.debug.callback(_log_values, values, step)
+
+    @abstractmethod
+    def _log_metrics(self, values: dict[str, float], step: int) -> None:
+        """Implementation-specific logging of metric values."""
 
     # @abstractmethod
     # def log_image(self, key: str, array: Array) -> None:
@@ -128,9 +137,8 @@ class WandbLogger(JaxLogger):
         )
 
     @override
-    def log_metrics(self, values: dict[str, Array], step: int) -> None:
-        super().log_metrics(values, step)
-        wandb.log({k: float(v) for k, v in values.items()})
+    def _log_metrics(self, values: dict[str, float], step: int) -> None:
+        wandb.log(values, step=step)
 
     # @override
     # def log_image(self, key: str, array: Array) -> None:
@@ -158,19 +166,15 @@ class LocalLogger(JaxLogger):
         _metric_buffer.clear()  # Clear existing buffer if any
 
     @override
-    def log_metrics(self, values: dict[str, Array], step: int) -> None:
-        def _log_value(metric: str, value: Any, step: int) -> None:
-            global _metric_buffer
-            float_val = float(value)  # Do the float conversion here
-            if metric not in _metric_buffer:
-                _metric_buffer[metric] = []
-            _metric_buffer[metric].append((step, float_val))
-            # Do the string formatting here too
-            log = logging.getLogger("jit_logger")
-            log.info("Step %4d | %14s | %10.6f", step, metric, float_val)
+    def _log_metrics(self, values: dict[str, float], step: int) -> None:
+        global _metric_buffer
+        log = logging.getLogger("jit_logger")
 
         for metric, value in values.items():
-            jax.debug.callback(_log_value, metric, value, step)
+            if metric not in _metric_buffer:
+                _metric_buffer[metric] = []
+            _metric_buffer[metric].append((step, value))
+            log.info("Step %4d | %14s | %10.6f", step, metric, value)
 
     @override
     def finalize(self, handler: RunHandler) -> None:
@@ -190,12 +194,8 @@ class NullLogger(JaxLogger):
     """Logger implementation that does nothing."""
 
     @override
-    def log_metrics(self, values: dict[str, Array], step: int) -> None:
+    def _log_metrics(self, values: dict[str, float], step: int) -> None:
         pass
-
-    # @override
-    # def log_image(self, key: str, array: Array) -> None:
-    #     pass
 
     @override
     def finalize(self, handler: RunHandler) -> None:

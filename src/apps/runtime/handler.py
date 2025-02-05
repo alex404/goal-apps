@@ -34,6 +34,7 @@ class RunHandler:
             base / "sweep" / sweep_id / name if sweep_id else base / "single" / name
         )
         object.__setattr__(self, "run_dir", run_dir)
+        run_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def cache_dir(self) -> Path:

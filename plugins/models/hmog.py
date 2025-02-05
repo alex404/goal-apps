@@ -330,7 +330,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             train_bic=epoch_train_bic,
         )
 
-        logger.log_metrics({k: metrics[k] for k in metrics}, epoch)
+        logger.log_metrics({k: metrics[k] for k in metrics}, epoch + 1)
 
     # def log_prototypes(
     #     self,
@@ -362,7 +362,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
         """Three-stage minibatch training process."""
 
-        self.log_epoch_metrics(logger, 0, init_params, train_sample, test_sample)
+        self.log_epoch_metrics(logger, -1, init_params, train_sample, test_sample)
 
         lkl_params0, mix_params0 = self.model.split_conjugated(init_params)
         key = jax.random.PRNGKey(0)
@@ -390,7 +390,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 )
                 return lgm_params
 
-            lgm_params1 = fori(1, self.stage1_epochs + 1, stage1_step, lgm_params0)
+            lgm_params1 = fori(0, self.stage1_epochs, stage1_step, lgm_params0)
             lkl_params1 = lh.likelihood_function(lgm_params1)
 
         # Stage 2: Gradient descent for mixture components
