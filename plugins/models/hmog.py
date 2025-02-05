@@ -1,15 +1,12 @@
 """Base class for HMoG implementations."""
 
-from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
-from time import time
-from typing import override
+from typing import Callable, cast, override
 
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 from goal.geometry import (
     Diagonal,
     Natural,
@@ -31,11 +28,13 @@ from hydra.core.config_store import ConfigStore
 from jax import Array, debug
 from omegaconf import MISSING
 
-from apps.clustering.core.common import ProbabilisticResults, evaluate_clustering
-from apps.clustering.core.datasets import Dataset, SupervisedDataset
-from apps.clustering.core.models import Model
-from apps.config import ModelConfig
-from apps.runtime import RunHandler
+from apps.clustering.plugins import (
+    ClusteringDataset,
+    ClusteringModel,
+)
+from apps.configs import ClusteringModelConfig
+from apps.runtime.handler import RunHandler
+from apps.runtime.logger import Logger
 
 
 class RepresentationType(Enum):
@@ -44,8 +43,12 @@ class RepresentationType(Enum):
     positive_definite = PositiveDefinite
 
 
+def fori[X](lower: int, upper: int, body_fun: Callable[[int, X], X], init: X) -> X:
+    return jax.lax.fori_loop(lower, upper, body_fun, init)  # pyright: ignore[reportUnknownVariableType]
+
+
 @dataclass
-class HMoGConfig(ModelConfig):
+class HMoGConfig(ClusteringModelConfig):
     """Configuration for Hierarchical Mixture of Gaussians model.
 
     Model Architecture:
@@ -65,7 +68,7 @@ class HMoGConfig(ModelConfig):
         stage3_learning_rate: Learning rate for stage 3 [default: 0.0003]
     """
 
-    _target_: str = "plugins.models.hmog.MinibatchHMoG"
+    _target_: str = "plugins.models.hmog.HMoGExperiment"
     data_dim: int = MISSING
     latent_dim: int = 10
     n_clusters: int = 10
@@ -199,201 +202,10 @@ def initialize_gmm_components(
 ### ABC ###
 
 
-class HMoGBase[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
-    Model[Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]], ABC
+class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
+    ClusteringModel
 ):
-    """Base class for HMoG implementations."""
-
-    # Fields
-
-    model: DifferentiableHMoG[ObsRep, LatRep]
-    n_epochs: int
-
-    # Properties
-
-    @property
-    @override
-    def latent_dim(self) -> int:
-        return self.model.lat_man.obs_man.data_dim
-
-    @property
-    @override
-    def n_clusters(self) -> int:
-        return self.model.lat_man.lat_man.dim + 1
-
-    # Methods
-
-    @override
-    def initialize(
-        self, key: Array, data: Array
-    ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
-        """Initialize model parameters."""
-        keys = jax.random.split(key, 3)
-        key_cat, key_comp, key_int = keys
-
-        obs_means = self.model.obs_man.average_sufficient_statistic(data)
-        obs_means = self.model.obs_man.regularize_covariance(
-            obs_means, OBS_JITTER, OBS_MIN_VAR
-        )
-        obs_params = self.model.obs_man.to_natural(obs_means)
-
-        with self.model.upr_hrm as uh:
-            cat_params = uh.lat_man.initialize(key_cat)
-            key_comps = jax.random.split(key_comp, self.n_clusters)
-            components = [uh.obs_man.initialize(key_compi) for key_compi in key_comps]
-            mix_params = uh.join_natural_mixture(components, cat_params)
-
-        int_noise = 0.1 * jax.random.normal(key_int, self.model.int_man.shape)
-        lkl_params = self.model.lkl_man.join_params(
-            obs_params, Point(self.model.int_man.rep.from_dense(int_noise))
-        )
-        return self.model.join_conjugated(lkl_params, mix_params)
-
-    def log_likelihood(
-        self, params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], data: Array
-    ) -> Array:
-        return self.model.average_log_observable_density(params, data)
-
-    @override
-    def generate(
-        self,
-        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-        key: Array,
-        n_samples: int,
-    ) -> Array:
-        return self.model.observable_sample(key, params, n_samples)
-
-    @override
-    def cluster_assignments(
-        self, params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], data: Array
-    ) -> Array:
-        def data_point_cluster(x: Array) -> Array:
-            with self.model as m:
-                cat_pst = m.lat_man.prior(m.posterior_at(params, x))
-                with m.lat_man.lat_man as lm:
-                    probs = lm.to_probs(lm.to_mean(cat_pst))
-            return jnp.argmax(probs, axis=-1)
-
-        return jax.vmap(data_point_cluster)(data)
-
-    @override
-    def evaluate(
-        self,
-        key: Array,
-        handler: RunHandler,
-        dataset: SupervisedDataset,
-    ) -> ProbabilisticResults:
-        start_time = time()
-        params = self.initialize(key, dataset.train_images)
-        final_params, train_lls, test_lls = self.fit(
-            handler, dataset, params, dataset.train_images, dataset.test_images
-        )
-
-        train_clusters = self.cluster_assignments(final_params, dataset.train_images)
-        test_clusters = self.cluster_assignments(final_params, dataset.test_images)
-
-        # Get prototypes
-        prototypes = self.get_component_prototypes(final_params)
-
-        return ProbabilisticResults(
-            model_name=self.__class__.__name__,
-            train_log_likelihood=train_lls.tolist(),
-            test_log_likelihood=test_lls.tolist(),
-            final_train_log_likelihood=float(train_lls[-1]),
-            final_test_log_likelihood=float(
-                self.log_likelihood(final_params, dataset.test_images)
-            ),
-            train_accuracy=float(
-                evaluate_clustering(train_clusters, dataset.train_labels)
-            ),
-            test_accuracy=float(
-                evaluate_clustering(test_clusters, dataset.test_labels)
-            ),
-            latent_dim=self.latent_dim,
-            n_clusters=self.n_clusters,
-            n_parameters=self.model.dim,
-            training_time=time() - start_time,
-            prototypes=prototypes.tolist(),  # Add prototypes to results
-        )
-
-    # Add this method to the HMoGBase class
-    @override
-    def get_component_prototypes(
-        self,
-        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-    ) -> Array:
-        r"""Extract the mean image for each mixture component.
-
-        For HMoG models, the prototype for each component k is:
-        $$
-        \mu_k = A_k \mu_k^z + b_k
-        $$
-        where $A_k, b_k$ are the linear transformation parameters for component k,
-        and $\mu_k^z$ is the mean of the latent distribution for component k.
-
-        Returns:
-            Array of shape (n_components, obs_dim) containing the mean
-            observation for each mixture component.
-        """
-        # Split into likelihood and mixture parameters
-        lkl_params, mix_params = self.model.split_conjugated(params)
-
-        # Extract components from mixture
-        comp_lats, _ = self.model.upr_hrm.split_natural_mixture(mix_params)
-
-        # For each component, compute the observable distribution and get its mean
-        prototypes = []
-        for comp_lat_params in comp_lats:
-            # Get latent mean for this component
-            with self.model.lwr_hrm as lh:
-                lwr_hrm_params = lh.join_conjugated(lkl_params, comp_lat_params)
-                lwr_hrm_means = lh.to_mean(lwr_hrm_params)
-                lwr_hrm_obs = lh.split_params(lwr_hrm_means)[0]
-                obs_means = lh.obs_man.split_mean_second_moment(lwr_hrm_obs)[0].array
-
-            prototypes.append(obs_means)
-
-        return jnp.stack(prototypes)
-
-    def log_epoch_metrics(
-        self,
-        handler: RunHandler,
-        epoch: Array,
-        train_ll: Array,
-        test_ll: Array,
-    ) -> None:
-        """Log metrics for an epoch."""
-        metrics = {
-            "training/train_log_likelihood": train_ll,
-            "training/test_log_likelihood": test_ll,
-            "training/bic": -2 * test_ll + jnp.log(self.model.dim),
-            "epoch": epoch,
-        }
-        handler.log_metrics(metrics)
-
-    def log_prototypes(
-        self,
-        handler: RunHandler,
-        dataset: Dataset,
-        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-    ) -> None:
-        """Log component prototypes using dataset visualization."""
-        prototypes = self.get_component_prototypes(params)
-
-        for i, prototype in enumerate(prototypes):
-            fig, ax = plt.subplots()
-            dataset.visualize_observable(prototype, ax=ax)
-
-            handler.log_image(
-                f"prototypes/prototype_{i}", fig, f"Component {i} prototype"
-            )
-            plt.close(fig)
-
-
-class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
-    HMoGBase[ObsRep, LatRep]
-):
-    """Minibatch training implementation of HMoG."""
+    """Experiment framework for HMoGs."""
 
     def __init__(
         self,
@@ -429,18 +241,181 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             lat_rep=lat_rep_type,
         )
 
+    """Base class for HMoG implementations."""
+
+    # Properties
+
+    @property
     @override
-    @partial(jax.jit, static_argnums=(0, 1, 2))
+    def metrics(self) -> list[str]:
+        return ["train_log_likelihood", "test_log_likelihood", "bic"]
+
+    @property
+    @override
+    def n_epochs(self) -> int:
+        return self.stage1_epochs + self.stage2_epochs + self.stage3_epochs
+
+    @property
+    def latent_dim(self) -> int:
+        return self.model.lat_man.obs_man.data_dim
+
+    @property
+    @override
+    def n_clusters(self) -> int:
+        return self.model.lat_man.lat_man.dim + 1
+
+    # Methods
+
+    @override
+    def initialize_model(self, key: Array, data: Array) -> Array:
+        """Initialize model parameters."""
+        keys = jax.random.split(key, 3)
+        key_cat, key_comp, key_int = keys
+
+        obs_means = self.model.obs_man.average_sufficient_statistic(data)
+        obs_means = self.model.obs_man.regularize_covariance(
+            obs_means, OBS_JITTER, OBS_MIN_VAR
+        )
+        obs_params = self.model.obs_man.to_natural(obs_means)
+
+        with self.model.upr_hrm as uh:
+            cat_params = uh.lat_man.initialize(key_cat)
+            key_comps = jax.random.split(key_comp, self.n_clusters)
+            components = [uh.obs_man.initialize(key_compi) for key_compi in key_comps]
+            mix_params = uh.join_natural_mixture(components, cat_params)
+
+        int_noise = 0.1 * jax.random.normal(key_int, self.model.int_man.shape)
+        lkl_params = self.model.lkl_man.join_params(
+            obs_params, Point(self.model.int_man.rep.from_dense(int_noise))
+        )
+        return self.model.join_conjugated(lkl_params, mix_params).array
+
+    def log_likelihood(
+        self, params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], data: Array
+    ) -> Array:
+        return self.model.average_log_observable_density(params, data)
+
+    @override
+    def generate(
+        self,
+        params: Array,
+        key: Array,
+        n_samples: int,
+    ) -> Array:
+        return self.model.observable_sample(key, Point(params), n_samples)
+
+    @override
+    def cluster_assignments(self, params: Array, data: Array) -> Array:
+        def data_point_cluster(x: Array) -> Array:
+            with self.model as m:
+                cat_pst = m.lat_man.prior(m.posterior_at(Point(params), x))
+                with m.lat_man.lat_man as lm:
+                    probs = lm.to_probs(lm.to_mean(cat_pst))
+            return jnp.argmax(probs, axis=-1)
+
+        return jax.vmap(data_point_cluster)(data)
+
+    @override
+    def run_experiment(
+        self,
+        key: Array,
+        handler: RunHandler,
+        dataset: ClusteringDataset,
+        logger: Logger,
+    ) -> None:
+        params = self.initialize_model(key, dataset.train_images)
+        final_params = self.fit(  # pyright: ignore[reportUnknownVariableType]
+            logger, Point(params), dataset.train_images, dataset.test_images
+        )
+        final_params = cast(
+            Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], final_params
+        )
+        handler.save_json(final_params.array.tolist(), "final_params")
+
+    # Add this method to the HMoGBase class
+    @override
+    def get_component_prototypes(
+        self,
+        params: Array,
+    ) -> Array:
+        r"""Extract the mean image for each mixture component.
+
+        For HMoG models, the prototype for each component k is:
+        $$
+        \mu_k = A_k \mu_k^z + b_k
+        $$
+        where $A_k, b_k$ are the linear transformation parameters for component k,
+        and $\mu_k^z$ is the mean of the latent distribution for component k.
+
+        Returns:
+            Array of shape (n_components, obs_dim) containing the mean
+            observation for each mixture component.
+        """
+        # Split into likelihood and mixture parameters
+        lkl_params, mix_params = self.model.split_conjugated(Point(params))
+
+        # Extract components from mixture
+        comp_lats, _ = self.model.upr_hrm.split_natural_mixture(mix_params)
+
+        # For each component, compute the observable distribution and get its mean
+        prototypes = []
+        for comp_lat_params in comp_lats:
+            # Get latent mean for this component
+            with self.model.lwr_hrm as lh:
+                lwr_hrm_params = lh.join_conjugated(lkl_params, comp_lat_params)
+                lwr_hrm_means = lh.to_mean(lwr_hrm_params)
+                lwr_hrm_obs = lh.split_params(lwr_hrm_means)[0]
+                obs_means = lh.obs_man.split_mean_second_moment(lwr_hrm_obs)[0].array
+
+            prototypes.append(obs_means)
+
+        return jnp.stack(prototypes)
+
+    def log_epoch_metrics(
+        self,
+        logger: Logger,
+        epoch: int,
+        train_ll: Array,
+        test_ll: Array,
+    ) -> None:
+        """Log metrics for an epoch."""
+        metrics = {
+            "train_log_likelihood": train_ll,
+            "test_log_likelihood": test_ll,
+            "bic": -2 * test_ll + jnp.log(self.model.dim),
+        }
+        logger.log_metrics(metrics, epoch)
+
+    # def log_prototypes(
+    #     self,
+    #     handler: RunHandler,
+    #     dataset: Dataset,
+    #     params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+    # ) -> None:
+    #     """Log component prototypes using dataset visualization."""
+    #     prototypes = self.get_component_prototypes(params)
+    #
+    #     for i, prototype in enumerate(prototypes):
+    #         fig, ax = plt.subplots()
+    #         dataset.visualize_observable(prototype, ax=ax)
+    #
+    #         # handler.log_image(
+    #         #     f"prototypes/prototype_{i}", fig, f"Component {i} prototype"
+    #         # )
+    #         plt.close(fig)
+    #
+
+    # @override
+    @partial(jax.jit, static_argnums=(0, 1))
     def fit(
         self,
-        handler: RunHandler,
-        dataset: Dataset,
-        params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+        logger: Logger,
+        init_params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
         train_sample: Array,
         test_sample: Array,
-    ) -> tuple[Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array, Array]:
+    ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
         """Three-stage minibatch training process."""
-        lkl_params0, mix_params0 = self.model.split_conjugated(params0)
+        lkl_params0, mix_params0 = self.model.split_conjugated(init_params)
         key = jax.random.PRNGKey(0)
 
         # Stage 1: Full-batch EM for LinearGaussianModel
@@ -449,13 +424,11 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             lgm_params0 = lh.join_conjugated(lkl_params0, z)
 
             def stage1_step(
-                params: Point[Natural, LinearGaussianModel[ObsRep]], epoch: Array
-            ) -> tuple[
-                Point[Natural, LinearGaussianModel[ObsRep]], tuple[Array, Array]
-            ]:
+                epoch: int, params: Point[Natural, LinearGaussianModel[ObsRep]]
+            ) -> Point[Natural, LinearGaussianModel[ObsRep]]:
                 train_ll = lh.average_log_observable_density(params, train_sample)
                 test_ll = lh.average_log_observable_density(params, test_sample)
-                self.log_epoch_metrics(handler, epoch, train_ll, test_ll)
+                self.log_epoch_metrics(logger, epoch, train_ll, test_ll)
 
                 means = lh.expectation_step(params, train_sample)
                 obs_means, int_means, lat_means = lh.split_params(means)
@@ -465,17 +438,9 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 means = lh.join_params(obs_means, int_means, lat_means)
                 params1 = lh.to_natural(means)
                 lkl_params = lh.likelihood_function(params1)
-                next_params = lh.join_conjugated(lkl_params, z)
-                # debug.print("Stage 1 Train LL: {}; Test LL: {}", train_ll, test_ll)
-                return next_params, (train_ll, test_ll)
+                return lh.join_conjugated(lkl_params, z)
 
-            xs = jnp.arange(self.stage1_epochs)
-
-            lgm_params1, (train_lls1, test_lls1) = jax.lax.scan(
-                stage1_step,
-                lgm_params0,
-                xs,
-            )
+            lgm_params1 = fori(0, self.stage1_epochs, stage1_step, lgm_params0)
             lkl_params1 = lh.likelihood_function(lgm_params1)
 
         # Stage 2: Gradient descent for mixture components
@@ -512,19 +477,16 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             return ((opt_state, params), None)
 
         def stage2_epoch(
+            epoch: int,
             carry: tuple[
                 OptState,
                 Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
                 Array,
             ],
-            epoch: Array,
         ) -> tuple[
-            tuple[
-                OptState,
-                Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
-                Array,
-            ],
-            tuple[Array, Array],
+            OptState,
+            Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
+            Array,
         ]:
             opt_state, params, key = carry
 
@@ -557,21 +519,19 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 hmog_params, test_sample
             )
             self.log_epoch_metrics(
-                handler,
-                epoch + self.stage1_epochs,  # Offset by stage1 epochs
+                logger,
+                epoch,
                 epoch_train_ll,
                 epoch_test_ll,
             )
-            # debug.print(
-            #     "Stage 2 epoch train LL: {}; test LL: {}", epoch_train_ll, epoch_test_ll
-            # )
 
-            return (opt_state, params, return_key), (epoch_train_ll, epoch_test_ll)
+            return (opt_state, params, return_key)
 
-        (_, mix_params1, key), (train_lls2, test_lls2) = jax.lax.scan(
+        (_, mix_params1, key) = fori(
+            self.stage1_epochs,
+            self.stage1_epochs + self.stage2_epochs,
             stage2_epoch,
             (stage2_opt_state, mix_params0, key),
-            jnp.arange(self.stage2_epochs),
         )
 
         # Stage 3: Similar structure to stage 2
@@ -602,14 +562,11 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             return (opt_state, params), None
 
         def stage3_epoch(
+            epoch: int,
             carry: tuple[
                 OptState, Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array
             ],
-            epoch: Array,
-        ) -> tuple[
-            tuple[OptState, Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array],
-            tuple[Array, Array],
-        ]:
+        ) -> tuple[OptState, Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array]:
             opt_state, params, key = carry
 
             # Shuffle and batch data
@@ -639,24 +596,18 @@ class MinibatchHMoG[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 params, test_sample
             )
             self.log_epoch_metrics(
-                handler,
+                logger,
                 epoch + self.stage1_epochs + self.stage2_epochs,
                 epoch_train_ll,
                 epoch_test_ll,
             )
-            debug.print(
-                "Stage 3 epoch train LL: {}; test LL: {}", epoch_train_ll, epoch_test_ll
-            )
+            return opt_state, params, return_key
 
-            return (opt_state, params, return_key), (epoch_train_ll, epoch_test_ll)
-
-        (_, final_params, _), (train_lls3, test_lls3) = jax.lax.scan(
+        (_, final_params, _) = fori(
+            self.stage1_epochs + self.stage2_epochs,
+            self.n_epochs,
             stage3_epoch,
             (stage3_opt_state, params1, key),
-            jnp.arange(self.stage2_epochs),
-            length=self.stage3_epochs,
         )
         # self.log_prototypes(handler, dataset, final_params)
-        train_lls = jnp.concatenate([train_lls1, train_lls2, train_lls3])
-        test_lls = jnp.concatenate([test_lls1, test_lls2, test_lls3])
-        return final_params, train_lls.ravel(), test_lls.ravel()
+        return final_params

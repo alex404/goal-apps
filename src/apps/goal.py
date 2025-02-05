@@ -13,21 +13,19 @@ from plugins import register_plugins
 from rich import print as rprint
 from rich.table import Table
 
-from .config import ClusteringConfig
-from .runtime import initialize_run
+from .configs import ClusteringRunConfig
+from .runtime.initialize import initialize_run
 from .util import (
     create_sweep_config,
     format_config_table,
     get_store_groups,
-    print_config_tree,
     print_sweep_tree,
 )
 
 ### Preamable ###
 
-cs = ConfigStore.instance()
 
-package_root = Path(__file__).parents[2]
+package_root = Path(__file__).parents[3]
 
 register_plugins()
 
@@ -69,15 +67,14 @@ def train(overrides: list[str] = overrides, dry_run: bool = train_dry_run):
         goal clustering train run_name=my_exp dataset=mnist model=hmog
     """
 
-    handler, cfg = initialize_run(ClusteringConfig, overrides)
+    handler, dataset, model, logger = initialize_run(ClusteringRunConfig, overrides)
     key = jax.random.PRNGKey(int.from_bytes(os.urandom(4), byteorder="big"))
-    print_config_tree(OmegaConf.to_container(cfg, resolve=True))
     if dry_run:
         return
 
-    from apps.clustering.train import train
+    from apps.clustering.cli import train
 
-    train(key, handler, cfg)
+    train(key, handler, dataset, model, logger)
 
 
 sweep_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and exit")
@@ -114,9 +111,9 @@ def analyze(overrides: list[str] = overrides):
     Example:
         goal clustering analyze run_name=my_exp
     """
-    from apps.clustering.analyze import analyze
+    from apps.clustering.cli import analyze
 
-    handler, _ = initialize_run(ClusteringConfig, overrides)
+    handler, _, _, _ = initialize_run(ClusteringRunConfig, overrides)
 
     analyze(handler)
 
@@ -144,6 +141,8 @@ def list_plugins():
 @plugins_com.command()
 def inspect(plugin: str = plugin):
     """Inspect plugin configuration parameters."""
+
+    cs = ConfigStore.instance()
 
     for group_name in ["model", "dataset"]:
         group = cs.repo.get(group_name, {})

@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-goal = "apps.cli:main"
+goal = "apps.goal:main"
 
 [project.optional-dependencies]
 test = [

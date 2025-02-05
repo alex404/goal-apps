@@ -1,12 +1,7 @@
 defaults:
   - config_schema
-  - model: ???
-  - dataset: ???
   - _self_
 
 run_name: ${now:%Y%m%d_%H%M%S}
 device: gpu
 jit: true
-
-wandb:
-  enabled: true

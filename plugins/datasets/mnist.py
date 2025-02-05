@@ -13,12 +13,12 @@ from matplotlib.axes import Axes
 from numpy.typing import NDArray
 from torchvision import datasets, transforms
 
-from apps.clustering.core.datasets import SupervisedDataset
-from apps.config import DatasetConfig
+from apps.clustering.plugins import ClusteringDataset
+from apps.configs import ClusteringDatasetConfig
 
 
 @dataclass
-class MNISTConfig(DatasetConfig):
+class MNISTConfig(ClusteringDatasetConfig):
     """Configuration for MNIST dataset.
 
     Parameters:
@@ -34,7 +34,7 @@ cs = ConfigStore.instance()
 cs.store(group="dataset", name="mnist", node=MNISTConfig)
 
 
-class MNISTDataset(SupervisedDataset):
+class MNISTDataset(ClusteringDataset):
     """MNIST handwritten digits dataset."""
 
     _train_images: Array
@@ -89,12 +89,10 @@ class MNISTDataset(SupervisedDataset):
         return self._test_images
 
     @property
-    @override
     def train_labels(self) -> Array:
         return self._train_labels
 
     @property
-    @override
     def test_labels(self) -> Array:
         return self._test_labels
 
@@ -104,7 +102,6 @@ class MNISTDataset(SupervisedDataset):
         return 784  # 28x28 images
 
     @property
-    @override
     def n_classes(self) -> int:
         return 10  # Digits 0-9
 
