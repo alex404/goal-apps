@@ -16,7 +16,6 @@ class LoggerConfig:
     """Base configuration for logging."""
 
     _target_: str = MISSING  # Will point to logger implementation
-    metrics: list[str] = MISSING
 
 
 @dataclass

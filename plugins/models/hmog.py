@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
-from typing import Callable, cast, override
+from typing import Callable, TypedDict, cast, override
 
 import jax
 import jax.numpy as jnp
@@ -134,6 +134,12 @@ def bound_hmog_mixture_probabilities[
 ### ABC ###
 
 
+class HMoGMetrics(TypedDict):
+    train_ll: Array
+    test_ll: Array
+    train_bic: Array
+
+
 class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     ClusteringModel
 ):
@@ -176,11 +182,6 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     """Base class for HMoG implementations."""
 
     # Properties
-
-    @property
-    @override
-    def metrics(self) -> list[str]:
-        return ["train_ll", "test_ll", "train_bic"]
 
     @property
     @override
@@ -307,17 +308,29 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         self,
         logger: JaxLogger,
         epoch: int,
-        train_ll: Array,
-        test_ll: Array,
-        train_bic: Array,
+        hmog_params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+        train_sample: Array,
+        test_sample: Array,
     ) -> None:
         """Log metrics for an epoch."""
-        metrics = {
-            "train_ll": train_ll,
-            "test_ll": test_ll,
-            "train_bic": train_bic,
-        }
-        logger.log_metrics(metrics, epoch)
+
+        epoch_train_ll = self.model.average_log_observable_density(
+            hmog_params, train_sample
+        )
+        epoch_test_ll = self.model.average_log_observable_density(
+            hmog_params, test_sample
+        )
+
+        epoch_train_bic = -2 * epoch_train_ll + self.model.dim * jnp.log(
+            train_sample.shape[0]
+        )
+        metrics = HMoGMetrics(
+            train_ll=epoch_train_ll,
+            test_ll=epoch_test_ll,
+            train_bic=epoch_train_bic,
+        )
+
+        logger.log_metrics({k: metrics[k] for k in metrics}, epoch)
 
     # def log_prototypes(
     #     self,
@@ -348,6 +361,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         test_sample: Array,
     ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
         """Three-stage minibatch training process."""
+
+        self.log_epoch_metrics(logger, 0, init_params, train_sample, test_sample)
+
         lkl_params0, mix_params0 = self.model.split_conjugated(init_params)
         key = jax.random.PRNGKey(0)
 
@@ -357,16 +373,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             lgm_params0 = lh.join_conjugated(lkl_params0, z)
 
             def stage1_step(
-                epoch: int, params: Point[Natural, LinearGaussianModel[ObsRep]]
+                epoch: int, lgm_params: Point[Natural, LinearGaussianModel[ObsRep]]
             ) -> Point[Natural, LinearGaussianModel[ObsRep]]:
-                train_ll = lh.average_log_observable_density(params, train_sample)
-                test_ll = lh.average_log_observable_density(params, test_sample)
-                train_bic = -2 * train_ll + self.model.dim * jnp.log(
-                    train_sample.shape[0]
-                )
-                self.log_epoch_metrics(logger, epoch, train_ll, test_ll, train_bic)
-
-                means = lh.expectation_step(params, train_sample)
+                means = lh.expectation_step(lgm_params, train_sample)
                 obs_means, int_means, lat_means = lh.split_params(means)
                 obs_means = lh.obs_man.regularize_covariance(
                     obs_means, OBS_JITTER, OBS_MIN_VAR
@@ -374,9 +383,14 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 means = lh.join_params(obs_means, int_means, lat_means)
                 params1 = lh.to_natural(means)
                 lkl_params = lh.likelihood_function(params1)
-                return lh.join_conjugated(lkl_params, z)
+                lgm_params = lh.join_conjugated(lkl_params, z)
+                hmog_params = self.model.join_conjugated(lkl_params, mix_params0)
+                self.log_epoch_metrics(
+                    logger, epoch, hmog_params, train_sample, test_sample
+                )
+                return lgm_params
 
-            lgm_params1 = fori(0, self.stage1_epochs, stage1_step, lgm_params0)
+            lgm_params1 = fori(1, self.stage1_epochs + 1, stage1_step, lgm_params0)
             lkl_params1 = lh.likelihood_function(lgm_params1)
 
         # Stage 2: Gradient descent for mixture components
@@ -448,22 +462,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
             # Compute full dataset likelihood
             hmog_params = self.model.join_conjugated(lkl_params1, params)
-            epoch_train_ll = self.model.average_log_observable_density(
-                hmog_params, train_sample
-            )
-            epoch_test_ll = self.model.average_log_observable_density(
-                hmog_params, test_sample
-            )
 
-            epoch_train_bic = -2 * epoch_train_ll + self.model.dim * jnp.log(
-                train_sample.shape[0]
-            )
             self.log_epoch_metrics(
-                logger,
-                epoch,
-                epoch_train_ll,
-                epoch_test_ll,
-                epoch_train_bic,
+                logger, epoch, hmog_params, train_sample, test_sample
             )
 
             return (opt_state, params, return_key)
@@ -529,23 +530,8 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 batched_data,
             )
 
-            # Compute likelihood
-            epoch_train_ll = self.model.average_log_observable_density(
-                params, train_sample
-            )
-            epoch_test_ll = self.model.average_log_observable_density(
-                params, test_sample
-            )
-            epoch_train_bic = -2 * epoch_train_ll + self.model.dim * jnp.log(
-                train_sample.shape[0]
-            )
-            self.log_epoch_metrics(
-                logger,
-                epoch + self.stage1_epochs + self.stage2_epochs,
-                epoch_train_ll,
-                epoch_test_ll,
-                epoch_train_bic,
-            )
+            self.log_epoch_metrics(logger, epoch, params, train_sample, test_sample)
+
             return opt_state, params, return_key
 
         (_, final_params, _) = fori(

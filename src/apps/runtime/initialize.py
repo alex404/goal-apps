@@ -69,7 +69,6 @@ def initialize_run(
 
     logger: JaxLogger = hydra.utils.instantiate(
         cfg.logger,
-        metrics=model.metrics,
         run_name=cfg.run_name,
         run_dir=handler.run_dir,
     )

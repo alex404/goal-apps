@@ -25,11 +25,6 @@ class Model[D: Dataset](ABC):
     def n_epochs(self) -> int:
         """Dimensionality of each data point."""
 
-    @property
-    @abstractmethod
-    def metrics(self) -> list[str]:
-        """Dimensionality of each data point."""
-
     @abstractmethod
     def run_experiment(
         self,

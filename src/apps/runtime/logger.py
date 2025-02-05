@@ -89,7 +89,6 @@ class JaxLogger(ABC):
     for jit compilation.
     """
 
-    metrics: list[str]
     run_name: str
     run_dir: Path
 
@@ -157,17 +156,18 @@ class LocalLogger(JaxLogger):
         # Initialize buffer
         global _metric_buffer
         _metric_buffer.clear()  # Clear existing buffer if any
-        _metric_buffer.update({metric: [] for metric in self.metrics})
 
     @override
     def log_metrics(self, values: dict[str, Array], step: int) -> None:
         def _log_value(metric: str, value: Any, step: int) -> None:
             global _metric_buffer
             float_val = float(value)  # Do the float conversion here
+            if metric not in _metric_buffer:
+                _metric_buffer[metric] = []
             _metric_buffer[metric].append((step, float_val))
             # Do the string formatting here too
-            log = logging.getLogger(__name__)
-            log.info("Step %4d | %20s | %10.6f", step, metric, float_val)
+            log = logging.getLogger("jit_logger")
+            log.info("Step %4d | %14s | %10.6f", step, metric, float_val)
 
         for metric, value in values.items():
             jax.debug.callback(_log_value, metric, value, step)
