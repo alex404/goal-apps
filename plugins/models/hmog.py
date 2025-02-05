@@ -180,7 +180,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     @property
     @override
     def metrics(self) -> list[str]:
-        return ["train_log_likelihood", "test_log_likelihood", "bic"]
+        return ["train_ll", "test_ll", "train_bic"]
 
     @property
     @override
@@ -309,12 +309,13 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         epoch: int,
         train_ll: Array,
         test_ll: Array,
+        train_bic: Array,
     ) -> None:
         """Log metrics for an epoch."""
         metrics = {
-            "train_log_likelihood": train_ll,
-            "test_log_likelihood": test_ll,
-            "test_bic": -2 * test_ll + jnp.log(self.model.dim),
+            "train_ll": train_ll,
+            "test_ll": test_ll,
+            "train_bic": train_bic,
         }
         logger.log_metrics(metrics, epoch)
 
@@ -360,7 +361,10 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             ) -> Point[Natural, LinearGaussianModel[ObsRep]]:
                 train_ll = lh.average_log_observable_density(params, train_sample)
                 test_ll = lh.average_log_observable_density(params, test_sample)
-                self.log_epoch_metrics(logger, epoch, train_ll, test_ll)
+                train_bic = -2 * train_ll + self.model.dim * jnp.log(
+                    train_sample.shape[0]
+                )
+                self.log_epoch_metrics(logger, epoch, train_ll, test_ll, train_bic)
 
                 means = lh.expectation_step(params, train_sample)
                 obs_means, int_means, lat_means = lh.split_params(means)
@@ -450,11 +454,16 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             epoch_test_ll = self.model.average_log_observable_density(
                 hmog_params, test_sample
             )
+
+            epoch_train_bic = -2 * epoch_train_ll + self.model.dim * jnp.log(
+                train_sample.shape[0]
+            )
             self.log_epoch_metrics(
                 logger,
                 epoch,
                 epoch_train_ll,
                 epoch_test_ll,
+                epoch_train_bic,
             )
 
             return (opt_state, params, return_key)
@@ -527,11 +536,15 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             epoch_test_ll = self.model.average_log_observable_density(
                 params, test_sample
             )
+            epoch_train_bic = -2 * epoch_train_ll + self.model.dim * jnp.log(
+                train_sample.shape[0]
+            )
             self.log_epoch_metrics(
                 logger,
                 epoch + self.stage1_epochs + self.stage2_epochs,
                 epoch_train_ll,
                 epoch_test_ll,
+                epoch_train_bic,
             )
             return opt_state, params, return_key
 
