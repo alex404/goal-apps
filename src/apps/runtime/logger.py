@@ -75,6 +75,49 @@ def setup_logging(run_dir: Path) -> None:
 
 ### Jit-Compatible Loggers ###
 
+# Helper functions
+
+
+def wandb_metric_key(name: str) -> str:
+    """Convert metric names to pretty wandb format.
+
+    Examples:
+        train_ll -> Metric/Train Log Likelihood
+        test_average_bic -> Metric/Test Average BIC
+    """
+    # Special case abbreviations
+    replacements = {
+        "ll": "Log-Likelihood",
+        "bic": "BIC",  # Bayesian Information Criterion
+    }
+
+    # Split on underscores
+    parts = name.split("_")
+
+    # Process each part
+    pretty_parts = []
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+
+        # Check if this part plus maybe next part matches a replacement
+        for abbrev, full in replacements.items():
+            if i < len(parts) - 1 and f"{parts[i]}_{parts[i + 1]}" == abbrev:
+                pretty_parts.append(full)
+                i += 2
+                break
+            if part == abbrev:
+                pretty_parts.append(full)
+                i += 1
+                break
+        else:
+            # No special case found, just capitalize
+            pretty_parts.append(part.capitalize())
+            i += 1
+
+    return f"Metric/{' '.join(pretty_parts)}"
+
+
 # Visualization strategies
 
 
@@ -175,11 +218,12 @@ class WandbLogger(JaxLogger):
         # Define epoch as our x-axis
         wandb.define_metric("epoch")
         # Use epoch as x-axis for all metrics and artifacts
-        wandb.define_metric("*", step_metric="epoch")
+        wandb.define_metric("Metric/*", step_metric="epoch")
 
     @override
     def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
-        wandb.log({"epoch": epoch, **values})
+        pretty_values = {wandb_metric_key(key): value for key, value in values.items()}
+        wandb.log({"epoch": epoch, **pretty_values})
 
     @override
     def _log_artifact(
