@@ -137,7 +137,7 @@ def bound_hmog_mixture_probabilities[
 class HMoGMetrics(TypedDict):
     train_ll: Array
     test_ll: Array
-    train_bic: Array
+    train_average_bic: Array
 
 
 class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
@@ -324,12 +324,12 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         n_samps = train_sample.shape[0]
 
         epoch_train_bic = (
-            self.model.dim * jnp.log(n_samps) - 2 * n_samps * epoch_train_ll
+            self.model.dim * jnp.log(n_samps) / n_samps - 2 * epoch_train_ll
         )
         metrics = HMoGMetrics(
             train_ll=epoch_train_ll,
             test_ll=epoch_test_ll,
-            train_bic=epoch_train_bic,
+            train_average_bic=epoch_train_bic,
         )
 
         logger.log_metrics({k: metrics[k] for k in metrics}, epoch + 1)
@@ -366,9 +366,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         train_sample = dataset.train_data
         test_sample = dataset.test_data
 
-        self.log_epoch_metrics(logger, -1, init_params, train_sample, test_sample)
-
         lkl_params0, mix_params0 = self.model.split_conjugated(init_params)
+
+        self.log_epoch_metrics(logger, -1, init_params, train_sample, test_sample)
 
         # Stage 1: Full-batch EM for LinearGaussianModel
         with self.model.lwr_hrm as lh:
