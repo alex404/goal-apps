@@ -94,7 +94,11 @@ _artifacts_buffer: dict[str, list[tuple[int, Array, ArtifactType]]] = {}
 class JaxLogger(ABC):
     """Interface for metric logging.
 
-    Note: __init__ and finalize take RunHandler and should never be called within jitted code. log_metrics and log_artifact use callbacks and can be called within jitted code.
+    Note: This logger is designed to work with JAX's JIT compilation:
+
+    - Constructor and finalize() must be called from outside JIT-compiled code
+    - log_metrics() and log_artifact() can be called from within JIT-compiled code
+    - Any values passed to these methods will be evaluated at the point where they are logged through JAX's callback system, and may lead to unpredictable evaluation order of logging calls.
     """
 
     run_name: str
@@ -168,27 +172,28 @@ class WandbLogger(JaxLogger):
             dir=self.run_dir,
         )
 
+        # Define epoch as our x-axis
+        wandb.define_metric("epoch")
+        # Use epoch as x-axis for all metrics and artifacts
+        wandb.define_metric("*", step_metric="epoch")
+
     @override
     def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
-        wandb.log(values, step=epoch)
+        wandb.log({"epoch": epoch, **values})
 
     @override
     def _log_artifact(
         self, key: str, artifact: Array, vis_type: ArtifactType, epoch: int
     ) -> None:
         if vis_type == ArtifactType.IMAGE:
-            # Convert JAX array to numpy before passing to wandb.Image
             artifact_np = np.array(artifact, dtype=np.float32)
-            wandb.log({key: wandb.Image(artifact_np)}, step=epoch)
+            wandb.log({key: wandb.Image(artifact_np, caption=f"Epoch {epoch}")})
         elif vis_type == ArtifactType.SERIES:
-            # Create appropriate wandb line plot
             table = wandb.Table(
-                data=[
-                    [i, float(y)] for i, y in enumerate(artifact)
-                ],  # Convert y values to float
+                data=[[i, float(y)] for i, y in enumerate(artifact)],
                 columns=["x", "y"],
             )
-            wandb.log({key: wandb.plot.line(table, "x", "y", title=key)}, step=epoch)
+            wandb.log({key: wandb.plot.line(table, "x", "y", title=f"Epoch {epoch}")})
 
     @override
     def finalize(self, handler: RunHandler) -> None:

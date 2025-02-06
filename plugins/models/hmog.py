@@ -256,9 +256,10 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         dataset: ClusteringDataset,
         logger: JaxLogger,
     ) -> None:
-        params = self.initialize_model(key, dataset.train_data)
+        init_key, fit_key = jax.random.split(key)
+        params = self.initialize_model(init_key, dataset.train_data)
         final_params = self.fit(  # pyright: ignore[reportUnknownVariableType]
-            logger, dataset, Point(params)
+            fit_key, logger, dataset, Point(params)
         )
         final_params = cast(
             Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], final_params
@@ -333,25 +334,6 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         logger.log_metrics({k: metrics[k] for k in metrics}, epoch + 1)
 
-    # def log_prototypes(
-    #     self,
-    #     logger: JaxLogger,
-    #     dataset: ClusteringDataset,
-    #     params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-    #     epoch: int,
-    # ) -> None:
-    #     """Log component prototypes as artifacts.
-    #
-    #     For each mixture component, get its prototype observation and
-    #     convert it to the appropriate artifact type for the dataset.
-    #     """
-    #     prototypes = self.get_component_prototypes(params.array)
-    #
-    #     for i, prototype in enumerate(prototypes):
-    #         # Let dataset determine artifact type and format
-    #         artifact, artifact_type = dataset.observable_to_artifact(prototype)
-    #         logger.log_artifact(f"prototype_{i}", artifact, artifact_type, epoch)
-    #
     def log_prototypes(
         self,
         logger: JaxLogger,
@@ -359,20 +341,22 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
         epoch: int,
     ) -> None:
-        """Log component prototypes as artifacts."""
+        """Log component prototypes as artifacts.
 
-        def _log_prototypes(params: Array, epoch: int) -> None:
-            prototypes = self.get_component_prototypes(params)
-            for i, prototype in enumerate(prototypes):
-                artifact, artifact_type = dataset.observable_to_artifact(prototype)
-                logger.log_artifact(f"prototype_{i}", artifact, artifact_type, epoch)
+        For each mixture component, get its prototype observation and
+        convert it to the appropriate artifact type for the dataset.
+        """
+        prototypes = self.get_component_prototypes(params.array)
 
-        jax.debug.callback(_log_prototypes, params.array, epoch)
+        for i, prototype in enumerate(prototypes):
+            # Let dataset determine artifact type and format
+            artifact, artifact_type = dataset.observable_to_artifact(prototype)
+            logger.log_artifact(f"prototype_{i}", artifact, artifact_type, epoch)
 
-    # @override
-    @partial(jax.jit, static_argnums=(0, 1, 2))
+    @partial(jax.jit, static_argnums=(0, 2, 3))
     def fit(
         self,
+        key: Array,
         logger: JaxLogger,
         dataset: ClusteringDataset,
         init_params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
@@ -385,7 +369,6 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         self.log_epoch_metrics(logger, -1, init_params, train_sample, test_sample)
 
         lkl_params0, mix_params0 = self.model.split_conjugated(init_params)
-        key = jax.random.PRNGKey(0)
 
         # Stage 1: Full-batch EM for LinearGaussianModel
         with self.model.lwr_hrm as lh:
