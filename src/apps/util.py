@@ -63,13 +63,16 @@ def create_sweep_config(overrides: list[str]) -> dict[str, Any]:
             parameters[param] = {"value": value}
 
     return {
-        "program": "goal clustering train",
+        "program": "${program}",  # Let wandb handle the program path
         "method": "grid",
         "parameters": parameters,
         "command": [
             "${env}",
             "${interpreter}",
-            "${program}",
+            "-m",  # Use python module mode
+            "apps.goal",  # Direct module reference
+            "clustering",
+            "train",
             "${args_no_hyphens}",
         ],
     }
