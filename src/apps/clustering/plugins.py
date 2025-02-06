@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, override
+from typing import override
 
 from jax import Array
-from matplotlib.axes import Axes
 
 from ..plugins import Dataset, Model
 from ..runtime.handler import RunHandler
-from ..runtime.logger import JaxLogger
+from ..runtime.logger import ArtifactType, JaxLogger
 
 ### Datasets ###
 
@@ -19,30 +18,9 @@ class ClusteringDataset(Dataset, ABC):
 
     cache_dir: Path
 
-    @property
     @abstractmethod
-    def train_images(self) -> Array:
-        """Training data with shape (n_train, data_dim)."""
-
-    @property
-    @abstractmethod
-    def test_images(self) -> Array:
-        """Test data with shape (n_test, data_dim)."""
-
-    @abstractmethod
-    def visualize_observable(
-        self, observable: Array, ax: Axes | None = None, **kwargs: Any
-    ) -> Axes:
-        """Visualize a single observable (e.g. image, time series).
-
-        Args:
-            observable: Data point to visualize
-            ax: Optional matplotlib axes to plot on
-            **kwargs: Additional visualization parameters
-
-        Returns:
-            The matplotlib axes containing the visualization
-        """
+    def observable_to_artifact(self, obs: Array) -> tuple[Array, ArtifactType]:
+        """Return the type of observable artifact for this dataset."""
 
 
 ### Models ###

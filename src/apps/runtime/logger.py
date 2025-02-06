@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import override
 
 import jax
+import numpy as np
 import wandb
 from jax import Array
 from rich.console import Console
@@ -72,27 +73,28 @@ def setup_logging(run_dir: Path) -> None:
     logging.root.setLevel(logging.INFO)
 
 
-### Global state for metric buffering ###
+### Jit-Compatible Loggers ###
+
+# Visualization strategies
+
+
+class ArtifactType(Enum):
+    IMAGE = "image"
+    SERIES = "series"
+
+
+# Global state for metric buffering
 
 
 _metric_buffer: dict[str, list[tuple[int, float]]] = {}
-
-
-### Jit-Compatible Loggers ###
-
-
-class VisType(Enum):
-    IMAGE = "image"
-    TIME_SERIES = "time_series"
+_artifacts_buffer: dict[str, list[tuple[int, Array, ArtifactType]]] = {}
 
 
 @dataclass(frozen=True)
 class JaxLogger(ABC):
     """Interface for metric logging.
 
-    Note: __init__ and finalize take RunHandler and should never be called
-    within jitted code. log_metrics and log_image are pure functions suitable
-    for jit compilation.
+    Note: __init__ and finalize take RunHandler and should never be called within jitted code. log_metrics and log_artifact use callbacks and can be called within jitted code.
     """
 
     run_name: str
@@ -102,33 +104,33 @@ class JaxLogger(ABC):
         object.__setattr__(self, "run_name", handler.name)
         object.__setattr__(self, "run_dir", handler.run_dir)
 
-    def log_metrics(self, values: dict[str, Array], step: int) -> None:
+    def log_metrics(self, values: dict[str, Array], epoch: int) -> None:
         """Log metrics using callbacks to handle traced values."""
 
-        def _log_values(values_dict: dict[str, Array], step: int) -> None:
+        def _log_values(values_dict: dict[str, Array], epoch: int) -> None:
             float_values = {k: float(v) for k, v in values_dict.items()}
-            self._log_metrics(float_values, step)
+            self._log_metrics(float_values, epoch)
 
-        jax.debug.callback(_log_values, values, step)
+        jax.debug.callback(_log_values, values, epoch)
 
     @abstractmethod
-    def _log_metrics(self, values: dict[str, float], step: int) -> None:
+    def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
         """Implementation-specific logging of metric values."""
 
-    # def log_data(
-    #     self, key: str, data: Array, vis_type: VisType, step: int | None = None
-    # ) -> None:
-    #     """Log data using callbacks to handle traced values."""
-    #
-    #     def _log_data(key: str, data: Array, step: int | None) -> None:
-    #         self._log_data_impl(key, data, vis_type, step)
-    #
-    #     jax.debug.callback(_log_data, key, data, step)
-    #
-    # @abstractmethod
-    # def _log_data_impl(
-    #     self, key: str, data: Array, vis_type: VisType, step: int | None
-    # ) -> None: ...
+    def log_artifact(
+        self, key: str, artifact: Array, vis_type: ArtifactType, epoch: int
+    ) -> None:
+        """Log artifact using callbacks to handle traced values."""
+
+        def _log_artifact(key: str, artifact: Array, epoch: int) -> None:
+            self._log_artifact(key, artifact, vis_type, epoch)
+
+        jax.debug.callback(_log_artifact, key, artifact, epoch)
+
+    @abstractmethod
+    def _log_artifact(
+        self, key: str, artifact: Array, vis_type: ArtifactType, epoch: int
+    ) -> None: ...
 
     @abstractmethod
     def finalize(self, handler: RunHandler) -> None:
@@ -167,13 +169,26 @@ class WandbLogger(JaxLogger):
         )
 
     @override
-    def _log_metrics(self, values: dict[str, float], step: int) -> None:
-        wandb.log(values, step=step)
+    def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
+        wandb.log(values, step=epoch)
 
-    # @override
-    # def log_image(self, key: str, array: Array) -> None:
-    #     """Log image array data to wandb."""
-    #     wandb.log({key: wandb.Image(array)})
+    @override
+    def _log_artifact(
+        self, key: str, artifact: Array, vis_type: ArtifactType, epoch: int
+    ) -> None:
+        if vis_type == ArtifactType.IMAGE:
+            # Convert JAX array to numpy before passing to wandb.Image
+            artifact_np = np.array(artifact, dtype=np.float32)
+            wandb.log({key: wandb.Image(artifact_np)}, step=epoch)
+        elif vis_type == ArtifactType.SERIES:
+            # Create appropriate wandb line plot
+            table = wandb.Table(
+                data=[
+                    [i, float(y)] for i, y in enumerate(artifact)
+                ],  # Convert y values to float
+                columns=["x", "y"],
+            )
+            wandb.log({key: wandb.plot.line(table, "x", "y", title=key)}, step=epoch)
 
     @override
     def finalize(self, handler: RunHandler) -> None:
@@ -198,27 +213,56 @@ class LocalLogger(JaxLogger):
         _metric_buffer.clear()  # Clear existing buffer if any
 
     @override
-    def _log_metrics(self, values: dict[str, float], step: int) -> None:
+    def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
         global _metric_buffer
         log = logging.getLogger("jit_logger")
 
         for metric, value in values.items():
             if metric not in _metric_buffer:
                 _metric_buffer[metric] = []
-            _metric_buffer[metric].append((step, value))
-            log.info("Step %4d | %14s | %10.6f", step, metric, value)
+            _metric_buffer[metric].append((epoch, value))
+            log.info("epoch %4d | %14s | %10.6f", epoch, metric, value)
+
+    @override
+    def _log_artifact(
+        self, key: str, artifact: Array, vis_type: ArtifactType, epoch: int
+    ) -> None:
+        global _artifacts_buffer
+        if key not in _artifacts_buffer:
+            _artifacts_buffer[key] = []
+        _artifacts_buffer[key].append((epoch, artifact, vis_type))
+
+        # Still log that we received the data
+        log = logging.getLogger("jit_logger")
+        log.info("epoch %4d | %14s | %s", epoch, key, vis_type.value)
 
     @override
     def finalize(self, handler: RunHandler) -> None:
-        global _metric_buffer
+        global _metric_buffer, _artifacts_buffer
+
+        # Save metrics
         metrics_dict = {
             metric: [v for _, v in sorted(values)]
             for metric, values in _metric_buffer.items()
         }
-        handler.save_json({"metrics": metrics_dict}, "metrics")
+        handler.save_json(metrics_dict, "metrics")
 
-        # Clear buffer
+        # Save artifact
+        artifact_dict = {
+            key: {
+                f"epoch_{int(epoch)}": {
+                    "artifact": artifact.tolist(),  # Convert array to list for JSON
+                    "type": vis_type.value,
+                }
+                for epoch, artifact, vis_type in entries
+            }
+            for key, entries in _artifacts_buffer.items()
+        }
+        handler.save_json(artifact_dict, "artifacts")
+
+        # Clear buffers
         _metric_buffer.clear()
+        _artifacts_buffer.clear()
 
 
 @dataclass(frozen=True)
@@ -226,7 +270,13 @@ class NullLogger(JaxLogger):
     """Logger implementation that does nothing."""
 
     @override
-    def _log_metrics(self, values: dict[str, float], step: int) -> None:
+    def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
+        pass
+
+    @override
+    def _log_artifact(
+        self, key: str, artifact: Array, vis_type: ArtifactType, epoch: int
+    ) -> None:
         pass
 
     @override

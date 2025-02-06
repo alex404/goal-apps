@@ -256,16 +256,15 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         dataset: ClusteringDataset,
         logger: JaxLogger,
     ) -> None:
-        params = self.initialize_model(key, dataset.train_images)
+        params = self.initialize_model(key, dataset.train_data)
         final_params = self.fit(  # pyright: ignore[reportUnknownVariableType]
-            logger, Point(params), dataset.train_images, dataset.test_images
+            logger, dataset, Point(params)
         )
         final_params = cast(
             Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], final_params
         )
         handler.save_json(final_params.array.tolist(), "final_params")
 
-    # Add this method to the HMoGBase class
     @override
     def get_component_prototypes(
         self,
@@ -321,8 +320,10 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             hmog_params, test_sample
         )
 
-        epoch_train_bic = -2 * epoch_train_ll + self.model.dim * jnp.log(
-            train_sample.shape[0]
+        n_samps = train_sample.shape[0]
+
+        epoch_train_bic = (
+            self.model.dim * jnp.log(n_samps) - 2 * n_samps * epoch_train_ll
         )
         metrics = HMoGMetrics(
             train_ll=epoch_train_ll,
@@ -334,33 +335,52 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
     # def log_prototypes(
     #     self,
-    #     handler: RunHandler,
-    #     dataset: Dataset,
+    #     logger: JaxLogger,
+    #     dataset: ClusteringDataset,
     #     params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+    #     epoch: int,
     # ) -> None:
-    #     """Log component prototypes using dataset visualization."""
-    #     prototypes = self.get_component_prototypes(params)
+    #     """Log component prototypes as artifacts.
+    #
+    #     For each mixture component, get its prototype observation and
+    #     convert it to the appropriate artifact type for the dataset.
+    #     """
+    #     prototypes = self.get_component_prototypes(params.array)
     #
     #     for i, prototype in enumerate(prototypes):
-    #         fig, ax = plt.subplots()
-    #         dataset.visualize_observable(prototype, ax=ax)
+    #         # Let dataset determine artifact type and format
+    #         artifact, artifact_type = dataset.observable_to_artifact(prototype)
+    #         logger.log_artifact(f"prototype_{i}", artifact, artifact_type, epoch)
     #
-    #         # handler.log_image(
-    #         #     f"prototypes/prototype_{i}", fig, f"Component {i} prototype"
-    #         # )
-    #         plt.close(fig)
-    #
+    def log_prototypes(
+        self,
+        logger: JaxLogger,
+        dataset: ClusteringDataset,
+        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+        epoch: int,
+    ) -> None:
+        """Log component prototypes as artifacts."""
+
+        def _log_prototypes(params: Array, epoch: int) -> None:
+            prototypes = self.get_component_prototypes(params)
+            for i, prototype in enumerate(prototypes):
+                artifact, artifact_type = dataset.observable_to_artifact(prototype)
+                logger.log_artifact(f"prototype_{i}", artifact, artifact_type, epoch)
+
+        jax.debug.callback(_log_prototypes, params.array, epoch)
 
     # @override
-    @partial(jax.jit, static_argnums=(0, 1))
+    @partial(jax.jit, static_argnums=(0, 1, 2))
     def fit(
         self,
         logger: JaxLogger,
+        dataset: ClusteringDataset,
         init_params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-        train_sample: Array,
-        test_sample: Array,
     ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
         """Three-stage minibatch training process."""
+
+        train_sample = dataset.train_data
+        test_sample = dataset.test_data
 
         self.log_epoch_metrics(logger, -1, init_params, train_sample, test_sample)
 
@@ -478,7 +498,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         # Stage 3: Similar structure to stage 2
         params1 = self.model.join_conjugated(lkl_params1, mix_params1)
-        # self.log_prototypes(handler, dataset, params1)
+        self.log_prototypes(
+            logger, dataset, params1, self.stage1_epochs + self.stage2_epochs
+        )
 
         stage3_optimizer: Optimizer[Natural, DifferentiableHMoG[ObsRep, LatRep]] = (
             Optimizer.adam(learning_rate=self.stage3_learning_rate)
@@ -540,5 +562,5 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             stage3_epoch,
             (stage3_opt_state, params1, key),
         )
-        # self.log_prototypes(handler, dataset, final_params)
+        self.log_prototypes(logger, dataset, final_params, self.n_epochs)
         return final_params

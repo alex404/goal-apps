@@ -2,19 +2,18 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, override
+from typing import override
 
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import numpy as np
 from hydra.core.config_store import ConfigStore
 from jax import Array
-from matplotlib.axes import Axes
 from numpy.typing import NDArray
 from torchvision import datasets, transforms
 
 from apps.clustering.plugins import ClusteringDataset
 from apps.configs import ClusteringDatasetConfig
+from apps.runtime.logger import ArtifactType
 
 
 @dataclass
@@ -80,12 +79,12 @@ class MNISTDataset(ClusteringDataset):
 
     @property
     @override
-    def train_images(self) -> Array:
+    def train_data(self) -> Array:
         return self._train_images
 
     @property
     @override
-    def test_images(self) -> Array:
+    def test_data(self) -> Array:
         return self._test_images
 
     @property
@@ -106,23 +105,13 @@ class MNISTDataset(ClusteringDataset):
         return 10  # Digits 0-9
 
     @override
-    def visualize_observable(
-        self, observable: Array, ax: Axes | None = None, **kwargs: Any
-    ) -> Axes:
-        """Visualize MNIST digit as grayscale image.
+    def observable_to_artifact(self, obs: Array) -> tuple[Array, ArtifactType]:
+        """Convert flattened MNIST digit to 2D image array.
 
         Args:
-            observable: Flattened image array of shape (784,)
-            ax: Optional axes to plot on
-            **kwargs: Additional arguments passed to imshow
+            obs: Flattened image array of shape (784,)
 
         Returns:
-            The matplotlib axes containing the visualization
+            Tuple of (2D image array of shape (28, 28), image artifact type)
         """
-        if ax is None:
-            _, ax = plt.subplots()
-
-        img = observable.reshape(28, 28)
-        ax.imshow(img, cmap="gray", **kwargs)
-        ax.axis("off")
-        return ax
+        return obs.reshape(28, 28), ArtifactType.IMAGE

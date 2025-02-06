@@ -14,6 +14,16 @@ class Dataset(ABC):
     def data_dim(self) -> int:
         """Dimensionality of each data point."""
 
+    @property
+    @abstractmethod
+    def train_data(self) -> Array:
+        """Training data with shape (n_train, data_dim)."""
+
+    @property
+    @abstractmethod
+    def test_data(self) -> Array:
+        """Test data with shape (n_test, data_dim)."""
+
     pass
 
 
