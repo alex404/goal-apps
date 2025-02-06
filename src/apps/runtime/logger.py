@@ -3,6 +3,7 @@
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import override
 
@@ -80,6 +81,11 @@ _metric_buffer: dict[str, list[tuple[int, float]]] = {}
 ### Jit-Compatible Loggers ###
 
 
+class VisType(Enum):
+    IMAGE = "image"
+    TIME_SERIES = "time_series"
+
+
 @dataclass(frozen=True)
 class JaxLogger(ABC):
     """Interface for metric logging.
@@ -91,6 +97,10 @@ class JaxLogger(ABC):
 
     run_name: str
     run_dir: Path
+
+    def __init__(self, handler: RunHandler) -> None:
+        object.__setattr__(self, "run_name", handler.name)
+        object.__setattr__(self, "run_dir", handler.run_dir)
 
     def log_metrics(self, values: dict[str, Array], step: int) -> None:
         """Log metrics using callbacks to handle traced values."""
@@ -105,9 +115,20 @@ class JaxLogger(ABC):
     def _log_metrics(self, values: dict[str, float], step: int) -> None:
         """Implementation-specific logging of metric values."""
 
+    # def log_data(
+    #     self, key: str, data: Array, vis_type: VisType, step: int | None = None
+    # ) -> None:
+    #     """Log data using callbacks to handle traced values."""
+    #
+    #     def _log_data(key: str, data: Array, step: int | None) -> None:
+    #         self._log_data_impl(key, data, vis_type, step)
+    #
+    #     jax.debug.callback(_log_data, key, data, step)
+    #
     # @abstractmethod
-    # def log_image(self, key: str, array: Array) -> None:
-    #     """Log image array. Safe for jit."""
+    # def _log_data_impl(
+    #     self, key: str, data: Array, vis_type: VisType, step: int | None
+    # ) -> None: ...
 
     @abstractmethod
     def finalize(self, handler: RunHandler) -> None:
@@ -121,13 +142,22 @@ class WandbLogger(JaxLogger):
     Logs metrics in real-time to wandb platform.
     """
 
-    project: str = "goal"
-    group: str | None = None
-    job_type: str | None = None
+    project: str
+    group: str | None
+    job_type: str | None
 
-    def __post_init__(
+    def __init__(
         self,
+        handler: RunHandler,
+        project: str = "goal",
+        group: str | None = None,
+        job_type: str | None = None,
     ) -> None:
+        super().__init__(handler)
+        object.__setattr__(self, "project", project)
+        object.__setattr__(self, "group", group)
+        object.__setattr__(self, "job_type", job_type)
+
         wandb.init(
             project=self.project,
             name=self.run_name,
@@ -160,7 +190,9 @@ class LocalLogger(JaxLogger):
     at a time.
     """
 
-    def __post_init__(self) -> None:
+    def __init__(self, handler: RunHandler) -> None:
+        super().__init__(handler)
+
         # Initialize buffer
         global _metric_buffer
         _metric_buffer.clear()  # Clear existing buffer if any

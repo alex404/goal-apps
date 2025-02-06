@@ -2,7 +2,6 @@
 
 import json
 import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +14,6 @@ from matplotlib.figure import Figure
 ### Path and IO Handler ###
 
 
-@dataclass(frozen=True)
 class RunHandler:
     """Handles file management and organization for a single run."""
 
@@ -24,8 +22,8 @@ class RunHandler:
     run_dir: Path
 
     def __init__(self, name: str, project_root: Path):
-        object.__setattr__(self, "name", name)
-        object.__setattr__(self, "project_root", project_root)
+        self.name = name
+        self.project_root = project_root
 
         # Compute run_dir at init
         base = project_root / "runs"
@@ -33,7 +31,9 @@ class RunHandler:
         run_dir = (
             base / "sweep" / sweep_id / name if sweep_id else base / "single" / name
         )
-        object.__setattr__(self, "run_dir", run_dir)
+
+        self.run_dir = run_dir
+
         run_dir.mkdir(parents=True, exist_ok=True)
 
     @property
