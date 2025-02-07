@@ -6,7 +6,6 @@ dependencies = [
     "goal-jax",
     "matplotlib",
     "scikit-learn",
-    "torchvision",
     "hydra-core",
     "wandb",
     "typer",
@@ -23,6 +22,11 @@ test = [
 
 gpu = [
     "jax[cuda12]",
+]
+
+datasets = [
+    "torchvision",
+    "pandas",
 ]
 
 [build-system]
