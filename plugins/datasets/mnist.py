@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import override
+from urllib.error import URLError
 
 import jax.numpy as jnp
 import numpy as np
@@ -60,13 +61,31 @@ class MNISTDataset(ClusteringDataset):
             [transforms.ToTensor(), transforms.Lambda(transform_tensor)]
         )
 
-        train_dataset = datasets.MNIST(
-            root=str(cache_dir), train=True, download=True, transform=transform
-        )
-        test_dataset = datasets.MNIST(
-            root=str(cache_dir), train=False, download=True, transform=transform
-        )
+        try:
+            train_dataset = datasets.MNIST(
+                root=str(cache_dir), train=True, download=True, transform=transform
+            )
+            test_dataset = datasets.MNIST(
+                root=str(cache_dir), train=False, download=True, transform=transform
+            )
+        except (URLError, RuntimeError) as e:
+            mnist_dir = cache_dir / "MNIST" / "raw"
+            raise RuntimeError(
+                f"""Failed to download MNIST dataset. If you're running on an HPC environment,
+consider manually copying the dataset to:
+{mnist_dir}
 
+Required files:
+- train-images-idx3-ubyte.gz
+- train-labels-idx1-ubyte.gz
+- t10k-images-idx3-ubyte.gz
+- t10k-labels-idx1-ubyte.gz
+
+If you have the dataset locally, you can copy it using:
+scp -r /path/to/local/MNIST username@hpc:{mnist_dir}
+
+Original error: {e!s}"""
+            ) from e
         train_images = jnp.array(train_dataset.data.numpy()).reshape(-1, 784) / 255.0
         train_labels = jnp.array(train_dataset.targets.numpy())
         test_images = jnp.array(test_dataset.data.numpy()).reshape(-1, 784) / 255.0

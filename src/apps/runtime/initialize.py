@@ -6,6 +6,7 @@ from pathlib import Path
 import hydra
 import jax
 from hydra.core.config_store import ConfigStore
+from jax.lib import xla_bridge
 from omegaconf import OmegaConf
 
 from ..configs import RunConfig
@@ -58,7 +59,10 @@ def initialize_run(
     setup_logging(handler.run_dir)
 
     log.info(f"Run name: {cfg.run_name}")
+    log.info(f"Project Root: {handler.project_root}")
     log.info(f"with JIT: {cfg.jit}")
+    log.info(f"JAX backend: {xla_bridge.get_backend().platform}")
+    log.info(f"Available devices: {jax.devices()}")
 
     dataset: Dataset = hydra.utils.instantiate(cfg.dataset, cache_dir=handler.cache_dir)
 
