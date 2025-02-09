@@ -1,10 +1,14 @@
 """Analysis of trained clustering models."""
 
+import logging
+
 from jax import Array
 
 from ..plugins import Dataset, Model
 from ..runtime.handler import RunHandler
 from ..runtime.logger import JaxLogger
+
+log = logging.getLogger(__name__)
 
 
 def train(
@@ -17,9 +21,12 @@ def train(
     """train model and save results."""
 
     # Train model
+    log.info("Beginning training...")
     model.run_experiment(key, handler, dataset, logger)
 
+    log.info("Training complete.")
     logger.finalize(handler)
+    log.info("Logging complete, exiting.")
 
 
 def analyze(handler: RunHandler) -> None:

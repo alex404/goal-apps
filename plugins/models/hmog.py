@@ -214,12 +214,18 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         with self.model.upr_hrm as uh:
             cat_params = uh.lat_man.initialize(key_cat)
             key_comps = jax.random.split(key_comp, self.n_clusters)
-            components = [uh.obs_man.initialize(key_compi) for key_compi in key_comps]
-            mix_params = uh.join_natural_mixture(components, cat_params)
+            component_list = [
+                uh.obs_man.initialize(key_compi).array for key_compi in key_comps
+            ]
+            components = jnp.stack(component_list)
+            mix_params = uh.join_natural_mixture(
+                uh.comp_man.natural_point(components), cat_params
+            )
 
         int_noise = 0.1 * jax.random.normal(key_int, self.model.int_man.shape)
         lkl_params = self.model.lkl_man.join_params(
-            obs_params, Point(self.model.int_man.rep.from_dense(int_noise))
+            obs_params,
+            self.model.int_man.point(self.model.int_man.rep.from_dense(int_noise)),
         )
         return self.model.join_conjugated(lkl_params, mix_params).array
 
@@ -235,13 +241,15 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         key: Array,
         n_samples: int,
     ) -> Array:
-        return self.model.observable_sample(key, Point(params), n_samples)
+        return self.model.observable_sample(
+            key, self.model.natural_point(params), n_samples
+        )
 
     @override
     def cluster_assignments(self, params: Array, data: Array) -> Array:
         def data_point_cluster(x: Array) -> Array:
             with self.model as m:
-                cat_pst = m.lat_man.prior(m.posterior_at(Point(params), x))
+                cat_pst = m.lat_man.prior(m.posterior_at(m.natural_point(params), x))
                 with m.lat_man.lat_man as lm:
                     probs = lm.to_probs(lm.to_mean(cat_pst))
             return jnp.argmax(probs, axis=-1)
@@ -259,7 +267,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         init_key, fit_key = jax.random.split(key)
         params = self.initialize_model(init_key, dataset.train_data)
         final_params = self.fit(  # pyright: ignore[reportUnknownVariableType]
-            fit_key, logger, dataset, Point(params)
+            fit_key, logger, dataset, self.model.natural_point(params)
         )
         final_params = cast(
             Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], final_params
@@ -285,16 +293,21 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             observation for each mixture component.
         """
         # Split into likelihood and mixture parameters
-        lkl_params, mix_params = self.model.split_conjugated(Point(params))
+        lkl_params, mix_params = self.model.split_conjugated(
+            self.model.natural_point(params)
+        )
 
         # Extract components from mixture
         comp_lats, _ = self.model.upr_hrm.split_natural_mixture(mix_params)
 
         # For each component, compute the observable distribution and get its mean
         prototypes = []
-        for comp_lat_params in comp_lats:
+        for i in range(comp_lats.shape[0]):
             # Get latent mean for this component
             with self.model.lwr_hrm as lh:
+                comp_lat_params = self.model.upr_hrm.comp_man.get_replicate(
+                    comp_lats, i
+                )
                 lwr_hrm_params = lh.join_conjugated(lkl_params, comp_lat_params)
                 lwr_hrm_means = lh.to_mean(lwr_hrm_params)
                 lwr_hrm_obs = lh.split_params(lwr_hrm_means)[0]
@@ -399,7 +412,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         # Stage 2: Gradient descent for mixture components
         stage2_optimizer: Optimizer[
             Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]
-        ] = Optimizer.adam(learning_rate=self.stage2_learning_rate)
+        ] = Optimizer.adam(self.model.upr_hrm, learning_rate=self.stage2_learning_rate)
         stage2_opt_state = stage2_optimizer.init(mix_params0)
 
         def stage2_loss(
@@ -486,7 +499,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         )
 
         stage3_optimizer: Optimizer[Natural, DifferentiableHMoG[ObsRep, LatRep]] = (
-            Optimizer.adam(learning_rate=self.stage3_learning_rate)
+            Optimizer.adam(self.model.upr_hrm, learning_rate=self.stage3_learning_rate)
         )
         stage3_opt_state = stage3_optimizer.init(params1)
 

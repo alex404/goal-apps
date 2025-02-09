@@ -58,15 +58,17 @@ def initialize_run(
 
     setup_logging(handler.run_dir)
 
-    log.info(f"Run name: {cfg.run_name}")
+    log.info(f"Run name: {handler.name}")
     log.info(f"Project Root: {handler.project_root}")
-    log.info(f"with JIT: {cfg.jit}")
-    log.info(f"JAX backend: {xla_bridge.get_backend().platform}")
     log.info(f"Available devices: {jax.devices()}")
+    log.info(f"JAX backend: {xla_bridge.get_backend().platform}")
+    log.info(f"with JIT: {cfg.jit}")
 
+    log.info("Loading dataset...")
     dataset: Dataset = hydra.utils.instantiate(cfg.dataset, cache_dir=handler.cache_dir)
 
     # Instantiate model
+    log.info("Loading model...")
     model: Model[Dataset] = hydra.utils.instantiate(
         cfg.model, data_dim=dataset.data_dim
     )
