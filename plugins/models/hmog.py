@@ -1,5 +1,6 @@
 """Base class for HMoG implementations."""
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, TypedDict, override
@@ -35,6 +36,8 @@ from apps.configs import ClusteringModelConfig
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
+log = logging.getLogger(__name__)
+
 
 class RepresentationType(Enum):
     scale = Scale
@@ -58,11 +61,10 @@ class HMoGConfig(ClusteringModelConfig):
         lat_rep: Representation type for latents. Options: scale, diagonal, positive_definite [default: diagonal]
 
     Training Parameters:
+        batch_size: Batch size for stage 3 [default: 256]
         stage1_epochs: Number of epochs for EM initialization [default: 100]
         stage2_epochs: Number of epochs for mixture component training [default: 100]
         stage3_epochs: Number of epochs for full model training [default: 100]
-        stage2_batch_size: Batch size for stage 2 [default: 256]
-        stage3_batch_size: Batch size for stage 3 [default: 256]
         stage2_learning_rate: Learning rate for stage 2 [default: 0.001]
         stage3_learning_rate: Learning rate for stage 3 [default: 0.0003]
     """
@@ -73,11 +75,10 @@ class HMoGConfig(ClusteringModelConfig):
     n_clusters: int = 10
     obs_rep: RepresentationType = RepresentationType.diagonal
     lat_rep: RepresentationType = RepresentationType.diagonal
+    batch_size: int = 256
     stage1_epochs: int = 100
     stage2_epochs: int = 100
     stage3_epochs: int = 100
-    stage2_batch_size: int = 256
-    stage3_batch_size: int = 256
     stage2_learning_rate: float = 1e-3
     stage3_learning_rate: float = 3e-4
 
@@ -151,21 +152,19 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         n_clusters: int,
         obs_rep: RepresentationType,
         lat_rep: RepresentationType,
+        batch_size: int,
         stage1_epochs: int,
         stage2_epochs: int,
         stage3_epochs: int,
-        stage2_batch_size: int,
-        stage3_batch_size: int,
         stage2_learning_rate: float,
         stage3_learning_rate: float,
     ) -> None:
+        self.batch_size: int = batch_size
         self.stage1_epochs: int = stage1_epochs
         self.stage2_epochs: int = stage2_epochs
         self.stage3_epochs: int = stage3_epochs
         self.stage2_learning_rate: float = stage2_learning_rate
         self.stage3_learning_rate: float = stage3_learning_rate
-        self.stage2_batch_size: int = stage2_batch_size
-        self.stage3_batch_size: int = stage3_batch_size
 
         obs_rep_type = obs_rep.value
         lat_rep_type = lat_rep.value
@@ -177,6 +176,8 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             n_components=n_clusters,
             lat_rep=lat_rep_type,
         )
+
+        log.info(f"Initialized HMoG model with dimension {self.model.dim}.")
 
     """Base class for HMoG implementations."""
 
@@ -324,28 +325,29 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     ) -> None:
         """Log metrics for an epoch."""
 
-        if epoch % log_freq != 0:
-            return
+        def compute_metrics():
+            epoch_train_ll = self.model.average_log_observable_density(
+                hmog_params, train_sample
+            )
+            epoch_test_ll = self.model.average_log_observable_density(
+                hmog_params, test_sample
+            )
 
-        epoch_train_ll = self.model.average_log_observable_density(
-            hmog_params, train_sample
-        )
-        epoch_test_ll = self.model.average_log_observable_density(
-            hmog_params, test_sample
-        )
+            n_samps = train_sample.shape[0]
+            epoch_train_bic = (
+                self.model.dim * jnp.log(n_samps) / n_samps - 2 * epoch_train_ll
+            )
+            metrics = HMoGMetrics(
+                train_ll=epoch_train_ll,
+                test_ll=epoch_test_ll,
+                train_average_bic=epoch_train_bic,
+            )
+            logger.log_metrics({k: metrics[k] for k in metrics}, epoch + 1)
 
-        n_samps = train_sample.shape[0]
+        def no_op():
+            return None
 
-        epoch_train_bic = (
-            self.model.dim * jnp.log(n_samps) / n_samps - 2 * epoch_train_ll
-        )
-        metrics = HMoGMetrics(
-            train_ll=epoch_train_ll,
-            test_ll=epoch_test_ll,
-            train_average_bic=epoch_train_bic,
-        )
-
-        logger.log_metrics({k: metrics[k] for k in metrics}, epoch + 1)
+        jax.lax.cond(epoch % log_freq == 0, compute_metrics, no_op)
 
     def log_prototypes(
         self,
@@ -457,14 +459,14 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
             # Shuffle data and truncate to fit batches evenly
             return_key, shuffle_key = jax.random.split(key)
-            n_complete_batches = train_sample.shape[0] // self.stage2_batch_size
-            n_samples_to_use = n_complete_batches * self.stage2_batch_size
+            n_complete_batches = train_sample.shape[0] // self.batch_size
+            n_samples_to_use = n_complete_batches * self.batch_size
 
             shuffled_indices = jax.random.permutation(
                 shuffle_key, train_sample.shape[0]
             )[:n_samples_to_use]
             batched_data = train_sample[shuffled_indices].reshape(
-                (n_complete_batches, self.stage2_batch_size, -1)
+                (n_complete_batches, self.batch_size, -1)
             )
 
             # Process batches
@@ -530,14 +532,14 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
             # Shuffle and batch data
             return_key, shuffle_key = jax.random.split(key)
-            n_complete_batches = train_sample.shape[0] // self.stage3_batch_size
-            n_samples_to_use = n_complete_batches * self.stage3_batch_size
+            n_complete_batches = train_sample.shape[0] // self.batch_size
+            n_samples_to_use = n_complete_batches * self.batch_size
 
             shuffled_indices = jax.random.permutation(
                 shuffle_key, train_sample.shape[0]
             )[:n_samples_to_use]
             batched_data = train_sample[shuffled_indices].reshape(
-                (n_complete_batches, self.stage3_batch_size, -1)
+                (n_complete_batches, self.batch_size, -1)
             )
 
             # Process batches

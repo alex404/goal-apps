@@ -264,7 +264,7 @@ class LocalLogger(JaxLogger):
     @override
     def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
         global _metric_buffer
-        log = logging.getLogger("jit_logger")
+        log = logging.getLogger(__name__)
 
         for metric, value in values.items():
             if metric not in _metric_buffer:
@@ -282,7 +282,7 @@ class LocalLogger(JaxLogger):
         _artifacts_buffer[key].append((epoch, artifact, vis_type))
 
         # Still log that we received the data
-        log = logging.getLogger("jit_logger")
+        log = logging.getLogger(__name__)
         log.info("epoch %4d | %14s | %s", epoch, key, vis_type.value)
 
     @override
