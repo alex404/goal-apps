@@ -2,8 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from functools import partial
-from typing import Callable, TypedDict, cast, override
+from typing import Callable, TypedDict, override
 
 import jax
 import jax.numpy as jnp
@@ -266,11 +265,8 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     ) -> None:
         init_key, fit_key = jax.random.split(key)
         params = self.initialize_model(init_key, dataset.train_data)
-        final_params = self.fit(  # pyright: ignore[reportUnknownVariableType]
+        final_params = self.fit(
             fit_key, logger, dataset, self.model.natural_point(params)
-        )
-        final_params = cast(
-            Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], final_params
         )
         handler.save_json(final_params.array.tolist(), "final_params")
 
@@ -324,8 +320,12 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         hmog_params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
         train_sample: Array,
         test_sample: Array,
+        log_freq: int = 1,
     ) -> None:
         """Log metrics for an epoch."""
+
+        if epoch % log_freq != 0:
+            return
 
         epoch_train_ll = self.model.average_log_observable_density(
             hmog_params, train_sample
@@ -366,7 +366,6 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             artifact, artifact_type = dataset.observable_to_artifact(prototype)
             logger.log_artifact(f"prototype_{i}", artifact, artifact_type, epoch)
 
-    @partial(jax.jit, static_argnums=(0, 2, 3))
     def fit(
         self,
         key: Array,
@@ -480,7 +479,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             hmog_params = self.model.join_conjugated(lkl_params1, params)
 
             self.log_epoch_metrics(
-                logger, epoch, hmog_params, train_sample, test_sample
+                logger, epoch, hmog_params, train_sample, test_sample, log_freq=10
             )
 
             return (opt_state, params, return_key)
@@ -548,7 +547,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 batched_data,
             )
 
-            self.log_epoch_metrics(logger, epoch, params, train_sample, test_sample)
+            self.log_epoch_metrics(
+                logger, epoch, params, train_sample, test_sample, log_freq=10
+            )
 
             return opt_state, params, return_key
 
