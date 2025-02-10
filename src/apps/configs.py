@@ -71,7 +71,7 @@ class NullLoggerConfig(LoggerConfig):
 
 cs.store(group="logger", name="wandb", node=WandbLoggerConfig)
 cs.store(group="logger", name="local", node=LocalLoggerConfig)
-cs.store(group="logger", name="null", node=NullLoggerConfig)
+cs.store(group="logger", name="void", node=NullLoggerConfig)
 
 
 ### Clustering Configs ###

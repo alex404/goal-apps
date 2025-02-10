@@ -319,6 +319,10 @@ class NullLogger(JaxLogger):
     """Logger implementation that does nothing."""
 
     @override
+    def __init__(self, handler: RunHandler) -> None:
+        super().__init__(handler)
+
+    @override
     def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
         pass
 
