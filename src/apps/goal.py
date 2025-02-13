@@ -1,5 +1,7 @@
 ### Imports ###
 
+### Preamable ###
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -22,7 +24,7 @@ from .util import (
     print_sweep_tree,
 )
 
-### Preamable ###
+log = logging.getLogger(__name__)
 
 package_root = Path(__file__).parents[3]
 
@@ -32,11 +34,6 @@ register_plugins()
 main = typer.Typer(
     help="""CLI for statistical modelling apps built on GOAL (Geometric OptimizAtion Libraries)."""
 )
-clustering_com = typer.Typer()
-main.add_typer(
-    clustering_com, name="clustering", help="Command for clustering applications."
-)
-
 plugins_com = typer.Typer()
 main.add_typer(plugins_com, name="plugins", help="Commands for plugin management.")
 
@@ -55,9 +52,9 @@ overrides = typer.Argument(
 train_dry_run = typer.Option(False, "--dry-run", help="Print hydra config and exit")
 
 
-@clustering_com.command()
+@main.command()
 def train(overrides: list[str] = overrides, dry_run: bool = train_dry_run):
-    """Train a clustering model.
+    """Train a model on a dataset.
 
     Train a model using the specified dataset and model configuration.
     Results are saved to the runs directory for later analysis.
@@ -71,16 +68,20 @@ def train(overrides: list[str] = overrides, dry_run: bool = train_dry_run):
     if dry_run:
         return
 
-    from apps.clustering.cli import train
+    # Train model
+    log.info("Beginning training...")
+    model.run_experiment(key, handler, dataset, logger)
 
-    train(key, handler, dataset, model, logger)
+    log.info("Training complete.")
+    logger.finalize(handler)
+    log.info("Logging complete, exiting.")
 
 
 sweep_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and exit")
 project = typer.Option("goal", "--project", "-p", help="W&B project name")
 
 
-@clustering_com.command()
+@main.command()
 def sweep(
     overrides: list[str] = overrides,
     project: str = project,
@@ -100,22 +101,22 @@ def sweep(
         wandb.sweep(sweep_config, project=project)
 
 
-@clustering_com.command()
-def analyze(overrides: list[str] = overrides):
-    """Analyze training results.
-
-    Generate visualizations and compute metrics for a trained model.
-    Results are saved to the runs directory.
-
-    Example:
-        goal clustering analyze run_name=my_exp
-    """
-    from apps.clustering.cli import analyze
-
-    handler, _, _, _ = initialize_run(ClusteringRunConfig, overrides)
-
-    analyze(handler)
-
+# @clustering_com.command()
+# def analyze(overrides: list[str] = overrides):
+#     """Analyze training results.
+#
+#     Generate visualizations and compute metrics for a trained model.
+#     Results are saved to the runs directory.
+#
+#     Example:
+#         goal clustering analyze run_name=my_exp
+#     """
+#     from apps.clustering.cli import analyze
+#
+#     handler, _, _, _ = initialize_run(ClusteringRunConfig, overrides)
+#
+#     analyze(handler)
+#
 
 # Plugins
 plugin = typer.Argument(default=None, help="Name of plugin to inspect")
