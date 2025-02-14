@@ -1,16 +1,29 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import override
 
 from jax import Array
-from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 
-from .runtime.handler import RunHandler
-from .runtime.logger import JaxLogger
+from .runtime.handler import JSONDict, RunHandler
+from .runtime.logger import Artifact, JaxLogger
 
 ### Interfaces ###
+
+
+@dataclass(frozen=True)
+class ObservableArtifact(Artifact):
+    """Artifact wrapping a single observable."""
+
+    obs: Array
+    shape: tuple[int, int]
+
+    @override
+    def to_json(self) -> JSONDict:
+        return {"obs": self.obs.tolist(), "shape": list(self.shape)}
 
 
 class Dataset(ABC):
@@ -31,7 +44,19 @@ class Dataset(ABC):
     def test_data(self) -> Array:
         """Test data with shape (n_test, data_dim)."""
 
+    @abstractmethod
+    def observable_artifact(self, observable: Array) -> ObservableArtifact:
+        """Convert an observable to an artifact for logging."""
+
+    @staticmethod
+    @abstractmethod
+    def paint_observable(observable: ObservableArtifact, axes: Axes):
+        """A function for rendering an observation from the dataset."""
+
     pass
+
+
+dataclass(frozen=True)
 
 
 class Model[D: Dataset](ABC):
@@ -64,10 +89,6 @@ class ClusteringDataset(Dataset, ABC):
     """Abstract base class for datasets used in clustering applications."""
 
     cache_dir: Path
-
-    @abstractmethod
-    def visualize_observable(self, obs: Array) -> tuple[tuple[int, int], Figure]:
-        """Return a visualization of an observable for this dataset as well as the geometry of the image."""
 
 
 # Models
@@ -103,12 +124,3 @@ class ClusteringModel(Model[ClusteringDataset], ABC):
         logger: JaxLogger,
     ) -> None:
         """Evaluate model on dataset."""
-
-    @abstractmethod
-    def get_component_prototypes(self, params: Array) -> Array:
-        """Get a representative sample for each mixture component.
-
-        Returns:
-            Array with shape (n_components, *data_dims) containing a prototype
-            for each mixture component in the observation space.
-        """

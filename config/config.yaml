@@ -5,3 +5,8 @@ defaults:
 run_name: ${now:%Y%m%d_%H%M%S}
 device: gpu
 jit: true
+use_local: true
+use_wandb: false
+project: "goal"
+group: null
+job_type: null

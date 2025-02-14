@@ -1,9 +1,10 @@
 """Shared utilities for GOAL examples."""
 
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
-from typing import Any
 
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -12,6 +13,13 @@ from matplotlib.figure import Figure
 
 
 ### Path and IO Handler ###
+
+# Define the type recursively
+type JSONDict = dict[str, JSONValue]
+type JSONList = list[JSONValue]
+type JSONPrimitive = str | int | float | bool | None
+
+type JSONValue = JSONDict | JSONList | JSONPrimitive
 
 
 class RunHandler:
@@ -40,13 +48,13 @@ class RunHandler:
     def cache_dir(self) -> Path:
         return self.project_root / ".cache"
 
-    def save_json(self, results: Any, name: str) -> None:
+    def save_json(self, results: JSONValue, name: str) -> None:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         analysis_path = self.run_dir / f"{name}.json"
         with open(analysis_path, "w") as f:
             json.dump(results, f, indent=2)
 
-    def load_json(self, name: str) -> Any:
+    def load_json(self, name: str) -> JSONValue:
         analysis_path = self.run_dir / f"{name}.json"
         with open(analysis_path) as f:
             return json.load(f)

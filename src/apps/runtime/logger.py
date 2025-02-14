@@ -1,81 +1,49 @@
 """Shared utilities for GOAL examples."""
 
+from __future__ import annotations
+
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import override
+from typing import Callable, override
 
 import jax
-import wandb
+import matplotlib.pyplot as plt
+import wandb as wandb
 from jax import Array
 from matplotlib.figure import Figure
-from rich.console import Console
-from rich.logging import RichHandler
-from rich.theme import Theme
 
-from .handler import RunHandler
-from .visualization import setup_matplotlib_style
-
-### Logging ###
-
-
-# Custom theme for our logging
-THEME = Theme(
-    {
-        "info": "cyan",
-        "warning": "yellow",
-        "error": "red",
-        "critical": "red reverse",
-        "metric": "green",
-        "step": "blue",
-        "value": "yellow",
-    }
-)
-
-
-def setup_logging(run_dir: Path) -> None:
-    """Configure logging for the entire application with pretty formatting."""
-    # Remove all handlers associated with the root logger object
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
-
-    # Create console with our theme
-    console = Console(theme=THEME)
-
-    # Console handler using Rich
-    console_handler = RichHandler(
-        console=console,
-        show_time=True,
-        show_level=True,
-        show_path=False,  # We'll show this in the format string instead
-        rich_tracebacks=True,
-        tracebacks_width=None,  # Use full width
-        markup=True,  # Enable rich markup in log messages
-    )
-
-    # Create formatters
-    # Rich handler already handles the time, so we don't include it in the format
-    console_format = "%(name)-20s | %(message)s"
-    file_format = "%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s"
-
-    console_handler.setFormatter(logging.Formatter(console_format))
-    console_handler.setLevel(logging.INFO)
-
-    # File handler (keeping this as standard logging for clean logs)
-    log_file = run_dir / "training.log"
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(logging.Formatter(file_format))
-    file_handler.setLevel(logging.INFO)
-
-    # Set up root logger
-    logging.root.handlers = [console_handler, file_handler]
-    logging.root.setLevel(logging.INFO)
-
+from .handler import JSONDict, JSONList, JSONValue, RunHandler
+from .visualization import plot_metrics
 
 ### Jit-Compatible Loggers ###
 
-# Helper functions
+# Artifacts
+
+
+@dataclass(frozen=True)
+class Artifact(ABC):
+    """Base class for data that can be logged and visualized."""
+
+    @abstractmethod
+    def to_json(self) -> JSONValue:
+        """Convert artifact data to JSON-serializable format."""
+        ...
+
+
+@dataclass(frozen=True)
+class ArrayArtifact(Artifact):
+    """Artifact wrapping a JAX array."""
+
+    data: Array
+
+    @override
+    def to_json(self) -> JSONValue:
+        return self.data.tolist()
+
+
+# Helpers
 
 
 def wandb_metric_key(name: str) -> str:
@@ -121,12 +89,13 @@ def wandb_metric_key(name: str) -> str:
 # Global state for metric buffering
 
 
-_metric_buffer: dict[str, list[tuple[int, float]]] = {}
+# Global buffer for metrics
+_metric_buffer: list[tuple[int, dict[str, float]]] = []
 
 
 @dataclass(frozen=True)
-class JaxLogger(ABC):
-    """Interface for metric and figure logging.
+class JaxLogger:
+    """Logger supporting both local and wandb logging.
 
     This logger provides methods for logging both metrics and figures, with
     different JIT compatibility:
@@ -141,180 +110,113 @@ class JaxLogger(ABC):
 
     run_name: str
     run_dir: Path
-
-    def __init__(self, handler: RunHandler) -> None:
-        """Initialize logger. Must be called outside of jax.jit."""
-        object.__setattr__(self, "run_name", handler.name)
-        object.__setattr__(self, "run_dir", handler.run_dir)
-
-    def log_metrics(self, values: dict[str, Array], epoch: int) -> None:
-        """Log metrics. Safe to call within jax.jit-compiled functions.
-
-        Uses jax.debug.callback to safely extract values from JIT.
-
-        Args:
-            values: Dictionary mapping metric names to JAX arrays
-            epoch: Current epoch number
-        """
-
-        def _log_values(values_dict: dict[str, Array], epoch: int) -> None:
-            float_values = {k: float(v) for k, v in values_dict.items()}
-            self._log_metrics(float_values, epoch)
-
-        jax.debug.callback(_log_values, values, epoch)
-
-    @abstractmethod
-    def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
-        """Implementation-specific logging of metric values."""
-
-    def log_figure(
-        self, key: str, fig: Figure, epoch: int, handler: RunHandler | None = None
-    ) -> None:
-        """Log a matplotlib figure. Must be called outside of jax.jit.
-
-        This method handles matplotlib figures which are incompatible with JIT
-        compilation. Any figure generation and logging should happen outside
-        of JIT-compiled functions.
-
-        Args:
-            key: Name/identifier for the figure
-            fig: Matplotlib figure to log
-            epoch: Current epoch number
-        """
-        self._log_figure(key, fig, epoch, handler)
-
-    @abstractmethod
-    def _log_figure(
-        self, key: str, fig: Figure, epoch: int, handler: RunHandler | None
-    ) -> None:
-        """Implementation-specific logging of figures."""
-        ...
-
-    @abstractmethod
-    def finalize(self, handler: RunHandler) -> None:
-        """Finalize logging and clean up. Must be called outside of jax.jit."""
-
-
-@dataclass(frozen=True)
-class WandbLogger(JaxLogger):
-    """Logger implementation using Weights & Biases.
-
-    Logs metrics in real-time to wandb platform.
-    """
-
-    project: str
-    group: str | None
-    job_type: str | None
+    use_wandb: bool
+    use_local: bool
 
     def __init__(
         self,
         handler: RunHandler,
-        project: str = "goal",
-        group: str | None = None,
-        job_type: str | None = None,
+        use_wandb: bool,
+        use_local: bool,
+        project: str,
+        group: str | None,
+        job_type: str | None,
     ) -> None:
-        super().__init__(handler)
-        object.__setattr__(self, "project", project)
-        object.__setattr__(self, "group", group)
-        object.__setattr__(self, "job_type", job_type)
+        """Initialize logger with desired logging destinations."""
+        object.__setattr__(self, "run_name", handler.name)
+        object.__setattr__(self, "run_dir", handler.run_dir)
+        object.__setattr__(self, "use_wandb", use_wandb)
+        object.__setattr__(self, "use_local", use_local)
 
-        wandb.init(
-            project=self.project,
-            name=self.run_name,
-            group=self.group,
-            job_type=self.job_type,
-            dir=self.run_dir,
-        )
+        if use_wandb:
+            wandb.init(
+                project=project,
+                name=self.run_name,
+                group=group,
+                job_type=job_type,
+                dir=self.run_dir,
+            )
+            wandb.define_metric("epoch")
+            wandb.define_metric("*", step_metric="epoch")
 
-        # Define epoch as our x-axis
-        wandb.define_metric("epoch")
-        # Use epoch as x-axis for all metrics and artifacts
-        wandb.define_metric("*", step_metric="epoch")
+        if use_local:
+            global _metric_buffer
+            _metric_buffer.clear()
 
-    @override
-    def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
-        pretty_values = {wandb_metric_key(key): value for key, value in values.items()}
-        wandb.log({"epoch": epoch, **pretty_values})
+    def log_metrics(self, values: dict[str, Array], epoch: int) -> None:
+        """Log metrics. Safe to call within jax.jit-compiled functions."""
 
-    @override
-    def _log_figure(
-        self, key: str, fig: Figure, epoch: int, handler: RunHandler | None
+        def _log_values(values_dict: dict[str, Array], epoch: int) -> None:
+            float_values = {k: float(v) for k, v in values_dict.items()}
+
+            if self.use_local:
+                global _metric_buffer
+                _metric_buffer.append((epoch, float_values))
+
+                log = logging.getLogger(__name__)
+                for metric, value in float_values.items():
+                    log.info("epoch %4d | %14s | %10.6f", epoch, metric, value)
+
+            if self.use_wandb:
+                pretty_keys = {
+                    wandb_metric_key(key): value for key, value in float_values.items()
+                }
+                wandb.log({"epoch": epoch, **pretty_keys})
+
+        jax.debug.callback(_log_values, values, epoch)
+
+    def log_artifact[T: Artifact](
+        self,
+        handler: RunHandler,
+        epoch: int,
+        name: str,
+        artifact: T,
+        plot_artifact: Callable[[T], Figure],
     ) -> None:
-        wandb.log({"epoch": epoch, key: wandb.Image(fig, caption=f"Epoch {epoch}")})
+        """Log a figure and its data. Must be called outside of jax.jit."""
+        fig = plot_artifact(artifact)
 
-    @override
+        if self.use_local:
+            # Save both data and figure
+            handler.save_json(
+                {"data": artifact.to_json(), "epoch": epoch},
+                f"{name}_epoch_{epoch}_data",
+            )
+            handler.save_plot(fig, f"{name}_epoch_{epoch}")
+
+            log = logging.getLogger(__name__)
+            log.info("epoch %4d | %14s | figure", epoch, name)
+
+        if self.use_wandb:
+            wandb.log(
+                {"epoch": epoch, name: wandb.Image(fig, caption=f"Epoch {epoch}")}
+            )
+
+        plt.close(fig)
+
     def finalize(self, handler: RunHandler) -> None:
-        """Clean up wandb run."""
-        wandb.finish()
+        """Finalize logging and clean up. Must be called outside of jax.jit."""
+        if self.use_local:
+            global _metric_buffer
 
+            # First convert to lists of primitives
+            epochs: JSONList = [int(epoch) for epoch, _ in _metric_buffer]
+            metrics: JSONList = [
+                {
+                    k: float(v) for k, v in metrics.items()
+                }  # each metrics dict is JSONDict
+                for _, metrics in _metric_buffer
+            ]
 
-@dataclass(frozen=True)
-class LocalLogger(JaxLogger):
-    """Local filesystem logger with metric buffering.
+            # Then construct the final dictionary
+            json_data: JSONDict = {"epochs": epochs, "metrics": metrics}
 
-    Note: Uses global state for metric buffering to maintain compatibility with
-    JAX's pure function requirements. Only one logger instance should be active
-    at a time.
-    """
+            # Save and plot
+            handler.save_json(json_data, "metrics")
+            fig = plot_metrics(_metric_buffer)
+            handler.save_plot(fig, "metrics")
 
-    def __init__(self, handler: RunHandler) -> None:
-        super().__init__(handler)
-        setup_matplotlib_style()
-        global _metric_buffer
-        _metric_buffer.clear()
+            _metric_buffer.clear()
 
-    @override
-    def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
-        global _metric_buffer
-        log = logging.getLogger(__name__)
-
-        for metric, value in values.items():
-            if metric not in _metric_buffer:
-                _metric_buffer[metric] = []
-            _metric_buffer[metric].append((epoch, value))
-            log.info("epoch %4d | %14s | %10.6f", epoch, metric, value)
-
-    @override
-    def _log_figure(
-        self, key: str, fig: Figure, epoch: int, handler: RunHandler | None = None
-    ) -> None:
-        if handler is None:
-            raise ValueError("LocalLogger requires a RunHandler for saving figures")
-
-        # Save the figure using handler
-        handler.save_plot(fig, f"{key}_epoch_{epoch}")
-
-        # Log to console
-        log = logging.getLogger(__name__)
-        log.info("epoch %4d | %14s | figure", epoch, key)
-
-    @override
-    def finalize(self, handler: RunHandler) -> None:
-        global _metric_buffer, _figure_buffer
-
-        # Save metrics
-        metrics_dict = {
-            metric: [v for _, v in sorted(values)]
-            for metric, values in _metric_buffer.items()
-        }
-        handler.save_json(metrics_dict, "metrics")
-
-        # Clear buffers
-        _metric_buffer.clear()
-
-
-@dataclass(frozen=True)
-class NullLogger(JaxLogger):
-    @override
-    def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
-        pass
-
-    @override
-    def _log_figure(
-        self, key: str, fig: Figure, epoch: int, handler: RunHandler | None
-    ) -> None:
-        pass
-
-    @override
-    def finalize(self, handler: RunHandler) -> None:
-        pass
+        if self.use_wandb:
+            wandb.finish()

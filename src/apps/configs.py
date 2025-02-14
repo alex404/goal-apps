@@ -1,21 +1,12 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from hydra.core.config_store import ConfigStore
 from omegaconf import MISSING
 
 ### Runtime Configs ###
 
-cs = ConfigStore.instance()
 
-# Base Component Configs
-
-
-@dataclass
-class LoggerConfig:
-    """Base configuration for logging."""
-
-    _target_: str = MISSING  # Will point to logger implementation
+# Basic Configs
 
 
 @dataclass
@@ -25,7 +16,11 @@ class RunConfig:
     run_name: str
     device: str
     jit: bool
-    logger: LoggerConfig
+    use_local: bool
+    use_wandb: bool
+    project: str
+    group: str | None
+    job_type: str | None
 
 
 @dataclass
@@ -40,38 +35,6 @@ class ModelConfig:
     """Base configuration for models."""
 
     _target_: str
-
-
-# Logger Configs
-
-
-@dataclass
-class WandbLoggerConfig(LoggerConfig):
-    """Configuration for Weights & Biases logging."""
-
-    _target_: str = "apps.runtime.logger.WandbLogger"
-    project: str = "goal"
-    group: str | None = None
-    job_type: str | None = None
-
-
-@dataclass
-class LocalLoggerConfig(LoggerConfig):
-    """Configuration for local file logging."""
-
-    _target_: str = "apps.runtime.logger.LocalLogger"
-
-
-@dataclass
-class NullLoggerConfig(LoggerConfig):
-    """Configuration for disabled logging."""
-
-    _target_: str = "apps.runtime.logger.NullLogger"
-
-
-cs.store(group="logger", name="wandb", node=WandbLoggerConfig)
-cs.store(group="logger", name="local", node=LocalLoggerConfig)
-cs.store(group="logger", name="void", node=NullLoggerConfig)
 
 
 ### Clustering Configs ###
@@ -96,7 +59,6 @@ class ClusteringModelConfig(ModelConfig):
 defaults: list[Any] = [
     {"model": MISSING},
     {"dataset": MISSING},
-    {"logger": "wandb"},
 ]
 
 

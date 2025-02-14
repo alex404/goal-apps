@@ -19,29 +19,38 @@ def setup_matplotlib_style() -> None:
         plt.style.use(str(style_path))
 
 
-def create_heatmap(
-    matrix: Array,
-    title: str | None = None,
-    xlabel: str | None = None,
-    ylabel: str | None = None,
-    figsize: tuple[int, int] = (10, 8),
-    cmap: str = "viridis",
-) -> Figure:
-    """Create a heatmap figure.
+def plot_metrics(buffer: list[tuple[int, dict[str, float]]]) -> Figure:
+    """Create a summary plot of all metrics over training.
 
-    Pure plotting function that returns a figure without saving.
+    Args:
+        buffer: List of (epoch, metrics) pairs
+
+    Returns:
+        Figure containing subplots for each metric
     """
-    fig, ax = plt.subplots(figsize=figsize)
-    im = ax.imshow(matrix, cmap=cmap)
-    plt.colorbar(im)
+    if not buffer:
+        raise ValueError("No metrics to plot")
 
-    if title is not None:
-        ax.set_title(title)
-    if xlabel is not None:
-        ax.set_xlabel(xlabel)
-    if ylabel is not None:
-        ax.set_ylabel(ylabel)
+    # Extract epochs and reorganize metrics
+    epochs, metric_dicts = zip(*sorted(buffer))
+    metrics = {name: [d[name] for d in metric_dicts] for name in metric_dicts[0]}
 
+    # Create figure
+    n_metrics = len(metrics)
+    fig, axes = plt.subplots(n_metrics, 1, figsize=(10, 4 * n_metrics))
+
+    # Handle single metric case
+    if n_metrics == 1:
+        axes = [axes]
+
+    # Plot each metric
+    for ax, (name, values) in zip(axes, metrics.items()):
+        ax.plot(epochs, values)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel(name)
+        ax.grid(True)
+
+    plt.tight_layout()
     return fig
 
 

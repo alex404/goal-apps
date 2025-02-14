@@ -9,12 +9,12 @@ import jax.numpy as jnp
 import numpy as np
 from hydra.core.config_store import ConfigStore
 from jax import Array
-from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 from numpy.typing import NDArray
 from torchvision import datasets, transforms
 
-from apps.clustering.plugins import ClusteringDataset
 from apps.configs import ClusteringDatasetConfig
+from apps.plugins import ClusteringDataset, ObservableArtifact
 
 
 @dataclass
@@ -124,7 +124,12 @@ Original error: {e!s}"""
         return 10  # Digits 0-9
 
     @override
-    def visualize_observable(self, obs: Array) -> tuple[tuple[int, int], Figure]:
+    def observable_artifact(self, observable: Array) -> ObservableArtifact:
+        return ObservableArtifact(obs=observable, shape=(28, 28))
+
+    @override
+    @staticmethod
+    def paint_observable(observable: ObservableArtifact, axes: Axes):
         """Visualize a single MNIST digit.
 
         Args:
@@ -135,14 +140,12 @@ Original error: {e!s}"""
             - Image dimensions (height, width)
             - Figure containing the visualization
         """
-        import matplotlib.pyplot as plt
 
         # Create figure
-        fig, ax = plt.subplots(figsize=(4, 4))
+        obs = observable.obs
+        shp_rws, shp_cls = observable.shape
 
         # Display image
-        img = obs.reshape(28, 28)
-        ax.imshow(img, cmap="gray", interpolation="nearest")
-        ax.axis("off")
-
-        return (28, 28), fig
+        img = obs.reshape(shp_rws, shp_cls)
+        axes.imshow(img, cmap="gray", interpolation="nearest")
+        axes.axis("off")

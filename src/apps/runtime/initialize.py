@@ -1,33 +1,113 @@
 """Shared utilities for GOAL examples."""
 
 import logging
+import sys
+import traceback
 from pathlib import Path
+from types import TracebackType
 
 import hydra
 import jax
 from hydra.core.config_store import ConfigStore
 from jax.lib import xla_bridge
 from omegaconf import OmegaConf
+from rich.console import Console
+from rich.logging import RichHandler
+from rich.theme import Theme
 
 from ..configs import RunConfig
 from ..plugins import Dataset, Model
 from ..util import print_config_tree
 from .handler import RunHandler
-from .logger import JaxLogger, setup_logging
+from .logger import JaxLogger
+from .visualization import setup_matplotlib_style
 
-### Preamble ###
+### Python Logging ###
 
 logging.getLogger("jax._src.xla_bridge").addFilter(lambda _: False)
 
 log = logging.getLogger(__name__)
 
-### Initialization ###
+# Custom theme for our logging
+THEME = Theme(
+    {
+        "info": "cyan",
+        "warning": "yellow",
+        "error": "red",
+        "critical": "red reverse",
+        "metric": "green",
+        "step": "blue",
+        "value": "yellow",
+    }
+)
+
+### Initialization Helpers ###
 
 
-def _initialize_jax(device: str = "cpu", disable_jit: bool = False) -> None:
+def setup_logging(run_dir: Path) -> None:
+    """Configure logging for the entire application with pretty formatting."""
+    # Remove all handlers associated with the root logger object
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+
+    # Create console with our theme
+    console = Console(theme=THEME)
+
+    # Console handler using Rich
+    console_handler = RichHandler(
+        console=console,
+        show_time=True,
+        show_level=True,
+        show_path=False,  # We'll show this in the format string instead
+        rich_tracebacks=True,
+        tracebacks_width=None,  # Use full width
+        markup=True,  # Enable rich markup in log messages
+    )
+
+    def exception_handler(
+        exc_type: type[BaseException],
+        exc_value: BaseException,
+        exc_traceback: TracebackType,
+    ) -> None:
+        if issubclass(exc_type, KeyboardInterrupt):
+            # Let KeyboardInterrupt exit gracefully
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+
+        log.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+        # Optionally, save to a custom file
+        error_file = run_dir / "errors.log"
+        with open(error_file, "a") as f:
+            traceback.print_exception(exc_type, exc_value, exc_traceback, file=f)
+
+    sys.excepthook = exception_handler
+
+    # Create formatters
+    # Rich handler already handles the time, so we don't include it in the format
+    console_format = "%(name)-20s | %(message)s"
+    file_format = "%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s"
+
+    console_handler.setFormatter(logging.Formatter(console_format))
+    console_handler.setLevel(logging.INFO)
+
+    # File handler (keeping this as standard logging for clean logs)
+    log_file = run_dir / "training.log"
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(logging.Formatter(file_format))
+    file_handler.setLevel(logging.INFO)
+
+    # Set up root logger
+    logging.root.handlers = [console_handler, file_handler]
+    logging.root.setLevel(logging.INFO)
+
+
+def setup_jax(device: str = "cpu", disable_jit: bool = False) -> None:
     jax.config.update("jax_platform_name", device)
     if disable_jit:
         jax.config.update("jax_disable_jit", True)
+
+
+### Core Initialization Function ###
 
 
 def initialize_run(
@@ -48,13 +128,15 @@ def initialize_run(
     print_config_tree(OmegaConf.to_container(cfg, resolve=True))
 
     # Initialize JAX
-    _initialize_jax(device=cfg.device, disable_jit=not cfg.jit)
+    setup_jax(device=cfg.device, disable_jit=not cfg.jit)
 
     # Initialize run handler
     handler = RunHandler(name=cfg.run_name, project_root=proot)
 
     # Save config to run directory
     OmegaConf.save(cfg, handler.run_dir / "config.yaml")
+
+    setup_matplotlib_style()
 
     setup_logging(handler.run_dir)
 
@@ -73,9 +155,13 @@ def initialize_run(
         cfg.model, data_dim=dataset.data_dim
     )
 
-    logger: JaxLogger = hydra.utils.instantiate(
-        cfg.logger,
+    logger = JaxLogger(
         handler=handler,
+        use_wandb=cfg.use_wandb,
+        use_local=cfg.use_local,
+        project=cfg.project,
+        group=cfg.group,
+        job_type=cfg.job_type,
     )
 
     # will return logger as well
