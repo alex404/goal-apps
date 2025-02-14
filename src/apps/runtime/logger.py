@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import logging
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, override
+from typing import Callable
 
 import jax
 import matplotlib.pyplot as plt
@@ -14,34 +13,15 @@ import wandb as wandb
 from jax import Array
 from matplotlib.figure import Figure
 
-from .handler import JSONDict, JSONList, JSONValue, RunHandler
+from .handler import Artifact, Metrics, RunHandler
 from .visualization import plot_metrics
 
+## Preamble ###
+
+
+log = logging.getLogger(__name__)
+
 ### Jit-Compatible Loggers ###
-
-# Artifacts
-
-
-@dataclass(frozen=True)
-class Artifact(ABC):
-    """Base class for data that can be logged and visualized."""
-
-    @abstractmethod
-    def to_json(self) -> JSONValue:
-        """Convert artifact data to JSON-serializable format."""
-        ...
-
-
-@dataclass(frozen=True)
-class ArrayArtifact(Artifact):
-    """Artifact wrapping a JAX array."""
-
-    data: Array
-
-    @override
-    def to_json(self) -> JSONValue:
-        return self.data.tolist()
-
 
 # Helpers
 
@@ -86,11 +66,8 @@ def wandb_metric_key(name: str) -> str:
     return f"Metrics/{' '.join(pretty_parts)}"
 
 
-# Global state for metric buffering
-
-
 # Global buffer for metrics
-_metric_buffer: list[tuple[int, dict[str, float]]] = []
+_metric_buffer: Metrics = {}
 
 
 @dataclass(frozen=True)
@@ -148,13 +125,14 @@ class JaxLogger:
 
         def _log_values(values_dict: dict[str, Array], epoch: int) -> None:
             float_values = {k: float(v) for k, v in values_dict.items()}
+            epoch = int(epoch)
 
             if self.use_local:
                 global _metric_buffer
-                _metric_buffer.append((epoch, float_values))
-
-                log = logging.getLogger(__name__)
                 for metric, value in float_values.items():
+                    if metric not in _metric_buffer:
+                        _metric_buffer[metric] = []
+                    _metric_buffer[metric].append((epoch, value))
                     log.info("epoch %4d | %14s | %10.6f", epoch, metric, value)
 
             if self.use_wandb:
@@ -169,22 +147,16 @@ class JaxLogger:
         self,
         handler: RunHandler,
         epoch: int,
-        name: str,
         artifact: T,
         plot_artifact: Callable[[T], Figure],
     ) -> None:
         """Log a figure and its data. Must be called outside of jax.jit."""
         fig = plot_artifact(artifact)
+        name = artifact.__class__.__name__
 
         if self.use_local:
-            # Save both data and figure
-            handler.save_json(
-                {"data": artifact.to_json(), "epoch": epoch},
-                f"{name}_epoch_{epoch}_data",
-            )
-            handler.save_plot(fig, f"{name}_epoch_{epoch}")
-
-            log = logging.getLogger(__name__)
+            handler.save_artifact(epoch, artifact)
+            handler.save_artifact_figure(epoch, type(artifact), fig)
             log.info("epoch %4d | %14s | figure", epoch, name)
 
         if self.use_wandb:
@@ -199,22 +171,10 @@ class JaxLogger:
         if self.use_local:
             global _metric_buffer
 
-            # First convert to lists of primitives
-            epochs: JSONList = [int(epoch) for epoch, _ in _metric_buffer]
-            metrics: JSONList = [
-                {
-                    k: float(v) for k, v in metrics.items()
-                }  # each metrics dict is JSONDict
-                for _, metrics in _metric_buffer
-            ]
-
-            # Then construct the final dictionary
-            json_data: JSONDict = {"epochs": epochs, "metrics": metrics}
-
-            # Save and plot
-            handler.save_json(json_data, "metrics")
+            handler.save_metrics(_metric_buffer)
             fig = plot_metrics(_metric_buffer)
-            handler.save_plot(fig, "metrics")
+            handler.save_metrics_figure(fig)
+            plt.close(fig)
 
             _metric_buffer.clear()
 

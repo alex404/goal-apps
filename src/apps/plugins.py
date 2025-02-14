@@ -8,8 +8,8 @@ from typing import override
 from jax import Array
 from matplotlib.axes import Axes
 
-from .runtime.handler import JSONDict, RunHandler
-from .runtime.logger import Artifact, JaxLogger
+from .runtime.handler import Artifact, JSONDict, RunHandler
+from .runtime.logger import JaxLogger
 
 ### Interfaces ###
 
@@ -24,6 +24,14 @@ class ObservableArtifact(Artifact):
     @override
     def to_json(self) -> JSONDict:
         return {"obs": self.obs.tolist(), "shape": list(self.shape)}
+
+    @classmethod
+    @override
+    def from_json(cls, json_dict: JSONDict) -> ObservableArtifact:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return cls(
+            obs=Array(json_dict["obs"]),
+            shape=tuple(json_dict["shape"]),
+        )
 
 
 class Dataset(ABC):
@@ -68,6 +76,15 @@ class Model[D: Dataset](ABC):
         """Dimensionality of each data point."""
 
     @abstractmethod
+    def run_analysis(
+        self,
+        key: Array,
+        handler: RunHandler,
+        dataset: D,
+    ) -> None:
+        """Evaluate model on dataset."""
+
+    @abstractmethod
     def run_experiment(
         self,
         key: Array,
@@ -76,8 +93,6 @@ class Model[D: Dataset](ABC):
         logger: JaxLogger,
     ) -> None:
         """Evaluate model on dataset."""
-
-    pass
 
 
 ### Clustering ###

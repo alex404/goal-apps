@@ -1,5 +1,7 @@
 """Base class for HMoG implementations."""
 
+from __future__ import annotations
+
 import logging
 import math
 from dataclasses import dataclass
@@ -37,8 +39,8 @@ from apps.plugins import (
     ClusteringDataset,
     ClusteringModel,
 )
-from apps.runtime.handler import JSONDict, RunHandler
-from apps.runtime.logger import ArrayArtifact, Artifact, JaxLogger
+from apps.runtime.handler import Artifact, JSONDict, JSONValue, RunHandler
+from apps.runtime.logger import JaxLogger
 
 ### Preamble ###
 
@@ -116,6 +118,27 @@ class Prototypes(Artifact):
             "prototypes": [p.tolist() for p in self.prototypes],
         }
 
+    @classmethod
+    @override
+    def from_json(cls, json_dict: JSONDict) -> Prototypes:  # pyright: ignore[reportIncompatibleMethodOverride]
+        return cls([jnp.array(p) for p in json_dict["prototypes"]])
+
+
+@dataclass(frozen=True)
+class ArrayArtifact(Artifact):
+    """Artifact wrapping a JAX array."""
+
+    data: Array
+
+    @override
+    def to_json(self) -> JSONValue:
+        return self.data.tolist()
+
+    @classmethod
+    @override
+    def from_json(cls, json_dict: JSONValue) -> ArrayArtifact:
+        return cls(jax.numpy.array(json_dict))
+
 
 # Artifact Creation
 
@@ -182,9 +205,6 @@ def get_component_prototypes[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
     return Prototypes(prototypes)
 
 
-# Artifact plots
-
-
 def prototypes_plotter(
     dataset: ClusteringDataset,
 ) -> Callable[[Prototypes], Figure]:
@@ -198,6 +218,9 @@ def prototypes_plotter(
         n_rows = math.ceil(n_prots / n_cols)
 
         height, width = shape
+        wh = (width + height) / 2
+        height = 2 * height / wh
+        width = 2 * width / wh
         figsize = (width * n_cols, height * n_rows)
 
         fig, axes = plt.subplots(
@@ -454,12 +477,37 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         prototypes = get_component_prototypes(self.model, params)
         divergences = get_component_divergences(self.model, params)
 
-        logger.log_artifact(
-            handler, epoch, "component_prototypes", prototypes, plot_prototypes
-        )
-        logger.log_artifact(
-            handler, epoch, "component_divergences", divergences, plot_divergence_matrix
-        )
+        logger.log_artifact(handler, epoch, prototypes, plot_prototypes)
+        logger.log_artifact(handler, epoch, divergences, plot_divergence_matrix)
+        handler.save_params(epoch, params.array)
+
+    @override
+    def run_analysis(
+        self,
+        key: Array,
+        handler: RunHandler,
+        dataset: ClusteringDataset,
+    ) -> None:
+        """Generate analysis artifacts from saved experiment results."""
+        # Get available epochs
+        epochs = handler.get_available_epochs()
+        if not epochs:
+            raise ValueError("No epochs available for analysis")
+
+        # Analyze latest epoch by default
+        latest_epoch = max(epochs)
+
+        # Load artifacts
+        prototypes = handler.load_artifact(latest_epoch, Prototypes)
+        divergences = handler.load_artifact(latest_epoch, ArrayArtifact)
+
+        # Generate and save plots
+        plot_prototypes = prototypes_plotter(dataset)
+        prototype_fig = plot_prototypes(prototypes)
+        handler.save_artifact_figure(latest_epoch, Prototypes, prototype_fig)
+
+        divergence_fig = plot_divergence_matrix(divergences)
+        handler.save_artifact_figure(latest_epoch, ArrayArtifact, divergence_fig)
 
     @override
     def run_experiment(
@@ -471,10 +519,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     ) -> None:
         init_key, fit_key = jax.random.split(key)
         params = self.initialize_model(init_key, dataset.train_data)
-        final_params = self.fit(
-            fit_key, handler, dataset, logger, self.model.natural_point(params)
-        )
-        handler.save_json(final_params.array.tolist(), "final_params")
+        self.fit(fit_key, handler, dataset, logger, self.model.natural_point(params))
 
     def fit(
         self,

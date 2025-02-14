@@ -9,6 +9,8 @@ from jax import Array
 from matplotlib.figure import Figure
 from sklearn.metrics import accuracy_score
 
+from .handler import Metrics
+
 
 def setup_matplotlib_style() -> None:
     """Load and set the default matplotlib style."""
@@ -19,21 +21,17 @@ def setup_matplotlib_style() -> None:
         plt.style.use(str(style_path))
 
 
-def plot_metrics(buffer: list[tuple[int, dict[str, float]]]) -> Figure:
+def plot_metrics(metrics: Metrics) -> Figure:
     """Create a summary plot of all metrics over training.
 
     Args:
-        buffer: List of (epoch, metrics) pairs
+        metrics: Dictionary mapping metric names to lists of (epoch, value) pairs
 
     Returns:
         Figure containing subplots for each metric
     """
-    if not buffer:
+    if not metrics:
         raise ValueError("No metrics to plot")
-
-    # Extract epochs and reorganize metrics
-    epochs, metric_dicts = zip(*sorted(buffer))
-    metrics = {name: [d[name] for d in metric_dicts] for name in metric_dicts[0]}
 
     # Create figure
     n_metrics = len(metrics)
@@ -45,7 +43,8 @@ def plot_metrics(buffer: list[tuple[int, dict[str, float]]]) -> Figure:
 
     # Plot each metric
     for ax, (name, values) in zip(axes, metrics.items()):
-        ax.plot(epochs, values)
+        epochs, metric_values = zip(*values)
+        ax.plot(epochs, metric_values)
         ax.set_xlabel("Epoch")
         ax.set_ylabel(name)
         ax.grid(True)
