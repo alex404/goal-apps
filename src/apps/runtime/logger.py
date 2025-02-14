@@ -3,19 +3,19 @@
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import override
 
 import jax
-import numpy as np
 import wandb
 from jax import Array
+from matplotlib.figure import Figure
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
 
 from .handler import RunHandler
+from .visualization import setup_matplotlib_style
 
 ### Logging ###
 
@@ -82,8 +82,8 @@ def wandb_metric_key(name: str) -> str:
     """Convert metric names to pretty wandb format.
 
     Examples:
-        train_ll -> Metric/Train Log Likelihood
-        test_average_bic -> Metric/Test Average BIC
+        train_ll -> Metrics/Train Log Likelihood
+        test_average_bic -> Metrics/Test Average BIC
     """
     # Special case abbreviations
     replacements = {
@@ -115,44 +115,47 @@ def wandb_metric_key(name: str) -> str:
             pretty_parts.append(part.capitalize())
             i += 1
 
-    return f"Metric/{' '.join(pretty_parts)}"
-
-
-# Visualization strategies
-
-
-class ArtifactType(Enum):
-    IMAGE = "image"
-    SERIES = "series"
+    return f"Metrics/{' '.join(pretty_parts)}"
 
 
 # Global state for metric buffering
 
 
 _metric_buffer: dict[str, list[tuple[int, float]]] = {}
-_artifacts_buffer: dict[str, list[tuple[int, Array, ArtifactType]]] = {}
 
 
 @dataclass(frozen=True)
 class JaxLogger(ABC):
-    """Interface for metric logging.
+    """Interface for metric and figure logging.
 
-    Note: This logger is designed to work with JAX's JIT compilation:
+    This logger provides methods for logging both metrics and figures, with
+    different JIT compatibility:
 
-    - Constructor and finalize() must be called from outside JIT-compiled code
-    - log_metrics() and log_artifact() can be called from within JIT-compiled code
-    - Any values passed to these methods will be evaluated at the point where they are logged through JAX's callback system, and may lead to unpredictable evaluation order of logging calls.
+    JIT-compatible methods:
+        - log_metrics: Can be called from within jax.jit-compiled functions
+
+    Non-JIT methods (must be called outside jax.jit):
+        - log_figure: For logging matplotlib figures
+        - finalize: For cleanup and final logging
     """
 
     run_name: str
     run_dir: Path
 
     def __init__(self, handler: RunHandler) -> None:
+        """Initialize logger. Must be called outside of jax.jit."""
         object.__setattr__(self, "run_name", handler.name)
         object.__setattr__(self, "run_dir", handler.run_dir)
 
     def log_metrics(self, values: dict[str, Array], epoch: int) -> None:
-        """Log metrics using callbacks to handle traced values."""
+        """Log metrics. Safe to call within jax.jit-compiled functions.
+
+        Uses jax.debug.callback to safely extract values from JIT.
+
+        Args:
+            values: Dictionary mapping metric names to JAX arrays
+            epoch: Current epoch number
+        """
 
         def _log_values(values_dict: dict[str, Array], epoch: int) -> None:
             float_values = {k: float(v) for k, v in values_dict.items()}
@@ -164,24 +167,32 @@ class JaxLogger(ABC):
     def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
         """Implementation-specific logging of metric values."""
 
-    def log_artifact(
-        self, key: str, artifact: Array, vis_type: ArtifactType, epoch: int
+    def log_figure(
+        self, key: str, fig: Figure, epoch: int, handler: RunHandler | None = None
     ) -> None:
-        """Log artifact using callbacks to handle traced values."""
+        """Log a matplotlib figure. Must be called outside of jax.jit.
 
-        def _log_artifact(key: str, artifact: Array, epoch: int) -> None:
-            self._log_artifact(key, artifact, vis_type, epoch)
+        This method handles matplotlib figures which are incompatible with JIT
+        compilation. Any figure generation and logging should happen outside
+        of JIT-compiled functions.
 
-        jax.debug.callback(_log_artifact, key, artifact, epoch)
+        Args:
+            key: Name/identifier for the figure
+            fig: Matplotlib figure to log
+            epoch: Current epoch number
+        """
+        self._log_figure(key, fig, epoch, handler)
 
     @abstractmethod
-    def _log_artifact(
-        self, key: str, artifact: Array, vis_type: ArtifactType, epoch: int
-    ) -> None: ...
+    def _log_figure(
+        self, key: str, fig: Figure, epoch: int, handler: RunHandler | None
+    ) -> None:
+        """Implementation-specific logging of figures."""
+        ...
 
     @abstractmethod
     def finalize(self, handler: RunHandler) -> None:
-        """Finalize logging and clean up. Not safe for jit."""
+        """Finalize logging and clean up. Must be called outside of jax.jit."""
 
 
 @dataclass(frozen=True)
@@ -218,7 +229,7 @@ class WandbLogger(JaxLogger):
         # Define epoch as our x-axis
         wandb.define_metric("epoch")
         # Use epoch as x-axis for all metrics and artifacts
-        wandb.define_metric("Metric/*", step_metric="epoch")
+        wandb.define_metric("*", step_metric="epoch")
 
     @override
     def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
@@ -226,18 +237,10 @@ class WandbLogger(JaxLogger):
         wandb.log({"epoch": epoch, **pretty_values})
 
     @override
-    def _log_artifact(
-        self, key: str, artifact: Array, vis_type: ArtifactType, epoch: int
+    def _log_figure(
+        self, key: str, fig: Figure, epoch: int, handler: RunHandler | None
     ) -> None:
-        if vis_type == ArtifactType.IMAGE:
-            artifact_np = np.array(artifact, dtype=np.float32)
-            wandb.log({key: wandb.Image(artifact_np, caption=f"Epoch {epoch}")})
-        elif vis_type == ArtifactType.SERIES:
-            table = wandb.Table(
-                data=[[i, float(y)] for i, y in enumerate(artifact)],
-                columns=["x", "y"],
-            )
-            wandb.log({key: wandb.plot.line(table, "x", "y", title=f"Epoch {epoch}")})
+        wandb.log({"epoch": epoch, key: wandb.Image(fig, caption=f"Epoch {epoch}")})
 
     @override
     def finalize(self, handler: RunHandler) -> None:
@@ -256,10 +259,9 @@ class LocalLogger(JaxLogger):
 
     def __init__(self, handler: RunHandler) -> None:
         super().__init__(handler)
-
-        # Initialize buffer
+        setup_matplotlib_style()
         global _metric_buffer
-        _metric_buffer.clear()  # Clear existing buffer if any
+        _metric_buffer.clear()
 
     @override
     def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
@@ -273,21 +275,22 @@ class LocalLogger(JaxLogger):
             log.info("epoch %4d | %14s | %10.6f", epoch, metric, value)
 
     @override
-    def _log_artifact(
-        self, key: str, artifact: Array, vis_type: ArtifactType, epoch: int
+    def _log_figure(
+        self, key: str, fig: Figure, epoch: int, handler: RunHandler | None = None
     ) -> None:
-        global _artifacts_buffer
-        if key not in _artifacts_buffer:
-            _artifacts_buffer[key] = []
-        _artifacts_buffer[key].append((epoch, artifact, vis_type))
+        if handler is None:
+            raise ValueError("LocalLogger requires a RunHandler for saving figures")
 
-        # Still log that we received the data
+        # Save the figure using handler
+        handler.save_plot(fig, f"{key}_epoch_{epoch}")
+
+        # Log to console
         log = logging.getLogger(__name__)
-        log.info("epoch %4d | %14s | %s", epoch, key, vis_type.value)
+        log.info("epoch %4d | %14s | figure", epoch, key)
 
     @override
     def finalize(self, handler: RunHandler) -> None:
-        global _metric_buffer, _artifacts_buffer
+        global _metric_buffer, _figure_buffer
 
         # Save metrics
         metrics_dict = {
@@ -296,39 +299,19 @@ class LocalLogger(JaxLogger):
         }
         handler.save_json(metrics_dict, "metrics")
 
-        # Save artifact
-        artifact_dict = {
-            key: {
-                f"epoch_{int(epoch)}": {
-                    "artifact": artifact.tolist(),  # Convert array to list for JSON
-                    "type": vis_type.value,
-                }
-                for epoch, artifact, vis_type in entries
-            }
-            for key, entries in _artifacts_buffer.items()
-        }
-        handler.save_json(artifact_dict, "artifacts")
-
         # Clear buffers
         _metric_buffer.clear()
-        _artifacts_buffer.clear()
 
 
 @dataclass(frozen=True)
 class NullLogger(JaxLogger):
-    """Logger implementation that does nothing."""
-
-    @override
-    def __init__(self, handler: RunHandler) -> None:
-        super().__init__(handler)
-
     @override
     def _log_metrics(self, values: dict[str, float], epoch: int) -> None:
         pass
 
     @override
-    def _log_artifact(
-        self, key: str, artifact: Array, vis_type: ArtifactType, epoch: int
+    def _log_figure(
+        self, key: str, fig: Figure, epoch: int, handler: RunHandler | None
     ) -> None:
         pass
 

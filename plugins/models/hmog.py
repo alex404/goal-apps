@@ -90,11 +90,9 @@ cs.store(group="model", name="hmog", node=HMoGConfig)
 
 OBS_JITTER = 1e-7
 OBS_MIN_VAR = 1e-6
-LAT_JITTER = 1e-6
-LAT_MIN_VAR = 1e-4
 
 
-### Helper routines ###
+### Stabilizers ###
 
 
 def bound_mixture_probabilities[Rep: PositiveDefinite](
@@ -271,6 +269,51 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         )
         handler.save_json(final_params.array.tolist(), "final_params")
 
+    def get_component_divergences(
+        self,
+        params: Array,
+    ) -> Array:
+        r"""Compute the KL divergence between each pair of mixture components.
+
+        For HMoG models, the KL divergence between two components $k, k'$ is:
+        $$
+        D_{KL}(q_k || q_{k'}) = D_{KL}(q_k^z || q_{k'}^z)
+        $$
+        where $q_k, q_{k'}$ are the latent distributions for components $k, k'$.
+
+        Returns:
+            Array of shape (n_components, n_components) containing the KL divergence
+            between each pair of mixture components.
+        """
+        # Split into likelihood and mixture parameters
+        mix_params = self.model.prior(self.model.natural_point(params))
+
+        # Extract components from mixture
+        comp_lats, _ = self.model.upr_hrm.split_natural_mixture(mix_params)
+
+        # For each pair of components, compute the KL divergence
+
+        # Function that computes KL divergence between two components
+        def kl_div_between_components(i: Array, j: Array) -> Array:
+            # Get the mean parameters for component i
+            comp_i = self.model.upr_hrm.comp_man.get_replicate(comp_lats, i)
+            comp_i_mean = self.model.upr_hrm.obs_man.to_mean(comp_i)
+
+            # Get the natural parameters for component j
+            comp_j = self.model.upr_hrm.comp_man.get_replicate(comp_lats, j)
+
+            # Compute KL divergence between components
+            return self.model.upr_hrm.obs_man.relative_entropy(comp_i_mean, comp_j)
+
+        idxs = jnp.arange(self.n_clusters)
+
+        # Function that computes KL divergence from one component to all others
+        def kl_div_from_one_to_all(i: Array) -> Array:
+            return jax.vmap(kl_div_between_components, in_axes=(None, 0))(i, idxs)
+
+        # Compute all pairwise KL divergences
+        return jax.vmap(kl_div_from_one_to_all)(idxs)
+
     @override
     def get_component_prototypes(
         self,
@@ -303,7 +346,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             # Get latent mean for this component
             with self.model.lwr_hrm as lh:
                 comp_lat_params = self.model.upr_hrm.comp_man.get_replicate(
-                    comp_lats, i
+                    comp_lats, jnp.asarray(i)
                 )
                 lwr_hrm_params = lh.join_conjugated(lkl_params, comp_lat_params)
                 lwr_hrm_means = lh.to_mean(lwr_hrm_params)
@@ -349,24 +392,24 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         jax.lax.cond(epoch % log_freq == 0, compute_metrics, no_op)
 
-    def log_prototypes(
+    def log_figures(
         self,
         logger: JaxLogger,
         dataset: ClusteringDataset,
         params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
         epoch: int,
     ) -> None:
-        """Log component prototypes as artifacts.
-
-        For each mixture component, get its prototype observation and
-        convert it to the appropriate artifact type for the dataset.
-        """
+        """Log artifacts - only run a couple times per training."""
         prototypes = self.get_component_prototypes(params.array)
+        divergences = self.get_component_divergences(params.array)
 
-        for i, prototype in enumerate(prototypes):
+        for i, (prototype, divergence) in enumerate(zip(prototypes, divergences)):
             # Let dataset determine artifact type and format
             artifact, artifact_type = dataset.observable_to_artifact(prototype)
             logger.log_artifact(f"prototype_{i}", artifact, artifact_type, epoch)
+            logger.log_artifact(
+                f"divergence_{i}", divergence, ArtifactType.IMAGE, epoch
+            )
 
     def fit(
         self,
@@ -495,7 +538,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         # Stage 3: Similar structure to stage 2
         params1 = self.model.join_conjugated(lkl_params1, mix_params1)
-        self.log_prototypes(
+        self.log_figures(
             logger, dataset, params1, self.stage1_epochs + self.stage2_epochs
         )
 
@@ -561,5 +604,5 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             stage3_epoch,
             (stage3_opt_state, params1, key),
         )
-        self.log_prototypes(logger, dataset, final_params, self.n_epochs)
+        self.log_figures(logger, dataset, final_params, self.n_epochs)
         return final_params
