@@ -8,6 +8,14 @@ def register_plugins() -> None:
 
     for plugin_type in plugin_types:
         plugin_dir = Path(__file__).parent / plugin_type
-        for file in plugin_dir.glob("*.py"):
-            if file.stem != "__init__":
-                import_module(f"plugins.{plugin_type}.{file.stem}")
+        # Look for both .py files and directories with __init__.py
+        for item in plugin_dir.iterdir():
+            # Skip __init__.py files
+            if item.name == "__init__.py":
+                continue
+            # Handle .py files
+            if item.is_file() and item.suffix == ".py":
+                import_module(f"plugins.{plugin_type}.{item.stem}")
+            # Handle directories that contain __init__.py (plugin packages)
+            elif item.is_dir() and (item / "__init__.py").exists():
+                import_module(f"plugins.{plugin_type}.{item.name}")
