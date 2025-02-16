@@ -76,16 +76,17 @@ class Model[D: Dataset](ABC):
         """Dimensionality of each data point."""
 
     @abstractmethod
-    def run_analysis(
+    def analyze(
         self,
         key: Array,
         handler: RunHandler,
         dataset: D,
+        logger: JaxLogger,
     ) -> None:
-        """Evaluate model on dataset."""
+        """Run analysis suite based on trained model."""
 
     @abstractmethod
-    def run_experiment(
+    def train(
         self,
         key: Array,
         handler: RunHandler,
@@ -131,7 +132,7 @@ class ClusteringModel(Model[ClusteringDataset], ABC):
 
     @abstractmethod
     @override
-    def run_experiment(
+    def train(
         self,
         key: Array,
         handler: RunHandler,

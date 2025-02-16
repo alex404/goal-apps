@@ -31,18 +31,8 @@ from apps.plugins import (
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
-from .artifacts import (
-    Divergences,
-    Prototypes,
-    get_component_divergences,
-    get_component_prototypes,
-    plot_divergence_matrix,
-    prototypes_plotter,
-)
+from .artifacts import HMoGMetrics, log_artifacts
 from .base import (
-    OBS_JITTER,
-    OBS_MIN_VAR,
-    HMoGMetrics,
     RepresentationType,
     bound_hmog_mixture_probabilities,
     bound_mixture_probabilities,
@@ -63,6 +53,17 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 ):
     """Experiment framework for HMoGs."""
 
+    batch_size: int
+    stage1_epochs: int
+    stage2_epochs: int
+    stage3_epochs: int
+    stage2_learning_rate: float
+    stage3_learning_rate: float
+    obs_jitter: float
+    obs_min_var: float
+    from_scratch: bool
+    analysis_epoch: int | None
+
     def __init__(
         self,
         data_dim: int,
@@ -76,13 +77,21 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         stage3_epochs: int,
         stage2_learning_rate: float,
         stage3_learning_rate: float,
+        obs_jitter: float,
+        obs_min_var: float,
+        from_scratch: bool,
+        analysis_epoch: int,
     ) -> None:
-        self.batch_size: int = batch_size
-        self.stage1_epochs: int = stage1_epochs
-        self.stage2_epochs: int = stage2_epochs
-        self.stage3_epochs: int = stage3_epochs
-        self.stage2_learning_rate: float = stage2_learning_rate
-        self.stage3_learning_rate: float = stage3_learning_rate
+        self.batch_size = batch_size
+        self.stage1_epochs = stage1_epochs
+        self.stage2_epochs = stage2_epochs
+        self.stage3_epochs = stage3_epochs
+        self.stage2_learning_rate = stage2_learning_rate
+        self.stage3_learning_rate = stage3_learning_rate
+        self.obs_jitter = obs_jitter
+        self.obs_min_var = obs_min_var
+        self.from_scratch = from_scratch
+        self.analysis_epoch = analysis_epoch
 
         obs_rep_type = obs_rep.value
         lat_rep_type = lat_rep.value
@@ -125,7 +134,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         obs_means = self.model.obs_man.average_sufficient_statistic(data)
         obs_means = self.model.obs_man.regularize_covariance(
-            obs_means, OBS_JITTER, OBS_MIN_VAR
+            obs_means, self.obs_jitter, self.obs_min_var
         )
         obs_params = self.model.obs_man.to_natural(obs_means)
 
@@ -209,54 +218,32 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         jax.lax.cond(epoch % log_freq == 0, compute_metrics, no_op)
 
-    def log_figures(
-        self,
-        handler: RunHandler,
-        logger: JaxLogger,
-        dataset: ClusteringDataset,
-        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-        epoch: int,
-    ) -> None:
-        """Log artifacts - only run a couple times per training."""
-        plot_prototypes = prototypes_plotter(dataset)
-
-        prototypes = get_component_prototypes(self.model, params)
-        divergences = get_component_divergences(self.model, params)
-
-        logger.log_artifact(handler, epoch, prototypes, plot_prototypes)
-        logger.log_artifact(handler, epoch, divergences, plot_divergence_matrix)
-        handler.save_params(epoch, params.array)
-
     @override
-    def run_analysis(
+    def analyze(
         self,
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
+        logger: JaxLogger,
     ) -> None:
         """Generate analysis artifacts from saved experiment results."""
-        # Get available epochs
-        epochs = handler.get_available_epochs()
-        if not epochs:
-            raise ValueError("No epochs available for analysis")
 
-        # Analyze latest epoch by default
-        latest_epoch = max(epochs)
+        epoch = (
+            self.analysis_epoch
+            if self.analysis_epoch is not None
+            else max(handler.get_available_epochs())
+        )
 
-        # Load artifacts
-        prototypes = handler.load_artifact(latest_epoch, Prototypes)
-        divergences = handler.load_artifact(latest_epoch, Divergences)
-
-        # Generate and save plots
-        plot_prototypes = prototypes_plotter(dataset)
-        prototype_fig = plot_prototypes(prototypes)
-        handler.save_artifact_figure(latest_epoch, Prototypes, prototype_fig)
-
-        divergence_fig = plot_divergence_matrix(divergences)
-        handler.save_artifact_figure(latest_epoch, Divergences, divergence_fig)
+        if self.from_scratch:
+            log.info("Recomputing artifacts from scratch.")
+            params = self.model.natural_point(handler.load_params(epoch))
+            log_artifacts(handler, dataset, logger, self.model, epoch, params)
+        else:
+            log.info("Loading existing artifacts.")
+            log_artifacts(handler, dataset, logger, self.model, epoch)
 
     @override
-    def run_experiment(
+    def train(
         self,
         key: Array,
         handler: RunHandler,
@@ -295,7 +282,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 means = lh.expectation_step(lgm_params, train_sample)
                 obs_means, int_means, lat_means = lh.split_params(means)
                 obs_means = lh.obs_man.regularize_covariance(
-                    obs_means, OBS_JITTER, OBS_MIN_VAR
+                    obs_means, self.obs_jitter, self.obs_min_var
                 )
                 means = lh.join_params(obs_means, int_means, lat_means)
                 params1 = lh.to_natural(means)
@@ -395,8 +382,13 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         # Stage 3: Similar structure to stage 2
         params1 = self.model.join_conjugated(lkl_params1, mix_params1)
-        self.log_figures(
-            handler, logger, dataset, params1, self.stage1_epochs + self.stage2_epochs
+        log_artifacts(
+            handler,
+            dataset,
+            logger,
+            self.model,
+            self.stage1_epochs + self.stage2_epochs,
+            params1,
         )
 
         stage3_optimizer: Optimizer[Natural, DifferentiableHMoG[ObsRep, LatRep]] = (
@@ -461,5 +453,5 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             stage3_epoch,
             (stage3_opt_state, params1, key),
         )
-        self.log_figures(handler, logger, dataset, final_params, self.n_epochs)
+        log_artifacts(handler, dataset, logger, self.model, self.n_epochs, final_params)
         return final_params

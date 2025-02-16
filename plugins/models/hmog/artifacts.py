@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 import math
 from dataclasses import dataclass
-from typing import Callable, override
+from typing import Callable, TypedDict, override
 
 import jax
 import jax.numpy as jnp
@@ -25,12 +24,14 @@ from matplotlib.figure import Figure
 from apps.plugins import (
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact, JSONDict, JSONValue
+from apps.runtime.handler import Artifact, JSONDict, JSONValue, RunHandler
+from apps.runtime.logger import JaxLogger
 
-### Preamble ###
 
-# Start logger
-log = logging.getLogger(__name__)
+class HMoGMetrics(TypedDict):
+    train_ll: Array
+    test_ll: Array
+    train_average_bic: Array
 
 
 @dataclass(frozen=True)
@@ -189,3 +190,36 @@ def plot_divergence_matrix(
     ax.grid(which="minor", color="w", linestyle="-", linewidth=0.5)
 
     return fig
+
+
+def log_artifacts[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
+    handler: RunHandler,
+    dataset: ClusteringDataset,
+    logger: JaxLogger,
+    model: DifferentiableHMoG[ObsRep, LatRep],
+    epoch: int,
+    params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]] | None = None,
+) -> None:
+    """Generate and save plots from artifacts.
+
+    Args:
+        handler: Run handler containing saved artifacts
+        dataset: Dataset used for visualization
+        logger: Logger for saving artifacts and figures
+        model: Model used for analysis and artifact generation
+        params: If provided, generate new artifacts from these parameters
+        epoch: Specific epoch to analyze, defaults to latest
+    """
+    # from_scratch if params is provided
+    if params is not None:
+        prototypes = get_component_prototypes(model, params)
+        divergences = get_component_divergences(model, params)
+        handler.save_params(epoch, params.array)
+    else:
+        prototypes = handler.load_artifact(epoch, Prototypes)
+        divergences = handler.load_artifact(epoch, Divergences)
+
+    # Plot and save
+    plot_prototypes = prototypes_plotter(dataset)
+    logger.log_artifact(handler, epoch, prototypes, plot_prototypes)
+    logger.log_artifact(handler, epoch, divergences, plot_divergence_matrix)

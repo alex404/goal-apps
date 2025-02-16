@@ -70,11 +70,30 @@ def train(overrides: list[str] = overrides, dry_run: bool = train_dry_run):
 
     # Train model
     log.info("Beginning training...")
-    model.run_experiment(key, handler, dataset, logger)
+    model.train(key, handler, dataset, logger)
 
     log.info("Training complete.")
     logger.finalize(handler)
     log.info("Logging complete, exiting.")
+
+
+@main.command()
+def analyze(overrides: list[str] = overrides):
+    """Analyze training results.
+
+    Generate visualizations and compute metrics for a trained model.
+    Results are saved to the runs directory.
+
+    Example:
+        goal clustering analyze run_name=my_exp
+    """
+    handler, dataset, model, logger = initialize_run(ClusteringRunConfig, overrides)
+    key = jax.random.PRNGKey(int.from_bytes(os.urandom(4), byteorder="big"))
+
+    # Run analysis
+    log.info("Beginning analysis...")
+    model.analyze(key, handler, dataset, logger)
+    log.info("Analysis complete.")
 
 
 sweep_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and exit")

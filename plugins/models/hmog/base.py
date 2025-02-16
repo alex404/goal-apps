@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, TypedDict
+from typing import Callable
 
 import jax
 import jax.numpy as jnp
@@ -23,7 +23,6 @@ from goal.models import (
     Normal,
 )
 from hydra.core.config_store import ConfigStore
-from jax import Array
 from omegaconf import MISSING
 
 from apps.configs import ClusteringModelConfig
@@ -73,15 +72,15 @@ class HMoGConfig(ClusteringModelConfig):
     stage3_epochs: int = 100
     stage2_learning_rate: float = 1e-3
     stage3_learning_rate: float = 3e-4
+    obs_jitter: float = 1e-7
+    obs_min_var: float = 1e-6
+    from_scratch: bool = False
+    analysis_epoch: int | None = None
 
 
 # Register config
 cs = ConfigStore.instance()
 cs.store(group="model", name="hmog", node=HMoGConfig)
-
-# Globals
-OBS_JITTER = 1e-7
-OBS_MIN_VAR = 1e-6
 
 
 ### Helper Functions ###
@@ -126,9 +125,3 @@ def bound_hmog_mixture_probabilities[
         model.upr_hrm, mix_params, min_prob
     )
     return model.join_conjugated(lkl_params, bounded_mix_params)
-
-
-class HMoGMetrics(TypedDict):
-    train_ll: Array
-    test_ll: Array
-    train_average_bic: Array
