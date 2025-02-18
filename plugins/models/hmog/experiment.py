@@ -146,7 +146,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             ]
             components = jnp.stack(component_list)
             mix_params = uh.join_natural_mixture(
-                uh.comp_man.natural_point(components), cat_params
+                uh.cmp_man.natural_point(components), cat_params
             )
 
         int_noise = 0.1 * jax.random.normal(key_int, self.model.int_man.shape)
