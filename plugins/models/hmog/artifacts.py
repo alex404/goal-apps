@@ -306,8 +306,13 @@ def hierarchy_plotter(
         prototype_shape = prototype_artifacts[0].shape
 
         # Compute figure dimensions
+
         dendrogram_width = 6  # Fixed width for dendrogram
-        prototype_width = 4  # Fixed width for each prototype
+        height, width = prototype_shape
+        prototype_width = (
+            width / height * dendrogram_width
+        )  # Scale width based on shape
+        spacing = 0.5
         spacing = 0.5  # Spacing between dendrogram and prototypes
 
         # Total figure width

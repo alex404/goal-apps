@@ -151,12 +151,12 @@ class NeuralTracesDataset(ClusteringDataset):
             ObservableArtifact containing the chirp response for visualization
         """
         # Extract chirp response
-        chirp_response = observable[: self.chirp_len]
-        y_height = np.round(self.chirp_len / 2)
-        return ObservableArtifact(obs=chirp_response, shape=(y_height, self.chirp_len))
+        x_height = observable.shape[0]
+        y_height = np.round(x_height / 2)
+        return ObservableArtifact(obs=observable, shape=(y_height, x_height))
 
-    @override
     @staticmethod
+    @override
     def paint_observable(observable: ObservableArtifact, axes: Axes) -> None:
         """Visualize a single neural trace.
 
@@ -164,9 +164,60 @@ class NeuralTracesDataset(ClusteringDataset):
             observable: ObservableArtifact containing the trace to visualize
             axes: Matplotlib axes to plot on
         """
-        # Plot the time series
-        obs = observable.obs
-        axes.plot(obs, color="black")
-        axes.set_xticks([])  # Remove x-axis ticks for cleaner visualization
-        axes.spines["top"].set_visible(False)
-        axes.spines["right"].set_visible(False)
+        axes.set_axis_off()
+
+        # Define column widths and spacing (all in unit square coordinates)
+        padding = 0.05  # Spacing between columns
+        column_width = (1.0 - 2 * padding) / 3.0  # Split evenly among 3 columns
+
+        # Define bounds for each column
+        chirp_bounds = (0.0, 0.0, column_width, 1.0)  # Left column
+        bar_bounds = (column_width + padding, 0.0, column_width, 1.0)  # Middle column
+        feat_bounds = (
+            2 * (column_width + padding),
+            0.0,
+            column_width,
+            1.0,
+        )  # Right column
+
+        # Create inset axes for each column
+        chirp_ax = axes.inset_axes(chirp_bounds, transform=axes.transAxes)
+        bar_ax = axes.inset_axes(bar_bounds, transform=axes.transAxes)
+        feat_ax = axes.inset_axes(feat_bounds, transform=axes.transAxes)
+
+        chirp_len = 249
+
+        bar_len = 32
+        chirp_response = observable.obs[:chirp_len]
+        bar_response = observable.obs[chirp_len : chirp_len + bar_len]
+        features = observable.obs[chirp_len + bar_len :]
+
+        # Plot chirp response
+        chirp_ax.plot(chirp_response, color="black", linewidth=1)
+        chirp_ax.set_title("Chirp Response", fontsize=8)
+        chirp_ax.set_xticks([])
+        chirp_ax.spines["top"].set_visible(False)
+        chirp_ax.spines["right"].set_visible(False)
+
+        # Plot bar response
+        bar_ax.plot(bar_response, color="black", linewidth=1)
+        bar_ax.set_title("Bar Response", fontsize=8)
+        bar_ax.set_xticks([])
+        bar_ax.spines["top"].set_visible(False)
+        bar_ax.spines["right"].set_visible(False)
+
+        # Show features as text
+        feat_ax.axis("off")
+        feature_names = ["Bar DS p-value", "Bar OS p-value", "ROI size (μm²)"]
+        feature_text = "\n".join(
+            f"{name}: {value:.3f}" for name, value in zip(feature_names, features)
+        )
+        feat_ax.text(
+            0.05,
+            0.5,
+            feature_text,
+            fontsize=8,
+            va="center",
+            ha="left",
+            transform=feat_ax.transAxes,
+        )
