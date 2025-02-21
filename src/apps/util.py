@@ -81,8 +81,7 @@ def create_sweep_config(overrides: list[str]) -> dict[str, Any]:
             "${env}",
             "${interpreter}",
             "-m",  # Use python module mode
-            "apps.goal",  # Direct module reference
-            "clustering",
+            "apps.cli",  # Direct module reference
             "train",
             "${args_no_hyphens}",
         ],
