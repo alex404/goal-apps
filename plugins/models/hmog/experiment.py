@@ -392,7 +392,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         )
 
         stage3_optimizer: Optimizer[Natural, DifferentiableHMoG[ObsRep, LatRep]] = (
-            Optimizer.adam(self.model.upr_hrm, learning_rate=self.stage3_learning_rate)
+            Optimizer.adam(self.model, learning_rate=self.stage3_learning_rate)
         )
         stage3_opt_state = stage3_optimizer.init(params1)
 
