@@ -31,10 +31,12 @@ from apps.plugins import (
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
-from .artifacts import HMoGMetrics, log_artifacts
+from .artifacts import log_artifacts
 from .base import (
+    HMoGMetrics,
     RepresentationType,
-    bound_hmog_mixture_probabilities,
+    bound_hmog_parameters,
+    bound_lgm_means,
     bound_mixture_probabilities,
     fori,
 )
@@ -59,6 +61,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     stage3_epochs: int
     stage2_learning_rate: float
     stage3_learning_rate: float
+    min_prob: float
     obs_jitter: float
     obs_min_var: float
     from_scratch: bool
@@ -77,6 +80,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         stage3_epochs: int,
         stage2_learning_rate: float,
         stage3_learning_rate: float,
+        min_prob: float,
         obs_jitter: float,
         obs_min_var: float,
         from_scratch: bool,
@@ -88,6 +92,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         self.stage3_epochs = stage3_epochs
         self.stage2_learning_rate = stage2_learning_rate
         self.stage3_learning_rate = stage3_learning_rate
+        self.min_prob = min_prob
         self.obs_jitter = obs_jitter
         self.obs_min_var = obs_min_var
         self.from_scratch = from_scratch
@@ -203,13 +208,13 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             )
 
             n_samps = train_sample.shape[0]
-            epoch_train_bic = (
+            epoch_negative_bic = -(
                 self.model.dim * jnp.log(n_samps) / n_samps - 2 * epoch_train_ll
             )
             metrics = HMoGMetrics(
                 train_ll=epoch_train_ll,
                 test_ll=epoch_test_ll,
-                train_average_bic=epoch_train_bic,
+                negative_bic=epoch_negative_bic,
             )
             logger.log_metrics({k: metrics[k] for k in metrics}, epoch + 1)
 
@@ -279,13 +284,11 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             def stage1_step(
                 epoch: int, lgm_params: Point[Natural, LinearGaussianModel[ObsRep]]
             ) -> Point[Natural, LinearGaussianModel[ObsRep]]:
-                means = lh.expectation_step(lgm_params, train_sample)
-                obs_means, int_means, lat_means = lh.split_params(means)
-                obs_means = lh.obs_man.regularize_covariance(
-                    obs_means, self.obs_jitter, self.obs_min_var
+                lgm_means = lh.expectation_step(lgm_params, train_sample)
+                lgm_means = bound_lgm_means(
+                    lh, lgm_means, self.obs_min_var, self.obs_jitter
                 )
-                means = lh.join_params(obs_means, int_means, lat_means)
-                params1 = lh.to_natural(means)
+                params1 = lh.to_natural(lgm_means)
                 lkl_params = lh.likelihood_function(params1)
                 lgm_params = lh.join_conjugated(lkl_params, z)
                 hmog_params = self.model.join_conjugated(lkl_params, mix_params0)
@@ -327,7 +330,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             grad = self.model.upr_hrm.grad(lambda p: stage2_loss(p, batch), params)
 
             opt_state, params = stage2_optimizer.update(opt_state, grad, params)
-            params = bound_mixture_probabilities(self.model.upr_hrm, params)
+            params = bound_mixture_probabilities(
+                self.model.upr_hrm, params, self.min_prob
+            )
             return ((opt_state, params), None)
 
         def stage2_epoch(
@@ -411,7 +416,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             opt_state, params = carry
             grad = self.model.grad(lambda p: stage3_loss(p, batch), params)
             opt_state, params = stage3_optimizer.update(opt_state, grad, params)
-            params = bound_hmog_mixture_probabilities(self.model, params)
+            params = bound_hmog_parameters(
+                self.model, params, self.min_prob, self.obs_min_var, self.obs_jitter
+            )
             return (opt_state, params), None
 
         def stage3_epoch(

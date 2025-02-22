@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Callable, TypedDict, override
+from typing import Callable, override
 
 import jax
 import jax.numpy as jnp
@@ -29,15 +29,6 @@ from apps.plugins import (
 )
 from apps.runtime.handler import Artifact, JSONDict, RunHandler
 from apps.runtime.logger import JaxLogger
-
-### Metrics ###
-
-
-class HMoGMetrics(TypedDict):
-    train_ll: Array
-    test_ll: Array
-    train_average_bic: Array
-
 
 ### Prototypes ###
 
@@ -275,7 +266,7 @@ class ClusterHierarchy(Artifact):
 
     @classmethod
     @override
-    def from_json(cls, json_dict: JSONDict) -> ClusterHierarchy:
+    def from_json(cls, json_dict: JSONDict) -> ClusterHierarchy:  # pyright: ignore[reportIncompatibleMethodOverride]
         return cls(
             prototypes=[jnp.array(p) for p in json_dict["prototypes"]],
             linkage_matrix=np.array(json_dict["linkage_matrix"], dtype=np.float64),
@@ -350,6 +341,9 @@ def hierarchy_plotter(
         leaf_order = scipy.cluster.hierarchy.dendrogram(
             hierarchy.linkage_matrix, no_plot=True
         )["leaves"]
+
+        if leaf_order is None:
+            raise ValueError("Failed to get leaf order from dendrogram.")
 
         # Plot prototypes in right column
         for i, leaf_idx in enumerate(leaf_order):
