@@ -10,64 +10,19 @@ from typing import Callable
 import jax
 import matplotlib.pyplot as plt
 import wandb as wandb
-from jax import Array
 from matplotlib.figure import Figure
 
-from .handler import Artifact, Metrics, RunHandler
+from .handler import Artifact, MetricDict, MetricHistory, RunHandler
 from .visualization import plot_metrics
 
 ## Preamble ###
-
 
 log = logging.getLogger(__name__)
 
 ### Jit-Compatible Loggers ###
 
-# Helpers
-
-
-def wandb_metric_key(name: str) -> str:
-    """Convert metric names to pretty wandb format.
-
-    Examples:
-        train_ll -> Metrics/Train Log Likelihood
-        test_average_bic -> Metrics/Test Average BIC
-    """
-    # Special case abbreviations
-    replacements = {
-        "ll": "Log-Likelihood",
-        "bic": "BIC",  # Bayesian Information Criterion
-    }
-
-    # Split on underscores
-    parts = name.split("_")
-
-    # Process each part
-    pretty_parts = []
-    i = 0
-    while i < len(parts):
-        part = parts[i]
-
-        # Check if this part plus maybe next part matches a replacement
-        for abbrev, full in replacements.items():
-            if i < len(parts) - 1 and f"{parts[i]}_{parts[i + 1]}" == abbrev:
-                pretty_parts.append(full)
-                i += 2
-                break
-            if part == abbrev:
-                pretty_parts.append(full)
-                i += 1
-                break
-        else:
-            # No special case found, just capitalize
-            pretty_parts.append(part.capitalize())
-            i += 1
-
-    return f"Metrics/{' '.join(pretty_parts)}"
-
-
 # Global buffer for metrics
-_metric_buffer: Metrics = {}
+_metric_buffer: MetricHistory = {}
 
 
 @dataclass(frozen=True)
@@ -120,28 +75,43 @@ class JaxLogger:
             global _metric_buffer
             _metric_buffer.clear()
 
-    def log_metrics(self, values: dict[str, Array], epoch: int) -> None:
+    def log_metrics(self, metrics: MetricDict, epoch: int) -> None:
         """Log metrics. Safe to call within jax.jit-compiled functions."""
 
-        def _log_values(values_dict: dict[str, Array], epoch: int) -> None:
-            float_values = {k: float(v) for k, v in values_dict.items()}
-            epoch = int(epoch)
+        def _log_values(metrics_dict: MetricDict, epoch: int) -> None:
+            # Convert arrays to floats
+            float_metrics = {
+                key: (display_name, int(level), float(value))
+                for key, (display_name, level, value) in metrics_dict.items()
+            }
 
             if self.use_local:
                 global _metric_buffer
-                for metric, value in float_values.items():
-                    if metric not in _metric_buffer:
-                        _metric_buffer[metric] = []
-                    _metric_buffer[metric].append((epoch, value))
-                    log.info("epoch %4d | %14s | %10.6f", epoch, metric, value)
+                for key, (display_name, level, value) in float_metrics.items():
+                    if key not in _metric_buffer:
+                        _metric_buffer[key] = []
+                    _metric_buffer[key].append((int(epoch), value))
+                    log.log(
+                        level,
+                        "epoch %4d | %14s | %10.6f",
+                        epoch,
+                        display_name,
+                        value,
+                    )
 
             if self.use_wandb:
-                pretty_keys = {
-                    wandb_metric_key(key): value for key, value in float_values.items()
-                }
-                wandb.log({"epoch": epoch, **pretty_keys})
+                # Single wandb call with all metrics
+                wandb.log(
+                    {
+                        "epoch": epoch,
+                        **{
+                            display_name: value
+                            for _, (display_name, _, value) in float_metrics.items()
+                        },
+                    }
+                )
 
-        jax.debug.callback(_log_values, values, epoch)
+        jax.debug.callback(_log_values, metrics, epoch)
 
     def log_artifact[T: Artifact](
         self,

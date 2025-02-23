@@ -15,7 +15,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
 
-from ..configs import RunConfig
+from ..configs import LogLevel, RunConfig
 from ..plugins import Dataset, Model
 from ..util import print_config_tree
 from .handler import RunHandler
@@ -44,7 +44,7 @@ THEME = Theme(
 ### Initialization Helpers ###
 
 
-def setup_logging(run_dir: Path) -> None:
+def setup_logging(run_dir: Path, log_level: LogLevel) -> None:
     """Configure logging for the entire application with pretty formatting."""
     # Remove all handlers associated with the root logger object
     for handler in logging.root.handlers[:]:
@@ -87,18 +87,21 @@ def setup_logging(run_dir: Path) -> None:
     console_format = "%(name)-20s | %(message)s"
     file_format = "%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s"
 
+    level = log_level.value
+
     console_handler.setFormatter(logging.Formatter(console_format))
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(level)
 
     # File handler (keeping this as standard logging for clean logs)
+
     log_file = run_dir / "training.log"
     file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(logging.Formatter(file_format))
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(level)
 
     # Set up root logger
     logging.root.handlers = [console_handler, file_handler]
-    logging.root.setLevel(logging.INFO)
+    logging.root.setLevel(level)
 
 
 def setup_jax(device: str = "cpu", disable_jit: bool = False) -> None:
@@ -138,7 +141,7 @@ def initialize_run(
 
     setup_matplotlib_style()
 
-    setup_logging(handler.run_dir)
+    setup_logging(handler.run_dir, log_level=cfg.log_level)
 
     log.info(f"Run name: {handler.name}")
     log.info(f"Project Root: {handler.project_root}")

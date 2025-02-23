@@ -24,16 +24,16 @@ from goal.models import (
 )
 from jax import Array
 
+from apps.configs import STATS_LEVEL
 from apps.plugins import (
     ClusteringDataset,
     ClusteringModel,
 )
-from apps.runtime.handler import RunHandler
+from apps.runtime.handler import MetricDict, RunHandler
 from apps.runtime.logger import JaxLogger
 
 from .artifacts import log_artifacts
 from .base import (
-    HMoGMetrics,
     RepresentationType,
     bound_hmog_parameters,
     bound_lgm_means,
@@ -199,7 +199,8 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     ) -> None:
         """Log metrics for an epoch."""
 
-        def compute_metrics():
+        def compute_metrics() -> None:
+            # Compute core performance metrics
             epoch_train_ll = self.model.average_log_observable_density(
                 hmog_params, train_sample
             )
@@ -211,14 +212,86 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             epoch_negative_bic = -(
                 self.model.dim * jnp.log(n_samps) / n_samps - 2 * epoch_train_ll
             )
-            metrics = HMoGMetrics(
-                train_ll=epoch_train_ll,
-                test_ll=epoch_test_ll,
-                negative_bic=epoch_negative_bic,
-            )
-            logger.log_metrics({k: metrics[k] for k in metrics}, epoch + 1)
+            info = jnp.array(logging.INFO)
 
-        def no_op():
+            # Build metrics dictionary with display names and levels
+            metrics: MetricDict = {
+                "train_ll": (
+                    "Performance/Train Log-Likelihood",
+                    info,
+                    epoch_train_ll,
+                ),
+                "test_ll": (
+                    "Performance/Test Log-Likelihood",
+                    info,
+                    epoch_test_ll,
+                ),
+                "negative_bic": (
+                    "Performance/Negative BIC",
+                    info,
+                    epoch_negative_bic,
+                ),
+            }
+
+            # Add parameter statistics at DEBUG level
+            lkl_params, mix_params = self.model.split_conjugated(hmog_params)
+
+            # Observable parameter statistics
+            with self.model.lwr_hrm as lh:
+                obs_params, _ = lh.lkl_man.split_params(lkl_params)
+                _, obs_prs = lh.obs_man.split_location_precision(obs_params)
+
+                stats = jnp.array(STATS_LEVEL)
+
+                # Natural parameters
+                metrics.update(
+                    {
+                        "obs_nat_min": (
+                            "Stability/Observable Precision Min",
+                            stats,
+                            jnp.min(obs_prs.array),
+                        ),
+                        "obs_nat_median": (
+                            "Stability/Observable Precision Median",
+                            stats,
+                            jnp.median(obs_prs.array),
+                        ),
+                        "obs_nat_max": (
+                            "Stability/Observable Precision Max",
+                            stats,
+                            jnp.max(obs_prs.array),
+                        ),
+                    }
+                )
+
+            # Mixture parameter statistics
+            with self.model.upr_hrm as uh:
+                _, cat_params = uh.split_natural_mixture(mix_params)
+                with uh.lat_man as lm:
+                    probs = lm.to_probs(lm.to_mean(cat_params))
+                    metrics.update(
+                        {
+                            "mix_prob_min": (
+                                "Stability/Mixture Probability Min",
+                                stats,
+                                jnp.min(probs),
+                            ),
+                            "mix_prob_median": (
+                                "Stability/Mixture Probability Median",
+                                stats,
+                                jnp.median(probs),
+                            ),
+                            "mix_prob_max": (
+                                "Stability/Mixture Probability Max",
+                                stats,
+                                jnp.max(probs),
+                            ),
+                        }
+                    )
+
+            logger.log_metrics(metrics, epoch + 1)
+
+        def no_op() -> None:
             return None
 
         jax.lax.cond(epoch % log_freq == 0, compute_metrics, no_op)
@@ -303,7 +376,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         # Stage 2: Gradient descent for mixture components
         stage2_optimizer: Optimizer[
             Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]
-        ] = Optimizer.adam(self.model.upr_hrm, learning_rate=self.stage2_learning_rate)
+        ] = Optimizer.adamw(self.model.upr_hrm, learning_rate=self.stage2_learning_rate)
         stage2_opt_state = stage2_optimizer.init(mix_params0)
 
         def stage2_loss(
@@ -397,7 +470,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         )
 
         stage3_optimizer: Optimizer[Natural, DifferentiableHMoG[ObsRep, LatRep]] = (
-            Optimizer.adam(self.model, learning_rate=self.stage3_learning_rate)
+            Optimizer.adamw(self.model, learning_rate=self.stage3_learning_rate)
         )
         stage3_opt_state = stage3_optimizer.init(params1)
 

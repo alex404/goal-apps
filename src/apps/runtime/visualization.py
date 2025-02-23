@@ -9,7 +9,7 @@ from jax import Array
 from matplotlib.figure import Figure
 from sklearn.metrics import accuracy_score
 
-from .handler import Metrics
+from .handler import MetricHistory
 
 
 def setup_matplotlib_style() -> None:
@@ -21,7 +21,7 @@ def setup_matplotlib_style() -> None:
         plt.style.use(str(style_path))
 
 
-def plot_metrics(metrics: Metrics) -> Figure:
+def plot_metrics(metrics: MetricHistory) -> Figure:
     """Create a summary plot of all metrics over training.
 
     Args:

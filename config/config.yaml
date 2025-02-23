@@ -7,6 +7,7 @@ device: gpu
 jit: true
 use_local: true
 use_wandb: false
+log_level: INFO
 project: "goal"
 group: null
 job_type: null

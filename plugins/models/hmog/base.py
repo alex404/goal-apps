@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, TypedDict
+from typing import Callable
 
 import jax
 import jax.numpy as jnp
@@ -25,7 +25,6 @@ from goal.models import (
     Normal,
 )
 from hydra.core.config_store import ConfigStore
-from jax import Array
 from omegaconf import MISSING
 
 from apps.configs import ClusteringModelConfig
@@ -87,12 +86,6 @@ cs = ConfigStore.instance()
 cs.store(group="model", name="hmog", node=HMoGConfig)
 
 ### Metrics ###
-
-
-class HMoGMetrics(TypedDict):
-    train_ll: Array
-    test_ll: Array
-    negative_bic: Array
 
 
 ### Helper Functions ###

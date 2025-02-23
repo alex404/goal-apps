@@ -15,9 +15,9 @@ from matplotlib.figure import Figure
 
 from ..util import to_snake_case
 
-type Metrics = dict[str, list[tuple[int, float]]]
-
-### Loggers ###
+type MetricInfo = tuple[str, Array, Array]  # (display_name, level, value)
+type MetricDict = dict[str, MetricInfo]  # Single snapshot
+type MetricHistory = dict[str, list[tuple[int, float]]]  # Time series### Loggers ###
 
 
 ### Path and IO Handler ###
@@ -128,7 +128,7 @@ class RunHandler:
         params_list = self._load_json(path)
         return jax.numpy.array(params_list)
 
-    def save_metrics(self, metrics: Metrics) -> None:
+    def save_metrics(self, metrics: MetricHistory) -> None:
         """Save training metrics."""
         self._save_json(metrics, Path("metrics.json"))
 
@@ -137,7 +137,7 @@ class RunHandler:
         path = self.run_dir / "metrics.png"
         fig.savefig(path, bbox_inches="tight")
 
-    def load_metrics(self) -> Metrics:
+    def load_metrics(self) -> MetricHistory:
         """Load training metrics."""
         return self._load_json(Path("metrics.json"))  # pyright: ignore[reportReturnType]
 

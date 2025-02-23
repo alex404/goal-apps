@@ -1,4 +1,6 @@
+import logging
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from omegaconf import MISSING
@@ -7,6 +9,19 @@ from omegaconf import MISSING
 
 
 # Basic Configs
+
+# Define a custom level
+STATS_LEVEL = 15  # Between INFO (20) and DEBUG (10)
+logging.addLevelName(STATS_LEVEL, "STATS")
+
+
+class LogLevel(Enum):
+    DEBUG = logging.DEBUG
+    INFO = logging.INFO
+    STATS = STATS_LEVEL
+    WARNING = logging.WARNING
+    ERROR = logging.ERROR
+    CRITICAL = logging.CRITICAL
 
 
 @dataclass
@@ -18,6 +33,7 @@ class RunConfig:
     jit: bool
     use_local: bool
     use_wandb: bool
+    log_level: LogLevel
     project: str
     group: str | None
     job_type: str | None
