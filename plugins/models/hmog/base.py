@@ -76,8 +76,10 @@ class HMoGConfig(ClusteringModelConfig):
     stage2_learning_rate: float = 1e-3
     stage3_learning_rate: float = 3e-4
     min_prob: float = 1e-3
-    obs_jitter: float = 1e-8
-    obs_min_var: float = 1e-7
+    obs_jitter: float = 0
+    obs_min_var: float = 1e-5
+    lat_jitter: float = 0
+    lat_min_var: float = 1e-5
     from_scratch: bool = False
     analysis_epoch: int | None = None
 
@@ -99,30 +101,36 @@ def fori[X](lower: int, upper: int, body_fun: Callable[[Array, X], X], init: X) 
 ### Stabilizers ###
 
 
-def bound_lgm_means[Rep: PositiveDefinite](
+def bound_observable_variances[Rep: PositiveDefinite](
     model: LinearGaussianModel[Rep],
     means: Point[Mean, LinearGaussianModel[Rep]],
     min_var: float,
     jitter: float,
 ) -> Point[Mean, LinearGaussianModel[Rep]]:
-    """Regularize covariance parameters in LinearGaussianModel mean coordinates."""
+    """Regularize observable covariance parameters in mean coordinates."""
     obs_means, int_means, lat_means = model.split_params(means)
-
-    # Regularize observation covariance
     bounded_obs_means = model.obs_man.regularize_covariance(obs_means, jitter, min_var)
-
-    # Rejoin parameters
     return model.join_params(bounded_obs_means, int_means, lat_means)
 
 
-def bound_mixture_probabilities[Rep: PositiveDefinite](
+def bound_mixture_parameters[Rep: PositiveDefinite](
     model: DifferentiableMixture[FullNormal, Normal[Rep]],
     params: Point[Natural, DifferentiableMixture[FullNormal, Normal[Rep]]],
     min_prob: float,
+    min_var: float,
+    jitter: float,
 ) -> Point[Natural, DifferentiableMixture[FullNormal, Normal[Rep]]]:
-    """Bound mixture probabilities away from 0."""
-    comps, cat_params = model.split_natural_mixture(params)
+    """Bound mixture probabilities and latent variances."""
+    lkl_params, cat_params = model.split_conjugated(params)
+    lat_params, int_params = model.lkl_man.split_params(lkl_params)
 
+    # Bound latent variances
+    with model.obs_man as om:
+        lat_means = om.to_mean(lat_params)
+        bounded_lat_means = om.regularize_covariance(lat_means, jitter, min_var)
+        bounded_lat_params = om.to_natural(bounded_lat_means)
+
+    # Bound categorical probabilities
     with model.lat_man as lm:
         cat_means = lm.to_mean(cat_params)
         probs = lm.to_probs(cat_means)
@@ -130,7 +138,8 @@ def bound_mixture_probabilities[Rep: PositiveDefinite](
         bounded_probs = bounded_probs / jnp.sum(bounded_probs)
         bounded_cat_params = lm.to_natural(lm.from_probs(bounded_probs))
 
-    return model.join_natural_mixture(comps, bounded_cat_params)
+    bounded_lkl_params = model.lkl_man.join_params(bounded_lat_params, int_params)
+    return model.join_conjugated(bounded_lkl_params, bounded_cat_params)
 
 
 def bound_hmog_parameters[
@@ -140,30 +149,27 @@ def bound_hmog_parameters[
     model: DifferentiableHMoG[ObsRep, LatRep],
     params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
     min_prob: float,
-    min_var: float,
-    jitter: float,
+    obs_min_var: float,
+    obs_jitter: float,
+    lat_min_var: float,
+    lat_jitter: float,
 ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
-    """Bound both mixture probabilities and observable covariance parameters in a single operation."""
-    # Split once
+    """Apply all parameter bounds to HMoG."""
+    # Split parameters
     lkl_params, mix_params = model.split_conjugated(params)
 
-    # Bound mixture probabilities
-    bounded_mix_params = bound_mixture_probabilities(
-        model.upr_hrm, mix_params, min_prob
+    # Bound mixture parameters
+    bounded_mix_params = bound_mixture_parameters(
+        model.upr_hrm, mix_params, min_prob, lat_min_var, lat_jitter
     )
-    params = model.join_conjugated(lkl_params, bounded_mix_params)
 
     # Bound observable parameters
-    obs_params, int_params, mix_params = model.split_params(params)
-
-    # Convert to mean coordinates for bounding
+    obs_params, int_params = model.lkl_man.split_params(lkl_params)
     obs_means = model.obs_man.to_mean(obs_params)
-
-    # Apply regularization in mean coordinates
-    bounded_obs_means = model.obs_man.regularize_covariance(obs_means, jitter, min_var)
-
-    # Convert back to natural coordinates
+    bounded_obs_means = model.obs_man.regularize_covariance(
+        obs_means, obs_jitter, obs_min_var
+    )
     bounded_obs_params = model.obs_man.to_natural(bounded_obs_means)
+    bounded_lkl_params = model.lkl_man.join_params(bounded_obs_params, int_params)
 
-    # Join only once at the end
-    return model.join_params(bounded_obs_params, int_params, mix_params)
+    return model.join_conjugated(bounded_lkl_params, bounded_mix_params)

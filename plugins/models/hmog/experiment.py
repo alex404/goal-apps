@@ -36,8 +36,8 @@ from .artifacts import log_artifacts
 from .base import (
     RepresentationType,
     bound_hmog_parameters,
-    bound_lgm_means,
-    bound_mixture_probabilities,
+    bound_mixture_parameters,
+    bound_observable_variances,
     fori,
 )
 
@@ -64,6 +64,8 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     min_prob: float
     obs_jitter: float
     obs_min_var: float
+    lat_jitter: float
+    lat_min_var: float
     from_scratch: bool
     analysis_epoch: int | None
 
@@ -83,6 +85,8 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         min_prob: float,
         obs_jitter: float,
         obs_min_var: float,
+        lat_jitter: float,
+        lat_min_var: float,
         from_scratch: bool,
         analysis_epoch: int,
     ) -> None:
@@ -94,7 +98,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         self.stage3_learning_rate = stage3_learning_rate
         self.min_prob = min_prob
         self.obs_jitter = obs_jitter
+        self.lat_jitter = lat_jitter
         self.obs_min_var = obs_min_var
+        self.lat_min_var = lat_min_var
         self.from_scratch = from_scratch
         self.analysis_epoch = analysis_epoch
 
@@ -266,9 +272,11 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
             # Mixture parameter statistics
             with self.model.upr_hrm as uh:
-                _, cat_params = uh.split_natural_mixture(mix_params)
+                lkl_params, cat_params = uh.split_conjugated(mix_params)
                 with uh.lat_man as lm:
                     probs = lm.to_probs(lm.to_mean(cat_params))
+                    lat_params, _ = uh.lkl_man.split_params(lkl_params)
+                    _, lat_prs = uh.obs_man.split_location_precision(lat_params)
                     metrics.update(
                         {
                             "mix_prob_min": (
@@ -285,6 +293,21 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                                 "Stability/Mixture Probability Max",
                                 stats,
                                 jnp.max(probs),
+                            ),
+                            "lat_nat_min": (
+                                "Stability/Latent Precision Min",
+                                stats,
+                                jnp.min(lat_prs.array),
+                            ),
+                            "lat_nat_median": (
+                                "Stability/Latent Precision Median",
+                                stats,
+                                jnp.median(lat_prs.array),
+                            ),
+                            "lat_nat_max": (
+                                "Stability/Latent Precision Max",
+                                stats,
+                                jnp.max(lat_prs.array),
                             ),
                         }
                     )
@@ -360,7 +383,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 epoch: Array, lgm_params: Point[Natural, LinearGaussianModel[ObsRep]]
             ) -> Point[Natural, LinearGaussianModel[ObsRep]]:
                 lgm_means = lh.expectation_step(lgm_params, train_sample)
-                lgm_means = bound_lgm_means(
+                lgm_means = bound_observable_variances(
                     lh, lgm_means, self.obs_min_var, self.obs_jitter
                 )
                 params1 = lh.to_natural(lgm_means)
@@ -405,8 +428,12 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             grad = self.model.upr_hrm.grad(lambda p: stage2_loss(p, batch), params)
 
             opt_state, params = stage2_optimizer.update(opt_state, grad, params)
-            params = bound_mixture_probabilities(
-                self.model.upr_hrm, params, self.min_prob
+            params = bound_mixture_parameters(
+                self.model.upr_hrm,
+                params,
+                self.min_prob,
+                self.obs_min_var,
+                self.obs_jitter,
             )
             return ((opt_state, params), None)
 
@@ -492,7 +519,13 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             grad = self.model.grad(lambda p: stage3_loss(p, batch), params)
             opt_state, params = stage3_optimizer.update(opt_state, grad, params)
             params = bound_hmog_parameters(
-                self.model, params, self.min_prob, self.obs_min_var, self.obs_jitter
+                self.model,
+                params,
+                self.min_prob,
+                self.obs_min_var,
+                self.obs_jitter,
+                self.lat_min_var,
+                self.lat_jitter,
             )
             return (opt_state, params), None
 
