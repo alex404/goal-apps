@@ -10,6 +10,7 @@ from typing import Callable
 import jax
 import matplotlib.pyplot as plt
 import wandb as wandb
+from jax import Array
 from matplotlib.figure import Figure
 
 from .handler import Artifact, MetricDict, MetricHistory, RunHandler
@@ -75,10 +76,11 @@ class JaxLogger:
             global _metric_buffer
             _metric_buffer.clear()
 
-    def log_metrics(self, metrics: MetricDict, epoch: int) -> None:
+    def log_metrics(self, metrics: MetricDict, epoch: Array) -> None:
         """Log metrics. Safe to call within jax.jit-compiled functions."""
 
-        def _log_values(metrics_dict: MetricDict, epoch: int) -> None:
+        def _log_values(metrics_dict: MetricDict, epoch_array: Array) -> None:
+            epoch = int(epoch_array)
             # Convert arrays to floats
             float_metrics = {
                 key: (display_name, int(level), float(value))

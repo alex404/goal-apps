@@ -25,6 +25,7 @@ from goal.models import (
     Normal,
 )
 from hydra.core.config_store import ConfigStore
+from jax import Array
 from omegaconf import MISSING
 
 from apps.configs import ClusteringModelConfig
@@ -91,7 +92,7 @@ cs.store(group="model", name="hmog", node=HMoGConfig)
 ### Helper Functions ###
 
 
-def fori[X](lower: int, upper: int, body_fun: Callable[[int, X], X], init: X) -> X:
+def fori[X](lower: int, upper: int, body_fun: Callable[[Array, X], X], init: X) -> X:
     return jax.lax.fori_loop(lower, upper, body_fun, init)  # pyright: ignore[reportUnknownVariableType]
 
 

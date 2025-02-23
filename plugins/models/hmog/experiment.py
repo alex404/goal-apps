@@ -191,7 +191,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     def log_epoch_metrics(
         self,
         logger: JaxLogger,
-        epoch: int,
+        epoch: Array,
         hmog_params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
         train_sample: Array,
         test_sample: Array,
@@ -347,7 +347,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         lkl_params0, mix_params0 = self.model.split_conjugated(init_params)
 
-        self.log_epoch_metrics(logger, -1, init_params, train_sample, test_sample)
+        self.log_epoch_metrics(
+            logger, jnp.asarray(-1), init_params, train_sample, test_sample
+        )
 
         # Stage 1: Full-batch EM for LinearGaussianModel
         with self.model.lwr_hrm as lh:
@@ -355,7 +357,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             lgm_params0 = lh.join_conjugated(lkl_params0, z)
 
             def stage1_step(
-                epoch: int, lgm_params: Point[Natural, LinearGaussianModel[ObsRep]]
+                epoch: Array, lgm_params: Point[Natural, LinearGaussianModel[ObsRep]]
             ) -> Point[Natural, LinearGaussianModel[ObsRep]]:
                 lgm_means = lh.expectation_step(lgm_params, train_sample)
                 lgm_means = bound_lgm_means(
@@ -409,7 +411,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             return ((opt_state, params), None)
 
         def stage2_epoch(
-            epoch: int,
+            epoch: Array,
             carry: tuple[
                 OptState,
                 Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
@@ -495,7 +497,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             return (opt_state, params), None
 
         def stage3_epoch(
-            epoch: int,
+            epoch: Array,
             carry: tuple[
                 OptState, Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Array
             ],
