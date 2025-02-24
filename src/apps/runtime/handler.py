@@ -11,6 +11,7 @@ from typing import Any, Self
 
 import jax
 from jax import Array
+from jax import numpy as jnp
 from matplotlib.figure import Figure
 
 from ..util import to_snake_case
@@ -139,6 +140,24 @@ class RunHandler:
     def load_metrics(self) -> MetricHistory:
         """Load training metrics."""
         return self._load_json(Path("metrics.json"))  # pyright: ignore[reportReturnType]
+
+    def save_debug_state(
+        self,
+        param_dit: dict[str, Array],
+        context: str,
+    ) -> None:
+        """Save parameter states for debugging.
+
+        Args:
+            param_dict: Dictionary mapping names to parameter states
+            context: Description of when the debug state was captured
+        """
+        debug_dir = self.run_dir / "debug" / context
+        debug_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save all parameter states
+        for name, array in param_dit.items():
+            jnp.save(debug_dir / f"{name}.npy", array)
 
     def get_available_epochs(self) -> list[int]:
         """Get all epochs where we have analysis results."""

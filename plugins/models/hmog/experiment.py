@@ -353,12 +353,20 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 lgm_means = bound_observable_variances(
                     lh, lgm_means, self.obs_min_var, self.obs_jitter
                 )
-                params1 = lh.to_natural(lgm_means)
-                lkl_params = lh.likelihood_function(params1)
+                new_lgm_params = lh.to_natural(lgm_means)
+                lkl_params = lh.likelihood_function(new_lgm_params)
                 lgm_params = lh.join_conjugated(lkl_params, z)
                 hmog_params = self.model.join_conjugated(lkl_params, mix_params0)
                 self.log_epoch_metrics(
                     logger, epoch, hmog_params, train_sample, test_sample
+                )
+                logger.monitor_params(
+                    {
+                        "original": lgm_params.array,
+                        "post_update": new_lgm_params.array,
+                    },
+                    handler,
+                    context="stage1_epoch",
                 )
                 return lgm_params
 
@@ -391,18 +399,31 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             ],
             None,
         ]:
-            opt_state, params = carry
-            grad = self.model.upr_hrm.grad(lambda p: stage2_loss(p, batch), params)
+            opt_state, mix_params = carry
+            grad = self.model.upr_hrm.grad(lambda p: stage2_loss(p, batch), mix_params)
 
-            opt_state, params = stage2_optimizer.update(opt_state, grad, params)
-            params = bound_mixture_parameters(
+            opt_state, new_mix_params = stage2_optimizer.update(
+                opt_state, grad, mix_params
+            )
+            bound_mix_params = bound_mixture_parameters(
                 self.model.upr_hrm,
-                params,
+                mix_params,
                 self.min_prob,
                 self.obs_min_var,
                 self.obs_jitter,
             )
-            return ((opt_state, params), None)
+
+            logger.monitor_params(
+                {
+                    "likelihood": lkl_params1.array,
+                    "original": mix_params.array,
+                    "post_update": new_mix_params.array,
+                    "post_bounds": bound_mix_params.array,
+                },
+                handler,
+                context="stage2_step",
+            )
+            return ((opt_state, mix_params), None)
 
         def stage2_epoch(
             epoch: Array,
@@ -482,19 +503,32 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         ) -> tuple[
             tuple[OptState, Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]], None
         ]:
-            opt_state, params = carry
-            grad = self.model.grad(lambda p: stage3_loss(p, batch), params)
-            opt_state, params = stage3_optimizer.update(opt_state, grad, params)
-            params = bound_hmog_parameters(
+            opt_state, hmog_params = carry
+            grad = self.model.grad(lambda p: stage3_loss(p, batch), hmog_params)
+            opt_state, new_hmog_params = stage3_optimizer.update(
+                opt_state, grad, hmog_params
+            )
+            bound_new_params = bound_hmog_parameters(
                 self.model,
-                params,
+                new_hmog_params,
                 self.min_prob,
                 self.obs_min_var,
                 self.obs_jitter,
                 self.lat_min_var,
                 self.lat_jitter,
             )
-            return (opt_state, params), None
+
+            logger.monitor_params(
+                {
+                    "original": hmog_params.array,
+                    "post_update": new_hmog_params.array,
+                    "post_bounds": bound_new_params.array,
+                },
+                handler,
+                context="stage3_step",
+            )
+
+            return (opt_state, bound_new_params), None
 
         def stage3_epoch(
             epoch: Array,

@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import jax
 import matplotlib.pyplot as plt
 import wandb as wandb
 from jax import Array
+from jax import numpy as jnp
+from jax.experimental import io_callback
 from matplotlib.figure import Figure
 
 from .handler import Artifact, MetricDict, MetricHistory, RunHandler
@@ -75,6 +77,35 @@ class JaxLogger:
         if use_local:
             global _metric_buffer
             _metric_buffer.clear()
+
+    def monitor_params(
+        self,
+        param_dict: dict[str, Array],
+        handler: RunHandler,
+        context: str = "update",
+    ) -> None:
+        """Monitor parameters for NaNs and save state if found."""
+        # Check for NaNs using vectorized JAX operations
+        has_any_nans = False
+        for p in param_dict.values():
+            has_any_nans = jnp.logical_or(has_any_nans, jnp.any(jnp.isnan(p)))
+
+        # Define the IO callback function
+        def save_debug(params: dict[str, Array]) -> None:
+            handler.save_debug_state(params, context)
+            log.error(f"NaNs detected in {context}")
+            raise ValueError(f"NaN values detected in {context}")
+
+        # Function for no-op case
+        def no_op(_: None) -> None:
+            pass
+
+        # Only execute the IO callback if NaNs exist
+        def call_io(_: Any) -> None:
+            io_callback(save_debug, None, param_dict)
+
+        # Use JAX conditional to only execute callback when needed
+        jax.lax.cond(has_any_nans, call_io, no_op, None)
 
     def log_metrics(self, metrics: MetricDict, epoch: Array) -> None:
         """Log metrics. Safe to call within jax.jit-compiled functions."""
