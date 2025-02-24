@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import override
+from typing import Any, override
 
 import jax
 import jax.numpy as jnp
@@ -222,95 +222,62 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
             # Build metrics dictionary with display names and levels
             metrics: MetricDict = {
-                "train_ll": (
-                    "Performance/Train Log-Likelihood",
+                "Performance/Train Log-Likelihood": (
                     info,
                     epoch_train_ll,
                 ),
-                "test_ll": (
-                    "Performance/Test Log-Likelihood",
+                "Performance/Test Log-Likelihood": (
                     info,
                     epoch_test_ll,
                 ),
-                "negative_bic": (
-                    "Performance/Negative BIC",
+                "Performance/Negative BIC": (
                     info,
                     epoch_negative_bic,
                 ),
             }
 
-            # Add parameter statistics at DEBUG level
-            lkl_params, mix_params = self.model.split_conjugated(hmog_params)
+            stats = jnp.array(STATS_LEVEL)
 
-            # Observable parameter statistics
-            with self.model.lwr_hrm as lh:
-                obs_params, _ = lh.lkl_man.split_params(lkl_params)
-                _, obs_prs = lh.obs_man.split_location_precision(obs_params)
-
-                stats = jnp.array(STATS_LEVEL)
-
-                # Natural parameters
+            def update_parameter_stats(params: Point[Natural, Any], name: str) -> None:
+                array = params.array
                 metrics.update(
                     {
-                        "obs_nat_min": (
-                            "Stability/Observable Precision Min",
+                        f"Params/{name} Min": (
                             stats,
-                            jnp.min(obs_prs.array),
+                            jnp.min(array),
                         ),
-                        "obs_nat_median": (
-                            "Stability/Observable Precision Median",
+                        f"Params/{name} Median": (
                             stats,
-                            jnp.median(obs_prs.array),
+                            jnp.median(array),
                         ),
-                        "obs_nat_max": (
-                            "Stability/Observable Precision Max",
+                        f"Params/{name} Max": (
                             stats,
-                            jnp.max(obs_prs.array),
+                            jnp.max(array),
                         ),
                     }
                 )
 
-            # Mixture parameter statistics
-            with self.model.upr_hrm as uh:
-                lkl_params, cat_params = uh.split_conjugated(mix_params)
-                with uh.lat_man as lm:
-                    probs = lm.to_probs(lm.to_mean(cat_params))
-                    lat_params, _ = uh.lkl_man.split_params(lkl_params)
-                    _, lat_prs = uh.obs_man.split_location_precision(lat_params)
-                    metrics.update(
-                        {
-                            "mix_prob_min": (
-                                "Stability/Mixture Probability Min",
-                                stats,
-                                jnp.min(probs),
-                            ),
-                            "mix_prob_median": (
-                                "Stability/Mixture Probability Median",
-                                stats,
-                                jnp.median(probs),
-                            ),
-                            "mix_prob_max": (
-                                "Stability/Mixture Probability Max",
-                                stats,
-                                jnp.max(probs),
-                            ),
-                            "lat_nat_min": (
-                                "Stability/Latent Precision Min",
-                                stats,
-                                jnp.min(lat_prs.array),
-                            ),
-                            "lat_nat_median": (
-                                "Stability/Latent Precision Median",
-                                stats,
-                                jnp.median(lat_prs.array),
-                            ),
-                            "lat_nat_max": (
-                                "Stability/Latent Precision Max",
-                                stats,
-                                jnp.max(lat_prs.array),
-                            ),
-                        }
-                    )
+            # Add parameter statistics at DEBUG level
+            obs_params, lwr_int_params, upr_params = self.model.split_params(
+                hmog_params
+            )
+            obs_loc_params, obs_prs_params = (
+                self.model.obs_man.split_location_precision(obs_params)
+            )
+            lat_params, upr_int_params, cat_params = self.model.upr_hrm.split_params(
+                upr_params
+            )
+            lat_loc_params, lat_prs_params = (
+                self.model.upr_hrm.obs_man.split_location_precision(lat_params)
+            )
+
+            update_parameter_stats(obs_loc_params, "Obs Location")
+            update_parameter_stats(obs_prs_params, "Obs Precision")
+            update_parameter_stats(lwr_int_params, "Obs Interaction")
+            update_parameter_stats(lat_loc_params, "Lat Location")
+            update_parameter_stats(lat_prs_params, "Lat Precision")
+            update_parameter_stats(upr_int_params, "Lat Interaction")
+            update_parameter_stats(cat_params, "Categorical")
 
             logger.log_metrics(metrics, epoch + 1)
 

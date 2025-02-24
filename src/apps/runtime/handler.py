@@ -15,8 +15,7 @@ from matplotlib.figure import Figure
 
 from ..util import to_snake_case
 
-type MetricInfo = tuple[str, Array, Array]  # (display_name, level, value)
-type MetricDict = dict[str, MetricInfo]  # Single snapshot
+type MetricDict = dict[str, tuple[Array, Array]]  # Single snapshot
 type MetricHistory = dict[str, list[tuple[int, float]]]  # Time series### Loggers ###
 
 

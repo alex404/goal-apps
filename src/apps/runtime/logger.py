@@ -83,13 +83,13 @@ class JaxLogger:
             epoch = int(epoch_array)
             # Convert arrays to floats
             float_metrics = {
-                key: (display_name, int(level), float(value))
-                for key, (display_name, level, value) in metrics_dict.items()
+                key: (int(level), float(value))
+                for key, (level, value) in metrics_dict.items()
             }
 
             if self.use_local:
                 global _metric_buffer
-                for key, (display_name, level, value) in float_metrics.items():
+                for key, (level, value) in float_metrics.items():
                     if key not in _metric_buffer:
                         _metric_buffer[key] = []
                     _metric_buffer[key].append((int(epoch), value))
@@ -97,7 +97,7 @@ class JaxLogger:
                         level,
                         "epoch %4d | %14s | %10.6f",
                         epoch,
-                        display_name,
+                        key,
                         value,
                     )
 
@@ -106,10 +106,7 @@ class JaxLogger:
                 wandb.log(
                     {
                         "epoch": epoch,
-                        **{
-                            display_name: value
-                            for _, (display_name, _, value) in float_metrics.items()
-                        },
+                        **{key: value for key, (_, value) in float_metrics.items()},
                     }
                 )
 

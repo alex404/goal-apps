@@ -1,5 +1,6 @@
 """Core visualization utilities."""
 
+import math
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -30,16 +31,14 @@ def plot_metrics(metrics: MetricHistory) -> Figure:
     Returns:
         Figure containing subplots for each metric
     """
-    if not metrics:
-        raise ValueError("No metrics to plot")
-
     # Create figure
     n_metrics = len(metrics)
-    fig, axes = plt.subplots(n_metrics, 1, figsize=(10, 4 * n_metrics))
+    side_length = round(math.sqrt(n_metrics))
+    fig, axes = plt.subplots(
+        side_length, side_length, figsize=(6 * side_length, 4 * side_length)
+    )
 
-    # Handle single metric case
-    if n_metrics == 1:
-        axes = [axes]
+    axes = axes.ravel()
 
     # Plot each metric
     for ax, (name, values) in zip(axes, metrics.items()):
@@ -48,6 +47,9 @@ def plot_metrics(metrics: MetricHistory) -> Figure:
         ax.set_xlabel("Epoch")
         ax.set_ylabel(name)
         ax.grid(True)
+
+    for idx in range(n_metrics, len(axes)):
+        axes[idx].set_visible(False)
 
     plt.tight_layout()
     return fig
