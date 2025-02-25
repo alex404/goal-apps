@@ -76,10 +76,10 @@ class HMoGConfig(ClusteringModelConfig):
     stage2_learning_rate: float = 1e-3
     stage3_learning_rate: float = 3e-4
     min_prob: float = 1e-3
-    obs_jitter: float = 0
-    obs_min_var: float = 1e-5
-    lat_jitter: float = 0
-    lat_min_var: float = 1e-5
+    obs_jitter: float = 1e-5
+    obs_min_var: float = 1e-4
+    lat_jitter: float = 1e-7
+    lat_min_var: float = 1e-6
     from_scratch: bool = False
     analysis_epoch: int | None = None
 

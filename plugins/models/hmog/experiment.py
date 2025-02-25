@@ -7,6 +7,7 @@ from typing import Any, override
 
 import jax
 import jax.numpy as jnp
+import optax
 from goal.geometry import (
     Natural,
     Optimizer,
@@ -410,7 +411,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 mix_params,
                 self.min_prob,
                 self.obs_min_var,
-                self.obs_jitter,
+                0,  # self.obs_jitter,
             )
 
             logger.monitor_params(
@@ -419,7 +420,8 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                     "original": mix_params.array,
                     "post_update": new_mix_params.array,
                     "post_bounds": bound_mix_params.array,
-                    "bad_batch": batch,
+                    "batch": batch,
+                    "grad": grad.array,
                 },
                 handler,
                 context="stage2_step",
@@ -486,9 +488,15 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             self.stage1_epochs + self.stage2_epochs,
             params1,
         )
+        # Create the schedule
+        lr_schedule = optax.cosine_decay_schedule(
+            init_value=self.stage3_learning_rate,  # e.g., 1e-3
+            decay_steps=self.stage3_epochs,
+            alpha=0.2,  # This makes the final LR = initial_lr * 0.1
+        )
 
         stage3_optimizer: Optimizer[Natural, DifferentiableHMoG[ObsRep, LatRep]] = (
-            Optimizer.adamw(self.model, learning_rate=self.stage3_learning_rate)
+            Optimizer.adamw(self.model, learning_rate=lr_schedule, grad_clip=8.0)
         )
         stage3_opt_state = stage3_optimizer.init(params1)
 
@@ -514,9 +522,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 new_hmog_params,
                 self.min_prob,
                 self.obs_min_var,
-                self.obs_jitter,
+                0,  # self.obs_jitter,
                 self.lat_min_var,
-                self.lat_jitter,
+                0,  # self.lat_jitter,
             )
 
             logger.monitor_params(
@@ -525,6 +533,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                     "post_update": new_hmog_params.array,
                     "post_bounds": bound_new_params.array,
                     "bad_batch": batch,
+                    "grad": grad.array,
                 },
                 handler,
                 context="stage3_step",
