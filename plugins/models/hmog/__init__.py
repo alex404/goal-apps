@@ -1,6 +1,5 @@
 """HMoG model plugin."""
 
-from plugins.models.hmog.base import HMoGConfig
-from plugins.models.hmog.experiment import HMoGExperiment
+from plugins.models.hmog.configs import HMoGConfig
 
-__all__ = ["HMoGConfig", "HMoGExperiment"]
+__all__ = ["HMoGConfig"]

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from goal.geometry import Diagonal, PositiveDefinite, Scale
 from hydra.core.config_store import ConfigStore
@@ -27,14 +28,16 @@ class RepresentationType(Enum):
 class LGMTrainerConfig:
     """Base configuration for LGM trainers."""
 
+    n_epochs: int = 100
+    min_var: float = 1e-6
+    jitter: float = 0
+
 
 @dataclass
 class EMLGMTrainerConfig(LGMTrainerConfig):
     """Configuration for EM-based LGM trainer."""
 
     _target_: str = "plugins.models.hmog.trainers.EMLGMTrainer"
-    min_var: float = 1e-4
-    jitter: float = 1e-5
 
 
 ### Mixture Trainer Configs ###
@@ -44,7 +47,10 @@ class EMLGMTrainerConfig(LGMTrainerConfig):
 class MixtureTrainerConfig:
     """Base configuration for mixture trainers."""
 
+    n_epochs: int = 100
     min_prob: float = 1e-3
+    min_var: float = 1e-6
+    jitter: float = 0
 
 
 @dataclass
@@ -52,9 +58,9 @@ class GradientMixtureTrainerConfig(MixtureTrainerConfig):
     """Configuration for gradient-based mixture trainer."""
 
     _target_: str = "plugins.models.hmog.trainers.GradientMixtureTrainer"
-    learning_rate: float = 1e-3
-    min_var: float = 1e-4
-    jitter: float = 1e-5
+    lr_init: float = 1e-3
+    lr_final_ratio: float = 1
+    batch_size: int = 256
 
 
 ### Full Model Trainer Configs ###
@@ -65,6 +71,11 @@ class FullModelTrainerConfig:
     """Base configuration for full model trainers."""
 
     min_prob: float = 1e-3
+    obs_min_var: float = 1e-6
+    lat_min_var: float = 1e-6
+    obs_jitter: float = 0
+    lat_jitter: float = 0
+    n_epochs: int = 100
 
 
 @dataclass
@@ -72,14 +83,20 @@ class GradientFullModelTrainerConfig(FullModelTrainerConfig):
     """Configuration for gradient-based full model trainer."""
 
     _target_: str = "plugins.models.hmog.trainers.GradientFullModelTrainer"
-    learning_rate: float = 3e-4
-    obs_min_var: float = 1e-4
-    lat_min_var: float = 1e-6
-    obs_jitter: float = 1e-5
-    lat_jitter: float = 1e-7
+    lr_init: float = 3e-4
+    lr_final_ratio: float = 0.2
+    grad_clip: float = 8
+    batch_size: int = 256
 
 
 ### Main Configuration ###
+
+
+hmog_defaults: list[Any] = [
+    {"stage1": "em"},
+    {"stage2": "gradient"},
+    {"stage3": "gradient"},
+]
 
 
 @dataclass
@@ -94,9 +111,9 @@ class HMoGConfig(ClusteringModelConfig):
         lat_rep: Representation type for latents
 
     Training Parameters:
-        stage1_trainer: Configuration for LGM training stage
-        stage2_trainer: Configuration for mixture component training stage
-        stage3_trainer: Configuration for full model training stage
+        stage1: Configuration for LGM training stage
+        stage2: Configuration for mixture component training stage
+        stage3: Configuration for full model training stage
         stage1_epochs: Number of epochs for stage 1
         stage2_epochs: Number of epochs for stage 2
         stage3_epochs: Number of epochs for stage 3
@@ -112,13 +129,16 @@ class HMoGConfig(ClusteringModelConfig):
     lat_rep: RepresentationType = RepresentationType.diagonal
 
     # Training configuration
-    stage1_trainer: LGMTrainerConfig = MISSING
-    stage2_trainer: MixtureTrainerConfig = MISSING
-    stage3_trainer: FullModelTrainerConfig = MISSING
+    stage1: LGMTrainerConfig = MISSING
+    stage2: MixtureTrainerConfig = MISSING
+    stage3: FullModelTrainerConfig = MISSING
 
     # Analysis configuration
     from_scratch: bool = False
     analysis_epoch: int | None = None
+
+    # Defaults
+    defaults: list[Any] = field(default_factory=lambda: hmog_defaults)
 
 
 ### Config Registration ###
@@ -126,19 +146,10 @@ class HMoGConfig(ClusteringModelConfig):
 cs = ConfigStore.instance()
 
 # Register base configs
-cs.store(group="lgm_trainer", name="em", node=EMLGMTrainerConfig)
+cs.store(group="model/stage1", name="em", node=EMLGMTrainerConfig)
 
-cs.store(group="mixture_trainer", name="gradient", node=GradientMixtureTrainerConfig)
+cs.store(group="model/stage2", name="gradient", node=GradientMixtureTrainerConfig)
 
-cs.store(
-    group="full_model_trainer", name="gradient", node=GradientFullModelTrainerConfig
-)
+cs.store(group="model/stage3", name="gradient", node=GradientFullModelTrainerConfig)
 
-# Register default configurations with their default trainers
-default_config = HMoGConfig(
-    stage1_trainer=EMLGMTrainerConfig(),
-    stage2_trainer=GradientMixtureTrainerConfig(),
-    stage3_trainer=GradientFullModelTrainerConfig(),
-)
-
-cs.store(group="model", name="hmog", node=default_config)
+cs.store(group="model", name="hmog", node=HMoGConfig)

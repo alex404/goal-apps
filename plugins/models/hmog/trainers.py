@@ -357,6 +357,7 @@ class GradientMixtureTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
         # Set up optimizer
         lkl_params1, mix_params0 = model.split_conjugated(params1)
         train_data = dataset.train_data
+        n_complete_batches = train_data.shape[0] // self.batch_size
 
         if self.lr_final_ratio < 1.0:
             lr_schedule = optax.cosine_decay_schedule(
@@ -403,7 +404,7 @@ class GradientMixtureTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
                 new_mix_params,
                 self.min_prob,
                 self.min_var,
-                self.jitter,
+                self.jitter / n_complete_batches,
             )
 
             logger.monitor_params(
@@ -437,15 +438,14 @@ class GradientMixtureTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
 
             # Shuffle data and truncate to fit batches evenly
             return_key, shuffle_key = jax.random.split(epoch_key)
-            n_complete_batches = train_data.shape[0] // self.batch_size
-            n_samples_to_use = n_complete_batches * self.batch_size
 
-            shuffled_indices = jax.random.permutation(shuffle_key, train_data.shape[0])[
-                :n_samples_to_use
-            ]
-            batched_data = train_data[shuffled_indices].reshape(
+            shuffled_indices = jax.random.permutation(shuffle_key, train_data.shape[0])
+            batched_indices = shuffled_indices[: n_complete_batches * self.batch_size]
+            leftover_indices = shuffled_indices[n_complete_batches * self.batch_size :]
+            batched_data = train_data[batched_indices].reshape(
                 (n_complete_batches, self.batch_size, -1)
             )
+            leftover_data = train_data[leftover_indices]
 
             # Process batches
             (opt_state, new_mix_params), grad_norms = jax.lax.scan(
@@ -453,6 +453,10 @@ class GradientMixtureTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
                 (opt_state, mix_params),
                 batched_data,
             )
+            (opt_state, new_mix_params), grad_norm = minibatch_step(
+                (opt_state, new_mix_params), leftover_data
+            )
+            grad_norms = jnp.concatenate([grad_norms, jnp.array([grad_norm])])
 
             # Log metrics
             new_params = model.join_conjugated(lkl_params1, new_mix_params)
@@ -530,6 +534,7 @@ class GradientFullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinit
     ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
         # Set up optimizer with optional learning rate schedule
         train_data = dataset.train_data
+        n_complete_batches = train_data.shape[0] // self.batch_size
 
         if self.lr_final_ratio < 1.0:
             lr_schedule = optax.cosine_decay_schedule(
@@ -566,9 +571,9 @@ class GradientFullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinit
                 new_params,
                 self.min_prob,
                 self.obs_min_var,
-                self.obs_jitter,
+                self.obs_jitter / n_complete_batches,
                 self.lat_min_var,
-                self.lat_jitter,
+                self.lat_jitter / n_complete_batches,
             )
 
             logger.monitor_params(
@@ -597,35 +602,40 @@ class GradientFullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinit
 
             # Shuffle data and batch
             return_key, shuffle_key = jax.random.split(epoch_key)
-            n_complete_batches = train_data.shape[0] // self.batch_size
-            n_samples_to_use = n_complete_batches * self.batch_size
 
-            shuffled_indices = jax.random.permutation(shuffle_key, train_data.shape[0])[
-                :n_samples_to_use
-            ]
-            batched_data = train_data[shuffled_indices].reshape(
+            shuffled_indices = jax.random.permutation(shuffle_key, train_data.shape[0])
+            batched_indices = shuffled_indices[: n_complete_batches * self.batch_size]
+            leftover_indices = shuffled_indices[n_complete_batches * self.batch_size :]
+            batched_data = train_data[batched_indices].reshape(
                 (n_complete_batches, self.batch_size, -1)
             )
+            leftover_data = train_data[leftover_indices]
 
             # Process batches
-            (opt_state, params), grad_norms = jax.lax.scan(
+            (opt_state, new_params), grad_norms = jax.lax.scan(
                 minibatch_step,
                 (opt_state, params),
                 batched_data,
             )
+
+            (opt_state, new_params), grad_norm = minibatch_step(
+                (opt_state, new_params), leftover_data
+            )
+
+            grad_norms = jnp.concatenate([grad_norms, jnp.array([grad_norm])])
 
             # Log metrics
             log_epoch_metrics(
                 dataset,
                 model,
                 logger,
-                params,
+                new_params,
                 epoch_offset + epoch,
                 gradient_norms=grad_norms,
                 log_freq=10,
             )
 
-            return opt_state, params, return_key
+            return opt_state, new_params, return_key
 
         # Run training
 

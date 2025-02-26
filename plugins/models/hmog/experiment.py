@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, override
+from typing import override
 
 import jax
 import jax.numpy as jnp
@@ -18,19 +18,18 @@ from goal.models import (
 )
 from jax import Array
 
-from apps.configs import STATS_LEVEL
 from apps.plugins import (
     ClusteringDataset,
     ClusteringModel,
 )
-from apps.runtime.handler import MetricDict, RunHandler
+from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
 from .artifacts import log_artifacts
-from .base import (
+from .configs import (
     RepresentationType,
 )
-from .trainers import EMLGMTrainer, GradientFullModelTrainer, GradientMixtureTrainer
+from .trainers import FullModelTrainer, LGMTrainer, MixtureTrainer
 
 ### Preamble ###
 
@@ -46,17 +45,14 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 ):
     """Experiment framework for HMoGs."""
 
-    batch_size: int
-    stage1_epochs: int
-    stage2_epochs: int
-    stage3_epochs: int
-    stage2_learning_rate: float
-    stage3_learning_rate: float
-    min_prob: float
-    obs_jitter: float
-    obs_min_var: float
-    lat_jitter: float
-    lat_min_var: float
+    # Training configuration
+    model: DifferentiableHMoG[ObsRep, LatRep]
+
+    stage1: LGMTrainer[ObsRep, LatRep]
+    stage2: MixtureTrainer[ObsRep, LatRep]
+    stage3: FullModelTrainer[ObsRep, LatRep]
+
+    # Analysis configuration
     from_scratch: bool
     analysis_epoch: int | None
 
@@ -67,44 +63,32 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         n_clusters: int,
         obs_rep: RepresentationType,
         lat_rep: RepresentationType,
-        batch_size: int,
-        stage1_epochs: int,
-        stage2_epochs: int,
-        stage3_epochs: int,
-        stage2_learning_rate: float,
-        stage3_learning_rate: float,
-        min_prob: float,
-        obs_jitter: float,
-        obs_min_var: float,
-        lat_jitter: float,
-        lat_min_var: float,
+        stage1: LGMTrainer[ObsRep, LatRep],
+        stage2: MixtureTrainer[ObsRep, LatRep],
+        stage3: FullModelTrainer[ObsRep, LatRep],
         from_scratch: bool,
         analysis_epoch: int,
     ) -> None:
-        self.batch_size = batch_size
-        self.stage1_epochs = stage1_epochs
-        self.stage2_epochs = stage2_epochs
-        self.stage3_epochs = stage3_epochs
-        self.stage2_learning_rate = stage2_learning_rate
-        self.stage3_learning_rate = stage3_learning_rate
-        self.min_prob = min_prob
-        self.obs_jitter = obs_jitter
-        self.lat_jitter = lat_jitter
-        self.obs_min_var = obs_min_var
-        self.lat_min_var = lat_min_var
         self.from_scratch = from_scratch
         self.analysis_epoch = analysis_epoch
 
         obs_rep_type = obs_rep.value
         lat_rep_type = lat_rep.value
 
-        self.model: DifferentiableHMoG[ObsRep, LatRep] = differentiable_hmog(  # pyright: ignore[reportAttributeAccessIssue]
+        self.model = differentiable_hmog(  # pyright: ignore[reportAttributeAccessIssue]
             obs_dim=data_dim,
             obs_rep=obs_rep_type,
             lat_dim=latent_dim,
             n_components=n_clusters,
             lat_rep=lat_rep_type,
         )
+
+        self.stage1 = stage1
+        self.stage2 = stage2
+        self.stage3 = stage3
+
+        self.from_scratch = from_scratch
+        self.analysis_epoch = analysis_epoch
 
         log.info(f"Initialized HMoG model with dimension {self.model.dim}.")
 
@@ -115,7 +99,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     @property
     @override
     def n_epochs(self) -> int:
-        return self.stage1_epochs + self.stage2_epochs + self.stage3_epochs
+        return self.stage1.n_epochs + self.stage2.n_epochs + self.stage3.n_epochs
 
     @property
     def latent_dim(self) -> int:
@@ -136,7 +120,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         obs_means = self.model.obs_man.average_sufficient_statistic(data)
         obs_means = self.model.obs_man.regularize_covariance(
-            obs_means, self.obs_jitter, self.obs_min_var
+            obs_means, self.stage1.jitter, self.stage1.min_var
         )
         obs_params = self.model.obs_man.to_natural(obs_means)
 
@@ -185,98 +169,6 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         return jax.vmap(data_point_cluster)(data)
 
-    def log_epoch_metrics(
-        self,
-        logger: JaxLogger,
-        epoch: Array,
-        hmog_params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-        train_sample: Array,
-        test_sample: Array,
-        log_freq: int = 1,
-    ) -> None:
-        """Log metrics for an epoch."""
-
-        def compute_metrics() -> None:
-            # Compute core performance metrics
-            epoch_train_ll = self.model.average_log_observable_density(
-                hmog_params, train_sample
-            )
-            epoch_test_ll = self.model.average_log_observable_density(
-                hmog_params, test_sample
-            )
-
-            n_samps = train_sample.shape[0]
-            epoch_negative_bic = -(
-                self.model.dim * jnp.log(n_samps) / n_samps - 2 * epoch_train_ll
-            )
-            info = jnp.array(logging.INFO)
-
-            # Build metrics dictionary with display names and levels
-            metrics: MetricDict = {
-                "Performance/Train Log-Likelihood": (
-                    info,
-                    epoch_train_ll,
-                ),
-                "Performance/Test Log-Likelihood": (
-                    info,
-                    epoch_test_ll,
-                ),
-                "Performance/Negative BIC": (
-                    info,
-                    epoch_negative_bic,
-                ),
-            }
-
-            stats = jnp.array(STATS_LEVEL)
-
-            def update_parameter_stats(params: Point[Natural, Any], name: str) -> None:
-                array = params.array
-                metrics.update(
-                    {
-                        f"Params/{name} Min": (
-                            stats,
-                            jnp.min(array),
-                        ),
-                        f"Params/{name} Median": (
-                            stats,
-                            jnp.median(array),
-                        ),
-                        f"Params/{name} Max": (
-                            stats,
-                            jnp.max(array),
-                        ),
-                    }
-                )
-
-            # Add parameter statistics at DEBUG level
-            obs_params, lwr_int_params, upr_params = self.model.split_params(
-                hmog_params
-            )
-            obs_loc_params, obs_prs_params = (
-                self.model.obs_man.split_location_precision(obs_params)
-            )
-            lat_params, upr_int_params, cat_params = self.model.upr_hrm.split_params(
-                upr_params
-            )
-            lat_loc_params, lat_prs_params = (
-                self.model.upr_hrm.obs_man.split_location_precision(lat_params)
-            )
-
-            update_parameter_stats(obs_loc_params, "Obs Location")
-            update_parameter_stats(obs_prs_params, "Obs Precision")
-            update_parameter_stats(lwr_int_params, "Obs Interaction")
-            update_parameter_stats(lat_loc_params, "Lat Location")
-            update_parameter_stats(lat_prs_params, "Lat Precision")
-            update_parameter_stats(upr_int_params, "Lat Interaction")
-            update_parameter_stats(cat_params, "Categorical")
-
-            logger.log_metrics(metrics, epoch + 1)
-
-        def no_op() -> None:
-            return None
-
-        jax.lax.cond(epoch % log_freq == 0, compute_metrics, no_op)
-
     @override
     def analyze(
         self,
@@ -313,49 +205,30 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         keys = jax.random.split(key, 4)
 
         # Initialize model
-        array = self.initialize_model(keys[0], dataset.train_data)
-        params = self.model.natural_point(array)
-
-        # Stage 1: EM for lower harmonium
-        stage1_trainer = EMLGMTrainer[ObsRep, LatRep](
-            min_var=self.obs_min_var, jitter=self.obs_jitter
-        )
-        lkl_params = stage1_trainer.train(
-            keys[1], handler, logger, self.model, params, dataset, self.stage1_epochs
+        params0 = self.model.natural_point(
+            self.initialize_model(keys[0], dataset.train_data)
         )
 
-        # Stage 2: Gradient descent for mixture components
-        stage2_trainer = GradientMixtureTrainer(
-            learning_rate=self.stage2_learning_rate,
-            batch_size=self.batch_size,
-            min_prob=self.min_prob,
-            min_var=self.obs_min_var,
+        params1 = self.stage1.train(
+            keys[1], handler, dataset, self.model, logger, params0
         )
-        mix_params = stage2_trainer.train(
-            keys[2], params, dataset.train_data, handler, logger, self.stage2_epochs
+
+        epoch = self.stage1.n_epochs
+
+        params2 = self.stage2.train(
+            keys[2], handler, dataset, self.model, logger, epoch, params1
         )
+
+        epoch += self.stage2.n_epochs
 
         # Stage 3: Full model training
-        stage3_trainer = GradientFullModelTrainer(
-            learning_rate=self.stage3_learning_rate,
-            batch_size=self.batch_size,
-            min_prob=self.min_prob,
-            obs_min_var=self.obs_min_var,
-            lat_min_var=self.lat_min_var,
+        params3 = self.stage3.train(
+            keys[3], handler, dataset, self.model, logger, epoch, params2
         )
-        final_params = stage3_trainer.train(
-            keys[3],
-            self.model.join_conjugated(lkl_params, mix_params),
-            dataset.train_data,
-            handler,
-            logger,
-            self.stage3_epochs,
-        )
+        epoch += self.stage3.n_epochs
 
         # Log final artifacts
-        log_artifacts(
-            handler, dataset, logger, self.model, self.n_epochs, final_params
-        )  # def fit(
+        log_artifacts(handler, dataset, logger, self.model, epoch, params3)  # def fit(
 
     #     self,
     #     key: Array,
