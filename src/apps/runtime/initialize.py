@@ -124,7 +124,7 @@ def initialize_run(
 
     # Initialize hydra config
     with hydra.initialize_config_dir(
-        version_base="1.3", config_dir=str(proot / "config")
+        version_base="1.3", config_dir=str(proot / "config" / "hydra")
     ):
         cfg = hydra.compose(config_name="config", overrides=overrides)
 

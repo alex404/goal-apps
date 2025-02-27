@@ -1,13 +1,17 @@
 ### Imports ###
 
+import logging
 import re
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
+from omegaconf import OmegaConf
 from rich import print as rprint
 from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
+
+log = logging.getLogger(__name__)
 
 ### Really Util ###
 
@@ -22,35 +26,16 @@ def to_snake_case(name: str) -> str:
 ### Sweep Management ###
 
 
-def create_sweep_config(overrides: list[str]) -> dict[str, Any]:
-    """Create wandb sweep config from override strings.
-
-    Parses overrides of the form:
-    - param=value for single values
-    - param=val1,val2,val3 for sweep values
-
-    Example:
-        ["latent_dim=4,8,12,16", "n_clusters=4,8,16", "device=cpu"]
-        ->
-        {
-            "program": "goal",
-            "method": "grid",
-            "parameters": {
-                "latent_dim": {"values": [4, 8, 12, 16]},
-                "n_clusters": {"values": [4, 8, 16]},
-                "device": {"value": "cpu"}
-            },
-            "command": [
-                "${env}",
-                "${interpreter}",
-                "${program}",
-                "clustering",
-                "train",
-                "${args_no_hyphens}"
-            ]
-        }
-    """
+def create_sweep_config(
+    overrides: list[str], base_config_path: str | None = None
+) -> dict[str, Any]:
     parameters = {}
+
+    if base_config_path is not None:
+        base_config = OmegaConf.load(base_config_path)
+        base_params = OmegaConf.to_container(base_config)
+        parameters.update(base_params)
+        log.info(f"Loaded base parameters from {base_config_path}")
 
     for override in overrides:
         if "=" not in override:

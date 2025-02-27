@@ -124,24 +124,6 @@ defaults: list[Any] = [
 
 @dataclass
 class HMoGConfig(ClusteringModelConfig):
-    """Configuration for Hierarchical Mixture of Gaussians model.
-
-    Model Architecture:
-        latent_dim: Dimension of latent space
-        n_clusters: Number of mixture components
-        data_dim: Dimension of input data (set by dataset)
-        obs_rep: Representation type for observations
-        lat_rep: Representation type for latents
-
-    Training Parameters:
-        stage1: Configuration for LGM training stage
-        stage2: Configuration for mixture component training stage
-        stage3: Configuration for full model training stage
-        stage1_epochs: Number of epochs for stage 1
-        stage2_epochs: Number of epochs for stage 2
-        stage3_epochs: Number of epochs for stage 3
-    """
-
     _target_: str = "plugins.models.hmog.experiment.HMoGExperiment"
 
     # Model architecture
