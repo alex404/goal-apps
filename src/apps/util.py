@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
-from omegaconf import OmegaConf
 from rich import print as rprint
 from rich.panel import Panel
 from rich.table import Table
@@ -27,24 +26,15 @@ def to_snake_case(name: str) -> str:
 ### Sweep Management ###
 
 
-def create_sweep_config(overrides: list[str], base_sweep: str | None) -> dict[str, Any]:
-    parameters = {}
+def _parse_args_to_parameters(args: list[str]) -> dict[str, Any]:
+    """Parse CLI arguments into a wandb parameters dictionary."""
+    parameters: dict[str, Any] = {}
 
-    if base_sweep is not None:
-        proot = Path(__file__).parents[2]
-        sweep_dir = str(proot / "config" / "sweeps")
-        sweep_path = Path(sweep_dir) / f"{base_sweep}.yaml"
-
-        base_config = OmegaConf.load(sweep_path)
-        base_params = OmegaConf.to_container(base_config)
-        parameters.update(base_params)
-        log.info(f"Loaded base parameters from {sweep_path}")
-
-    for override in overrides:
-        if "=" not in override:
+    for arg in args:
+        if "=" not in arg:
             continue
 
-        param, value = override.split("=", 1)
+        param, value = arg.split("=", 1)
         if "," in value:
             try:
                 # Try to parse as list of numbers first
@@ -61,19 +51,81 @@ def create_sweep_config(overrides: list[str], base_sweep: str | None) -> dict[st
             # Single value
             parameters[param] = {"value": value}
 
+    return parameters
+
+
+def create_sweep_config(overrides: list[str], base_sweep: str | None) -> dict[str, Any]:
+    """Create wandb sweep config from override strings.
+
+    If a base_sweep is provided, CLI arguments from that file will be loaded first,
+    with command-line overrides taking precedence.
+    """
+    # Parse all overrides into a single dictionary
+    parameters = {}
+
+    # First load base sweep if provided
+    if base_sweep is not None:
+        proot = Path(__file__).parents[2]
+        sweep_dir = str(proot / "config" / "sweeps")
+        sweep_path = Path(sweep_dir) / f"{base_sweep}.cli"
+
+        try:
+            with open(sweep_path) as f:
+                base_args = []
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        base_args.append(line)
+
+            # Parse base arguments into parameters dictionary
+            parameters.update(_parse_args_to_parameters(base_args))
+            log.info(f"Loaded {len(base_args)} arguments from {sweep_path}")
+        except Exception:
+            logging.exception("Error loading base sweep config")
+
+    # Then parse CLI overrides (these will overwrite any overlapping parameters)
+    cli_parameters = _parse_args_to_parameters(overrides)
+    parameters.update(cli_parameters)
+
     return {
-        "program": "${program}",  # Let wandb handle the program path
+        "program": "${program}",
         "method": "grid",
         "parameters": parameters,
         "command": [
             "${env}",
             "${interpreter}",
-            "-m",  # Use python module mode
-            "apps.cli",  # Direct module reference
+            "-m",
+            "apps.cli",
             "train",
             "${args_no_hyphens}",
         ],
     }
+
+
+def sample_sweep_args(sweep_config: dict[str, Any]) -> list[str]:
+    """Sample command line arguments from a wandb sweep config."""
+    args: list[str] = []
+
+    # Extract parameters
+    parameters = sweep_config.get("parameters", {})
+
+    # Sample one value from each parameter
+    for param_name, param_config in parameters.items():
+        if param_name == "use_wandb":
+            # Don't use wandb for validation
+            continue
+
+        if "values" in param_config:
+            # If it's a list of values, take the first one
+            args.append(f"{param_name}={param_config['values'][0]}")
+        elif "value" in param_config:
+            # If it's a single value, use it
+            args.append(f"{param_name}={param_config['value']}")
+        elif "min" in param_config and "max" in param_config:
+            # If it's a range, take the min value
+            args.append(f"{param_name}={param_config['min']}")
+
+    return args
 
 
 ### Pretty Print Configs ###

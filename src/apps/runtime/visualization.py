@@ -15,9 +15,7 @@ from .handler import MetricHistory
 
 def setup_matplotlib_style() -> None:
     """Load and set the default matplotlib style."""
-    style_path = (
-        Path(__file__).parent.parent.parent.parent / "misc" / "default.mplstyle"
-    )
+    style_path = Path(__file__).parents[3] / "config" / "default.mplstyle"
     if style_path.exists():
         plt.style.use(str(style_path))
 

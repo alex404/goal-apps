@@ -22,6 +22,7 @@ from .util import (
     format_config_table,
     get_store_groups,
     print_sweep_tree,
+    sample_sweep_args,
 )
 
 log = logging.getLogger(__name__)
@@ -97,18 +98,22 @@ def analyze(overrides: list[str] = overrides):
 
 
 sweep_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and exit")
-base_sweep = typer.Option(
+sweep_validate = typer.Option(
+    False, "--validate", help="Validate an example config from the sweep"
+)
+sweep_base_sweep = typer.Option(
     None, "--base-sweep", "-b", help="Name of base config file (under config/sweeps)"
 )
-project = typer.Option("goal", "--project", "-p", help="W&B project name")
+sweep_project = typer.Option("goal", "--project", "-p", help="W&B project name")
 
 
 @main.command()
 def sweep(
     overrides: list[str] = overrides,
-    project: str = project,
+    project: str = sweep_project,
     dry_run: bool = sweep_dry_run,
-    base_sweep: str | None = base_sweep,
+    validate: bool = sweep_validate,
+    base_sweep: str | None = sweep_base_sweep,
 ):
     """Launch a wandb hyperparameter sweep.
 
@@ -119,6 +124,22 @@ def sweep(
 
     # Create config tree visualization
     print_sweep_tree(sweep_config)
+
+    if validate:
+        try:
+            # Sample one configuration
+            sample_args = sample_sweep_args(sweep_config)
+
+            log.info("Validating a sample configuration from the sweep...")
+            log.info(f"Sample configuration: {' '.join(sample_args)}")
+
+            # Initialize without actually running the training
+            initialize_run(ClusteringRunConfig, sample_args)
+
+            log.info("Sample configuration is valid!")
+        except Exception:
+            logging.exception("Validation failed:")
+            raise typer.Exit(1)
 
     if not dry_run:
         wandb.sweep(sweep_config, project=project)

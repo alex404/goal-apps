@@ -60,4 +60,4 @@ examples/.cache
 # Keep sweeps directory but ignore its contents
 !/config/sweeps/
 /config/sweeps/*
-!/config/sweeps/example.yaml
+!/config/sweeps/example.cli
