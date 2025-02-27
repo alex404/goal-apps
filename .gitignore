@@ -45,3 +45,19 @@ examples/.cache
 
 # Jupyter Notebook
 .ipynb_checkpoints
+
+# Ignore everything in config
+/config/*
+
+# Keep specific files
+!/config/default.mplstyle
+
+# Keep hydra directory but ignore its contents
+!/config/hydra/
+/config/hydra/*
+!/config/hydra/config.yaml
+
+# Keep sweeps directory but ignore its contents
+!/config/sweeps/
+/config/sweeps/*
+!/config/sweeps/example.yaml

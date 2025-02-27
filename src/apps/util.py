@@ -2,6 +2,7 @@
 
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
@@ -26,16 +27,18 @@ def to_snake_case(name: str) -> str:
 ### Sweep Management ###
 
 
-def create_sweep_config(
-    overrides: list[str], base_config_path: str | None = None
-) -> dict[str, Any]:
+def create_sweep_config(overrides: list[str], base_sweep: str | None) -> dict[str, Any]:
     parameters = {}
 
-    if base_config_path is not None:
-        base_config = OmegaConf.load(base_config_path)
+    if base_sweep is not None:
+        proot = Path(__file__).parents[2]
+        sweep_dir = str(proot / "config" / "sweeps")
+        sweep_path = Path(sweep_dir) / f"{base_sweep}.yaml"
+
+        base_config = OmegaConf.load(sweep_path)
         base_params = OmegaConf.to_container(base_config)
         parameters.update(base_params)
-        log.info(f"Loaded base parameters from {base_config_path}")
+        log.info(f"Loaded base parameters from {sweep_path}")
 
     for override in overrides:
         if "=" not in override:

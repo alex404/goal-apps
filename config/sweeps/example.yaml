@@ -1,2 +1,2 @@
-use_wandb=true
-use_local=false
+use_wandb: true
+use_local: false
