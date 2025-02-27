@@ -126,6 +126,7 @@ def sweep(
     print_sweep_tree(sweep_config)
 
     if validate:
+        dry_run = True
         try:
             # Sample one configuration
             sample_args = sample_sweep_args(sweep_config)
@@ -139,7 +140,6 @@ def sweep(
             log.info("Sample configuration is valid!")
         except Exception:
             logging.exception("Validation failed:")
-            raise typer.Exit(1)
 
     if not dry_run:
         wandb.sweep(sweep_config, project=project)
