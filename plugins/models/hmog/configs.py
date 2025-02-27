@@ -40,6 +40,17 @@ class EMLGMTrainerConfig(LGMTrainerConfig):
     _target_: str = "plugins.models.hmog.trainers.EMLGMTrainer"
 
 
+@dataclass
+class GradientLGMTrainerConfig(LGMTrainerConfig):
+    """Configuration for gradient-based LGM trainer."""
+
+    _target_: str = "plugins.models.hmog.trainers.GradientLGMTrainer"
+    lr_init: float = 1e-3
+    lr_final_ratio: float = 1
+    l1_reg: float = 0
+    batch_size: int = 256
+
+
 ### Mixture Trainer Configs ###
 
 
@@ -86,13 +97,25 @@ class GradientFullModelTrainerConfig(FullModelTrainerConfig):
     lr_init: float = 3e-4
     lr_final_ratio: float = 0.2
     grad_clip: float = 8
+    l1_reg: float = 0
     batch_size: int = 256
+
+
+### Analysis Config ###
+
+
+@dataclass
+class AnalysisConfig:
+    """Configuration for analysis of trained model."""
+
+    _target_: str = "plugins.models.hmog.artifacts.AnalysisArgs"
+    from_scratch: bool = False
+    epoch: int | None = None
 
 
 ### Main Configuration ###
 
-
-hmog_defaults: list[Any] = [
+defaults: list[Any] = [
     {"stage1": "em"},
     {"stage2": "gradient"},
     {"stage3": "gradient"},
@@ -129,16 +152,11 @@ class HMoGConfig(ClusteringModelConfig):
     lat_rep: RepresentationType = RepresentationType.diagonal
 
     # Training configuration
-    stage1: LGMTrainerConfig = MISSING
-    stage2: MixtureTrainerConfig = MISSING
-    stage3: FullModelTrainerConfig = MISSING
-
-    # Analysis configuration
-    from_scratch: bool = False
-    analysis_epoch: int | None = None
-
-    # Defaults
-    defaults: list[Any] = field(default_factory=lambda: hmog_defaults)
+    stage1: LGMTrainerConfig = field(default=MISSING)
+    stage2: MixtureTrainerConfig = field(default=MISSING)
+    stage3: FullModelTrainerConfig = field(default=MISSING)
+    analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
+    defaults: list[Any] = field(default_factory=lambda: defaults)
 
 
 ### Config Registration ###
@@ -147,6 +165,7 @@ cs = ConfigStore.instance()
 
 # Register base configs
 cs.store(group="model/stage1", name="em", node=EMLGMTrainerConfig)
+cs.store(group="model/stage1", name="gradient", node=GradientLGMTrainerConfig)
 
 cs.store(group="model/stage2", name="gradient", node=GradientMixtureTrainerConfig)
 

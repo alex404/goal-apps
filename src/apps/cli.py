@@ -120,23 +120,6 @@ def sweep(
         wandb.sweep(sweep_config, project=project)
 
 
-# @clustering_com.command()
-# def analyze(overrides: list[str] = overrides):
-#     """Analyze training results.
-#
-#     Generate visualizations and compute metrics for a trained model.
-#     Results are saved to the runs directory.
-#
-#     Example:
-#         goal clustering analyze run_name=my_exp
-#     """
-#     from apps.clustering.cli import analyze
-#
-#     handler, _, _, _ = initialize_run(ClusteringRunConfig, overrides)
-#
-#     analyze(handler)
-#
-
 # Plugins
 plugin = typer.Argument(default=None, help="Name of plugin to inspect")
 

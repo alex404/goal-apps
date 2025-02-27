@@ -30,6 +30,17 @@ from apps.plugins import (
 from apps.runtime.handler import Artifact, JSONDict, RunHandler
 from apps.runtime.logger import JaxLogger
 
+### Analysis Args ###
+
+
+@dataclass(frozen=True)
+class AnalysisArgs:
+    """Arguments for HMoG analysis."""
+
+    from_scratch: bool
+    epoch: int | None
+
+
 ### Prototypes ###
 
 
