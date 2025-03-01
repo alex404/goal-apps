@@ -47,8 +47,11 @@ class GradientLGMTrainerConfig(LGMTrainerConfig):
     _target_: str = "plugins.models.hmog.trainers.GradientLGMTrainer"
     lr_init: float = 1e-3
     lr_final_ratio: float = 1
-    l1_reg: float = 0
     batch_size: int = 256
+    l1_reg: float = 0
+    l2_reg: float = 0.0001
+    re_reg: float = 1
+    grad_clip: float = 8
 
 
 ### Mixture Trainer Configs ###
@@ -59,7 +62,7 @@ class MixtureTrainerConfig:
     """Base configuration for mixture trainers."""
 
     n_epochs: int = 100
-    min_prob: float = 1e-3
+    min_prob: float = 1e-4
     min_var: float = 1e-6
     jitter: float = 0
 
@@ -72,6 +75,8 @@ class GradientMixtureTrainerConfig(MixtureTrainerConfig):
     lr_init: float = 1e-3
     lr_final_ratio: float = 1
     batch_size: int = 256
+    l2_reg: float = 0.0001
+    grad_clip: float = 8
 
 
 ### Full Model Trainer Configs ###
@@ -81,10 +86,10 @@ class GradientMixtureTrainerConfig(MixtureTrainerConfig):
 class FullModelTrainerConfig:
     """Base configuration for full model trainers."""
 
-    min_prob: float = 1e-3
+    min_prob: float = 1e-4
     obs_min_var: float = 1e-6
-    lat_min_var: float = 1e-6
     obs_jitter: float = 0
+    lat_min_var: float = 1e-6
     lat_jitter: float = 0
     n_epochs: int = 100
 
@@ -96,9 +101,11 @@ class GradientFullModelTrainerConfig(FullModelTrainerConfig):
     _target_: str = "plugins.models.hmog.trainers.GradientFullModelTrainer"
     lr_init: float = 3e-4
     lr_final_ratio: float = 0.2
-    grad_clip: float = 8
-    l1_reg: float = 0
     batch_size: int = 256
+    l1_reg: float = 0
+    l2_reg: float = 0.0001
+    re_reg: float = 1
+    grad_clip: float = 10
 
 
 ### Analysis Config ###
@@ -115,17 +122,21 @@ class AnalysisConfig:
 
 ### Main Configuration ###
 
-defaults: list[Any] = [
-    {"stage1": "em"},
-    {"stage2": "gradient"},
-    {"stage3": "gradient"},
+three_stage_defaults: list[Any] = [
+    {"lgm": "em"},
+    {"mix": "gradient"},
+    {"full": "gradient"},
+]
+
+cycle_defaults: list[Any] = [
+    {"lgm": "gradient"},
+    {"mix": "gradient"},
+    {"full": "gradient"},
 ]
 
 
 @dataclass
 class HMoGConfig(ClusteringModelConfig):
-    _target_: str = "plugins.models.hmog.experiment.HMoGExperiment"
-
     # Model architecture
     data_dim: int = MISSING
     latent_dim: int = 10
@@ -134,11 +145,27 @@ class HMoGConfig(ClusteringModelConfig):
     lat_rep: RepresentationType = RepresentationType.diagonal
 
     # Training configuration
-    stage1: LGMTrainerConfig = field(default=MISSING)
-    stage2: MixtureTrainerConfig = field(default=MISSING)
-    stage3: FullModelTrainerConfig = field(default=MISSING)
+    lgm: LGMTrainerConfig = field(default=MISSING)
+    mix: MixtureTrainerConfig = field(default=MISSING)
+    full: FullModelTrainerConfig = field(default=MISSING)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
-    defaults: list[Any] = field(default_factory=lambda: defaults)
+
+
+@dataclass
+class ThreeStageHMoGConfig(HMoGConfig):
+    """HMoG configuration with three-stage training."""
+
+    _target_: str = "plugins.models.hmog.experiment.ThreeStageHMoGExperiment"
+    defaults: list[Any] = field(default_factory=lambda: three_stage_defaults)
+
+
+@dataclass
+class CyclicHMoGConfig(HMoGConfig):
+    """HMoG configuration with cyclic training."""
+
+    _target_: str = "plugins.models.hmog.experiment.CyclicHMoGExperiment"
+    num_cycles: int = 10
+    defaults: list[Any] = field(default_factory=lambda: cycle_defaults)
 
 
 ### Config Registration ###
@@ -146,11 +173,12 @@ class HMoGConfig(ClusteringModelConfig):
 cs = ConfigStore.instance()
 
 # Register base configs
-cs.store(group="model/stage1", name="em", node=EMLGMTrainerConfig)
-cs.store(group="model/stage1", name="gradient", node=GradientLGMTrainerConfig)
+cs.store(group="model/lgm", name="em", node=EMLGMTrainerConfig)
+cs.store(group="model/lgm", name="gradient", node=GradientLGMTrainerConfig)
 
-cs.store(group="model/stage2", name="gradient", node=GradientMixtureTrainerConfig)
+cs.store(group="model/mix", name="gradient", node=GradientMixtureTrainerConfig)
 
-cs.store(group="model/stage3", name="gradient", node=GradientFullModelTrainerConfig)
+cs.store(group="model/full", name="gradient", node=GradientFullModelTrainerConfig)
 
-cs.store(group="model", name="hmog", node=HMoGConfig)
+cs.store(group="model", name="hmog_3s", node=ThreeStageHMoGConfig)
+cs.store(group="model", name="hmog_cyc", node=CyclicHMoGConfig)

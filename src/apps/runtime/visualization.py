@@ -31,7 +31,7 @@ def plot_metrics(metrics: MetricHistory) -> Figure:
     """
     # Create figure
     n_metrics = len(metrics)
-    side_length = round(math.sqrt(n_metrics))
+    side_length = math.ceil(math.sqrt(n_metrics))
     fig, axes = plt.subplots(
         side_length, side_length, figsize=(6 * side_length, 4 * side_length)
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from abc import ABC
 from typing import override
 
 import jax
@@ -41,16 +42,16 @@ log = logging.getLogger(__name__)
 
 
 class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
-    ClusteringModel
+    ClusteringModel, ABC
 ):
     """Experiment framework for HMoGs."""
 
     # Training configuration
     model: DifferentiableHMoG[ObsRep, LatRep]
 
-    stage1: LGMTrainer[ObsRep, LatRep]
-    stage2: MixtureTrainer[ObsRep, LatRep]
-    stage3: FullModelTrainer[ObsRep, LatRep]
+    lgm: LGMTrainer[ObsRep, LatRep]
+    mix: MixtureTrainer[ObsRep, LatRep]
+    full: FullModelTrainer[ObsRep, LatRep]
 
     analysis: AnalysisArgs
 
@@ -61,9 +62,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         n_clusters: int,
         obs_rep: RepresentationType,
         lat_rep: RepresentationType,
-        stage1: LGMTrainer[ObsRep, LatRep],
-        stage2: MixtureTrainer[ObsRep, LatRep],
-        stage3: FullModelTrainer[ObsRep, LatRep],
+        lgm: LGMTrainer[ObsRep, LatRep],
+        mix: MixtureTrainer[ObsRep, LatRep],
+        full: FullModelTrainer[ObsRep, LatRep],
         analysis: AnalysisArgs,
     ) -> None:
         obs_rep_type = obs_rep.value
@@ -77,9 +78,9 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             lat_rep=lat_rep_type,
         )
 
-        self.stage1 = stage1
-        self.stage2 = stage2
-        self.stage3 = stage3
+        self.lgm = lgm
+        self.mix = mix
+        self.full = full
         self.analysis = analysis
 
         log.info(f"Initialized HMoG model with dimension {self.model.dim}.")
@@ -89,7 +90,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     @property
     @override
     def n_epochs(self) -> int:
-        return self.stage1.n_epochs + self.stage2.n_epochs + self.stage3.n_epochs
+        return self.lgm.n_epochs + self.mix.n_epochs + self.full.n_epochs
 
     @property
     def latent_dim(self) -> int:
@@ -110,7 +111,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
         obs_means = self.model.obs_man.average_sufficient_statistic(data)
         obs_means = self.model.obs_man.regularize_covariance(
-            obs_means, self.stage1.jitter, self.stage1.min_var
+            obs_means, self.lgm.jitter, self.lgm.min_var
         )
         obs_params = self.model.obs_man.to_natural(obs_means)
 
@@ -183,6 +184,8 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             log.info("Loading existing artifacts.")
             log_artifacts(handler, dataset, logger, self.model, epoch)
 
+
+class ThreeStageHMoGExperiment(HMoGExperiment[PositiveDefinite, PositiveDefinite]):
     @override
     def train(
         self,
@@ -196,23 +199,121 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         params0 = self.model.natural_point(
             self.initialize_model(keys[0], dataset.train_data)
         )
+        epoch = 0
 
-        params1 = self.stage1.train(
-            keys[1], handler, dataset, self.model, logger, params0
+        params1 = self.lgm.train(
+            keys[1], handler, dataset, self.model, logger, epoch, params0
         )
 
-        epoch = self.stage1.n_epochs
+        epoch += self.lgm.n_epochs
 
-        params2 = self.stage2.train(
+        params2 = self.mix.train(
             keys[2], handler, dataset, self.model, logger, epoch, params1
         )
 
-        epoch += self.stage2.n_epochs
+        epoch += self.mix.n_epochs
         log_artifacts(handler, dataset, logger, self.model, epoch, params2)
 
-        params3 = self.stage3.train(
+        params3 = self.full.train(
             keys[3], handler, dataset, self.model, logger, epoch, params2
         )
 
-        epoch += self.stage3.n_epochs
+        epoch += self.full.n_epochs
         log_artifacts(handler, dataset, logger, self.model, epoch, params3)
+
+
+class CyclicHMoGExperiment(HMoGExperiment[PositiveDefinite, PositiveDefinite]):
+    """HMoG experiment using cyclical alternating optimization."""
+
+    num_cycles: int
+
+    def __init__(
+        self,
+        data_dim: int,
+        latent_dim: int,
+        n_clusters: int,
+        obs_rep: RepresentationType,
+        lat_rep: RepresentationType,
+        lgm: LGMTrainer[PositiveDefinite, PositiveDefinite],
+        mix: MixtureTrainer[PositiveDefinite, PositiveDefinite],
+        full: FullModelTrainer[PositiveDefinite, PositiveDefinite],
+        analysis: AnalysisArgs,
+        num_cycles: int,
+    ) -> None:
+        super().__init__(
+            data_dim=data_dim,
+            latent_dim=latent_dim,
+            n_clusters=n_clusters,
+            obs_rep=obs_rep,
+            lat_rep=lat_rep,
+            lgm=lgm,
+            mix=mix,
+            full=full,
+            analysis=analysis,
+        )
+        self.num_cycles = num_cycles
+
+    @property
+    @override
+    def n_epochs(self) -> int:
+        """Calculate total number of epochs across all cycles."""
+        return self.lgm.n_epochs + self.num_cycles * (
+            self.lgm.n_epochs + self.mix.n_epochs
+        )
+
+    @override
+    def train(
+        self,
+        key: Array,
+        handler: RunHandler,
+        dataset: ClusteringDataset,
+        logger: JaxLogger,
+    ) -> None:
+        """Train HMoG model using alternating optimization."""
+        # Split PRNG key for different training phases
+        keys = jax.random.split(key, 2 + 2 * self.num_cycles)  # Init + cycle keys
+
+        # Initialize model
+        params = self.model.natural_point(
+            self.initialize_model(keys[0], dataset.train_data)
+        )
+
+        # Track total epochs
+        epoch = 0
+
+        # Initial LGM training (establish good starting point)
+        params = self.lgm.train(
+            keys[1], handler, dataset, self.model, logger, epoch, params
+        )
+        epoch += self.lgm.n_epochs
+        log_artifacts(handler, dataset, logger, self.model, epoch, params)
+
+        # Cycle between Mixture and LGM training
+        for cycle in range(self.num_cycles):
+            key_mix, key_lgm = keys[2 + cycle * 2 : 4 + cycle * 2]
+
+            # Train mixture components (LGM params fixed)
+            log.info(
+                f"Cycle {cycle + 1}/{self.num_cycles}: Training mixture components"
+            )
+            params = self.mix.train(
+                key_mix, handler, dataset, self.model, logger, epoch, params
+            )
+            epoch += self.mix.n_epochs
+            log_artifacts(handler, dataset, logger, self.model, epoch, params)
+
+            # Train LGM (mixture params fixed)
+            log.info(f"Cycle {cycle + 1}/{self.num_cycles}: Training LGM component")
+            params = self.lgm.train(
+                key_lgm,
+                handler,
+                dataset,
+                self.model,
+                logger,
+                epoch,
+                params,  # Need to update LGMTrainer to accept epoch_offset
+            )
+            epoch += self.lgm.n_epochs
+            log_artifacts(handler, dataset, logger, self.model, epoch, params)
+
+            log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")
