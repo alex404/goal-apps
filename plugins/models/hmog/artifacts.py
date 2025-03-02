@@ -106,9 +106,7 @@ def prototypes_plotter(
         width = 2 * width / wh
         figsize = (width * n_cols, height * n_rows)
 
-        fig, axes = plt.subplots(
-            nrows=n_rows, ncols=n_cols, figsize=figsize, constrained_layout=True
-        )
+        fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=figsize)
 
         # Handle single subplot case
         if n_prots == 1:
@@ -243,7 +241,7 @@ def plot_divergence_matrix(
     # Plot dendrogram
     ax3 = fig.add_subplot(gs[2])
     scipy.cluster.hierarchy.dendrogram(
-        divergences.linkage_matrix, ax=ax3, leaf_rotation=90, leaf_font_size=8
+        divergences.linkage_matrix, ax=ax3, leaf_rotation=90, leaf_font_size=10
     )
     ax3.set_title("Hierarchical Clustering Dendrogram")
 
@@ -314,8 +312,7 @@ def hierarchy_plotter(
         prototype_width = (
             width / height * dendrogram_width
         )  # Scale width based on shape
-        spacing = 0.5
-        spacing = 0.5  # Spacing between dendrogram and prototypes
+        spacing = 4
 
         # Total figure width
         fig_width = dendrogram_width + spacing + prototype_width
@@ -339,28 +336,26 @@ def hierarchy_plotter(
         # Plot dendrogram in left column
         dendrogram_ax = fig.add_subplot(gs[:, 0])
         # Using scipy's dendrogram with modified orientation
-        scipy.cluster.hierarchy.dendrogram(
+        dendrogram_results = scipy.cluster.hierarchy.dendrogram(
             hierarchy.linkage_matrix,
             orientation="left",
             ax=dendrogram_ax,
-            leaf_font_size=8,
+            leaf_font_size=10,
+            leaf_label_func=lambda x: f"Cluster {x}",
         )
-        dendrogram_ax.set_title("Cluster Hierarchy")
+        dendrogram_ax.set_xlabel("Relative Entropy")
 
-        # Get the order of leaves from the dendrogram
-        # This ensures prototypes are shown in the same order as the dendrogram
-        leaf_order = scipy.cluster.hierarchy.dendrogram(
-            hierarchy.linkage_matrix, no_plot=True
-        )["leaves"]
+        leaf_order = dendrogram_results["leaves"]
 
         if leaf_order is None:
             raise ValueError("Failed to get leaf order from dendrogram.")
 
-        # Plot prototypes in right column
+        leaf_order = leaf_order[::-1]
+
         for i, leaf_idx in enumerate(leaf_order):
             prototype_ax = fig.add_subplot(gs[i, 1])
             dataset.paint_observable(prototype_artifacts[leaf_idx], prototype_ax)
-            prototype_ax.set_title(f"Cluster {leaf_idx}", fontsize=8)
+            # prototype_ax.set_title(f"Cluster {leaf_idx}", fontsize=8, y=1.0, pad=8)
 
         return fig
 

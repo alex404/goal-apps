@@ -10,6 +10,7 @@ import pandas as pd
 from hydra.core.config_store import ConfigStore
 from jax import Array
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
 from apps.configs import ClusteringDatasetConfig
 from apps.plugins import ClusteringDataset, ObservableArtifact
@@ -158,55 +159,59 @@ class NeuralTracesDataset(ClusteringDataset):
     @staticmethod
     @override
     def paint_observable(observable: ObservableArtifact, axes: Axes) -> None:
-        """Visualize a single neural trace.
+        """Visualize a single neural trace."""
+        from matplotlib.gridspec import GridSpecFromSubplotSpec
 
-        Args:
-            observable: ObservableArtifact containing the trace to visualize
-            axes: Matplotlib axes to plot on
-        """
+        # Turn off the main axes
         axes.set_axis_off()
 
-        # Define column widths and spacing (all in unit square coordinates)
-        padding = 0.05  # Spacing between columns
-        column_width = (1.0 - 2 * padding) / 3.0  # Split evenly among 3 columns
+        subplot_spec = axes.get_subplotspec()
+        fig = axes.get_figure()
 
-        # Define bounds for each column
-        chirp_bounds = (0.0, 0.0, column_width, 1.0)  # Left column
-        bar_bounds = (column_width + padding, 0.0, column_width, 1.0)  # Middle column
-        feat_bounds = (
-            2 * (column_width + padding),
-            0.0,
-            column_width,
-            1.0,
-        )  # Right column
+        if subplot_spec is None:
+            raise ValueError("paint_observable requires a subplot")
 
-        # Create inset axes for each column
-        chirp_ax = axes.inset_axes(chirp_bounds, transform=axes.transAxes)
-        bar_ax = axes.inset_axes(bar_bounds, transform=axes.transAxes)
-        feat_ax = axes.inset_axes(feat_bounds, transform=axes.transAxes)
+        assert isinstance(fig, Figure)
 
+        # Create a grid within the provided axes
+        gs = GridSpecFromSubplotSpec(
+            1,
+            3,
+            subplot_spec=subplot_spec,
+            width_ratios=[1.5, 1, 0.5],
+            wspace=0.15,
+        )
+
+        # Create subplots for each component
+        chirp_ax = Axes(fig, gs[0, 0])
+        bar_ax = Axes(fig, gs[0, 1])
+        feat_ax = Axes(fig, gs[0, 2])
+
+        # Add the subplots to the figure
+        axes.figure.add_subplot(chirp_ax)
+        axes.figure.add_subplot(bar_ax)
+        axes.figure.add_subplot(feat_ax)
+
+        # Extract data
         chirp_len = 249
-
         bar_len = 32
         chirp_response = observable.obs[:chirp_len]
         bar_response = observable.obs[chirp_len : chirp_len + bar_len]
         features = observable.obs[chirp_len + bar_len :]
 
-        # Plot chirp response
+        # Plot chirp response without title
         chirp_ax.plot(chirp_response, color="black", linewidth=1)
-        chirp_ax.set_title("Chirp Response", fontsize=8)
         chirp_ax.set_xticks([])
         chirp_ax.spines["top"].set_visible(False)
         chirp_ax.spines["right"].set_visible(False)
 
-        # Plot bar response
+        # Plot bar response without title
         bar_ax.plot(bar_response, color="black", linewidth=1)
-        bar_ax.set_title("Bar Response", fontsize=8)
         bar_ax.set_xticks([])
         bar_ax.spines["top"].set_visible(False)
         bar_ax.spines["right"].set_visible(False)
 
-        # Show features as text
+        # Show features as text without background
         feat_ax.axis("off")
         feature_names = ["Bar DS p-value", "Bar OS p-value", "ROI size (μm²)"]
         feature_text = "\n".join(
@@ -216,7 +221,7 @@ class NeuralTracesDataset(ClusteringDataset):
             0.05,
             0.5,
             feature_text,
-            fontsize=8,
+            fontsize=7,  # Smaller font
             va="center",
             ha="left",
             transform=feat_ax.transAxes,
