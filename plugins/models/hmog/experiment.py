@@ -30,7 +30,11 @@ from .artifacts import AnalysisArgs, log_artifacts
 from .configs import (
     RepresentationType,
 )
-from .trainers import FullModelTrainer, LGMTrainer, MixtureTrainer
+from .trainers import (
+    FullModelTrainer,
+    LGMTrainer,
+    MixtureTrainer,
+)
 
 ### Preamble ###
 
@@ -225,6 +229,7 @@ class ThreeStageHMoGExperiment(HMoGExperiment[PositiveDefinite, PositiveDefinite
 class CyclicHMoGExperiment(HMoGExperiment[PositiveDefinite, PositiveDefinite]):
     """HMoG experiment using cyclical alternating optimization."""
 
+    pre: LGMTrainer[PositiveDefinite, PositiveDefinite]
     num_cycles: int
 
     def __init__(
@@ -234,6 +239,7 @@ class CyclicHMoGExperiment(HMoGExperiment[PositiveDefinite, PositiveDefinite]):
         n_clusters: int,
         obs_rep: RepresentationType,
         lat_rep: RepresentationType,
+        pre: LGMTrainer[PositiveDefinite, PositiveDefinite],
         lgm: LGMTrainer[PositiveDefinite, PositiveDefinite],
         mix: MixtureTrainer[PositiveDefinite, PositiveDefinite],
         full: FullModelTrainer[PositiveDefinite, PositiveDefinite],
@@ -252,13 +258,14 @@ class CyclicHMoGExperiment(HMoGExperiment[PositiveDefinite, PositiveDefinite]):
             analysis=analysis,
         )
         self.num_cycles = num_cycles
+        self.pre = pre
 
     @property
     @override
     def n_epochs(self) -> int:
         """Calculate total number of epochs across all cycles."""
-        return self.lgm.n_epochs + self.num_cycles * (
-            self.lgm.n_epochs + self.mix.n_epochs
+        return self.num_cycles * (
+            self.lgm.n_epochs + self.mix.n_epochs + self.full.n_epochs
         )
 
     @override
@@ -271,49 +278,66 @@ class CyclicHMoGExperiment(HMoGExperiment[PositiveDefinite, PositiveDefinite]):
     ) -> None:
         """Train HMoG model using alternating optimization."""
         # Split PRNG key for different training phases
-        keys = jax.random.split(key, 2 + 2 * self.num_cycles)  # Init + cycle keys
+        init_key, pre_key, *cycle_keys = jax.random.split(key, self.num_cycles + 2)
 
         # Initialize model
         params = self.model.natural_point(
-            self.initialize_model(keys[0], dataset.train_data)
+            self.initialize_model(init_key, dataset.train_data)
         )
 
         # Track total epochs
         epoch = 0
 
-        # Initial LGM training (establish good starting point)
-        params = self.lgm.train(
-            keys[1], handler, dataset, self.model, logger, epoch, params
-        )
-        epoch += self.lgm.n_epochs
-        log_artifacts(handler, dataset, logger, self.model, epoch, params)
-
-        # Cycle between Mixture and LGM training
-        for cycle in range(self.num_cycles):
-            key_mix, key_lgm = keys[2 + cycle * 2 : 4 + cycle * 2]
-
-            # Train mixture components (LGM params fixed)
-            log.info(
-                f"Cycle {cycle + 1}/{self.num_cycles}: Training mixture components"
-            )
-            params = self.mix.train(
-                key_mix, handler, dataset, self.model, logger, epoch, params
-            )
-            epoch += self.mix.n_epochs
-            log_artifacts(handler, dataset, logger, self.model, epoch, params)
-
-            # Train LGM (mixture params fixed)
-            log.info(f"Cycle {cycle + 1}/{self.num_cycles}: Training LGM component")
-            params = self.lgm.train(
-                key_lgm,
+        # Train LGM (mixture params fixed)
+        if self.pre.n_epochs > 0:
+            log.info("Pre-training LGM parameters")
+            params = self.pre.train(
+                pre_key,
                 handler,
                 dataset,
                 self.model,
                 logger,
                 epoch,
-                params,  # Need to update LGMTrainer to accept epoch_offset
+                params,
             )
-            epoch += self.lgm.n_epochs
+            epoch += self.pre.n_epochs
+
+        # Cycle between Mixture and LGM training
+        for cycle in range(self.num_cycles):
+            key_lgm, key_mix, key_full = jax.random.split(cycle_keys[cycle], 3)
+
+            # Train LGM (mixture params fixed)
+            if self.lgm.n_epochs > 0:
+                log.info(
+                    f"Cycle {cycle + 1}/{self.num_cycles}: Training LGM parameters"
+                )
+                params = self.lgm.train(
+                    key_lgm,
+                    handler,
+                    dataset,
+                    self.model,
+                    logger,
+                    epoch,
+                    params,
+                )
+                epoch += self.lgm.n_epochs
+
+            if self.mix.n_epochs > 0:
+                log.info(
+                    f"Cycle {cycle + 1}/{self.num_cycles}: Training mixture parameters"
+                )
+                params = self.mix.train(
+                    key_mix, handler, dataset, self.model, logger, epoch, params
+                )
+                epoch += self.mix.n_epochs
+
+            if self.full.n_epochs > 0:
+                log.info(f"Cycle {cycle + 1}/{self.num_cycles}: Training full model")
+                params = self.full.train(
+                    key_full, handler, dataset, self.model, logger, epoch, params
+                )
+                epoch += self.full.n_epochs
+
             log_artifacts(handler, dataset, logger, self.model, epoch, params)
 
             log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")
