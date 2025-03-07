@@ -8,30 +8,10 @@ from typing import override
 from jax import Array
 from matplotlib.axes import Axes
 
-from .runtime.handler import Artifact, JSONDict, RunHandler
+from .runtime.handler import RunHandler
 from .runtime.logger import JaxLogger
 
 ### Interfaces ###
-
-
-@dataclass(frozen=True)
-class ObservableArtifact(Artifact):
-    """Artifact wrapping a single observable."""
-
-    obs: Array
-    shape: tuple[int, int]
-
-    @override
-    def to_json(self) -> JSONDict:
-        return {"obs": self.obs.tolist(), "shape": list(self.shape)}
-
-    @classmethod
-    @override
-    def from_json(cls, json_dict: JSONDict) -> ObservableArtifact:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return cls(
-            obs=Array(json_dict["obs"]),
-            shape=tuple(json_dict["shape"]),
-        )
 
 
 class Dataset(ABC):
@@ -52,16 +32,10 @@ class Dataset(ABC):
     def test_data(self) -> Array:
         """Test data with shape (n_test, data_dim)."""
 
-    @abstractmethod
-    def observable_artifact(self, observable: Array) -> ObservableArtifact:
-        """Convert an observable to an artifact for logging."""
-
     @staticmethod
     @abstractmethod
-    def paint_observable(observable: ObservableArtifact, axes: Axes):
+    def paint_observable(observable: Array, axes: Axes):
         """A function for rendering an observation from the dataset."""
-
-    pass
 
 
 dataclass(frozen=True)
@@ -106,6 +80,12 @@ class ClusteringDataset(Dataset, ABC):
 
     cache_dir: Path
 
+    @abstractmethod
+    def paint_prototype(
+        self, cluster_id: int, prototype: Array, members: Array, axes: Axes
+    ) -> None:
+        """Visualize a prototype and its cluster members."""
+
 
 # Models
 
@@ -125,10 +105,6 @@ class ClusteringModel(Model[ClusteringDataset], ABC):
     @abstractmethod
     def generate(self, params: Array, key: Array, n_samples: int) -> Array:
         """Generate new samples using the trained model."""
-
-    @abstractmethod
-    def cluster_assignments(self, params: Array, data: Array) -> Array:
-        """Determine cluster assignments for each sample."""
 
     @abstractmethod
     @override

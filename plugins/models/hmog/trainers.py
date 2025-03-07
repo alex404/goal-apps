@@ -97,7 +97,8 @@ def log_epoch_metrics[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     test_data = dataset.test_data
 
     def compute_metrics() -> None:
-        # Compute core performance metrics
+        # Core Performance Metrics
+
         epoch_train_ll = hmog_model.average_log_observable_density(params, train_data)
         epoch_test_ll = hmog_model.average_log_observable_density(params, test_data)
 
@@ -107,7 +108,6 @@ def log_epoch_metrics[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         )
         info = jnp.array(logging.INFO)
 
-        # Build metrics dictionary with display names and levels
         metrics: MetricDict = {
             "Performance/Train Log-Likelihood": (
                 info,
@@ -122,6 +122,8 @@ def log_epoch_metrics[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 epoch_scaled_bic,
             ),
         }
+
+        # Raw Parameter Statistics
 
         stats = jnp.array(STATS_LEVEL)
 
@@ -146,7 +148,6 @@ def log_epoch_metrics[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 }
             )
 
-        # Add parameter statistics at DEBUG level
         obs_params, lwr_int_params, upr_params = hmog_model.split_params(params)
         obs_loc_params, obs_prs_params = hmog_model.obs_man.split_params(obs_params)
         lat_params, upr_int_params, cat_params = hmog_model.upr_hrm.split_params(
@@ -164,14 +165,94 @@ def log_epoch_metrics[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         update_parameter_stats("Lat Interaction", upr_int_params)
         update_parameter_stats("Categorical", cat_params)
 
-        metrics.update(
-            {
-                "Params/Loading Sparsity": (
-                    stats,
-                    jnp.mean(jnp.abs(lwr_int_params.array) < 1e-6),
-                )
-            }
-        )
+        # Regularization Metrics
+
+        # Compute latent distribution statistics
+        # Get latent distribution in mean coordinates for analysis
+        with hmog_model.lwr_hrm as lh:
+            lkl_params = lh.lkl_man.join_params(obs_params, lwr_int_params)
+            # Use a standard normal reference
+            z = lh.lat_man.to_natural(lh.lat_man.standard_normal())
+            lgm_params = lh.join_conjugated(lkl_params, z)
+            # Get posterior means for the dataset
+            lgm_means = lh.expectation_step(lgm_params, train_data)
+            lgm_lat_means = lh.split_params(lgm_means)[2]
+
+            # Get mean and covariance from latent means
+            lat_mean, lat_cov = lh.lat_man.split_mean_covariance(lgm_lat_means)
+            lat_mean_array = lat_mean.array
+            lat_cov_array = lh.lat_man.cov_man.to_dense(lat_cov)
+
+            # Add latent distribution metrics
+            metrics.update(
+                {
+                    "Regularization/Loading Sparsity": (
+                        stats,
+                        jnp.mean(jnp.abs(lwr_int_params.array) < 1e-6),
+                    ),
+                    "Regularization/Latent KL to Z": (
+                        stats,
+                        lh.lat_man.relative_entropy(lgm_lat_means, z),
+                    ),
+                    # Mean vector summary
+                    "Regularization/Latent Mean Norm": (
+                        stats,
+                        jnp.linalg.norm(lat_mean_array),
+                    ),
+                    "Regularization/Latent Mean Min": (
+                        stats,
+                        jnp.min(lat_mean_array),
+                    ),
+                    "Regularization/Latent Mean Max": (
+                        stats,
+                        jnp.max(lat_mean_array),
+                    ),
+                    # Variance summary
+                    "Regularization/Latent Var Min": (
+                        stats,
+                        jnp.min(jnp.diag(lat_cov_array)),
+                    ),
+                    "Regularization/Latent Var Max": (
+                        stats,
+                        jnp.max(jnp.diag(lat_cov_array)),
+                    ),
+                    "Regularization/Latent Var Mean": (
+                        stats,
+                        jnp.mean(jnp.diag(lat_cov_array)),
+                    ),
+                    # Eigenvalue analysis
+                    "Regularization/Latent Eigenvalue Min": (
+                        stats,
+                        jnp.min(jnp.linalg.eigvalsh(lat_cov_array)),
+                    ),
+                    # Eigenvalue analysis
+                    "Regularization/Latent Eigenvalue Median": (
+                        stats,
+                        jnp.median(jnp.linalg.eigvalsh(lat_cov_array)),
+                    ),
+                    "Regularization/Latent Eigenvalue Max": (
+                        stats,
+                        jnp.max(jnp.linalg.eigvalsh(lat_cov_array)),
+                    ),
+                    # Structure summary
+                    "Regularization/Latent Off-Diag Magnitude": (
+                        stats,
+                        jnp.linalg.norm(
+                            lat_cov_array - jnp.diag(jnp.diag(lat_cov_array)), "fro"
+                        ),
+                    ),
+                    "Regularization/Latent Condition Number": (
+                        stats,
+                        jnp.linalg.cond(
+                            lat_cov_array + jnp.eye(lat_cov_array.shape[0])
+                        ),  # Small epsilon for stability
+                    ),
+                    "Regularization/Latent Effective Rank": (
+                        stats,
+                        jnp.sum(jnp.linalg.eigvalsh(lat_cov_array) > 1e-6),
+                    ),
+                }
+            )
 
         ### Grad Norms ###
 

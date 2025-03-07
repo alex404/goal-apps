@@ -122,6 +122,7 @@ def initialize_run(
     cs.store(name="config_schema", node=run_type)
     proot = Path(__file__).parents[3]
 
+    print(overrides)
     # Initialize hydra config
     with hydra.initialize_config_dir(
         version_base="1.3", config_dir=str(proot / "config" / "hydra")

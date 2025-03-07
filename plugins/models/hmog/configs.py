@@ -41,31 +41,31 @@ class EMLGMTrainerConfig(LGMTrainerConfig):
 
 
 @dataclass
-class GradientLGMTrainerConfig(LGMTrainerConfig):
-    """Configuration for gradient-based LGM trainer."""
-
-    _target_: str = "plugins.models.hmog.trainers.GradientLGMTrainer"
-    lr_init: float = 1e-3
-    lr_final_ratio: float = 1
-    batch_size: int = 256
-    l1_reg: float = 0
-    l2_reg: float = 0.0001
-    re_reg: float = 1
-    grad_clip: float = 8
-
-
-@dataclass
 class GradientLGMPretrainerConfig(LGMTrainerConfig):
     """Configuration for gradient-based LGM trainer."""
 
     _target_: str = "plugins.models.hmog.trainers.GradientLGMPretrainer"
     n_epochs: int = 500
     lr_init: float = 1e-3
+    lr_final_ratio: float = 0.2
+    batch_size: int = 256
+    l1_reg: float = 0
+    l2_reg: float = 0.0001
+    re_reg: float = 0.1
+    grad_clip: float = 8
+
+
+@dataclass
+class GradientLGMTrainerConfig(LGMTrainerConfig):
+    """Configuration for gradient-based LGM trainer."""
+
+    _target_: str = "plugins.models.hmog.trainers.GradientLGMTrainer"
+    lr_init: float = 1e-4
     lr_final_ratio: float = 1
     batch_size: int = 256
     l1_reg: float = 0
     l2_reg: float = 0.0001
-    re_reg: float = 0
+    re_reg: float = 0.1
     grad_clip: float = 8
 
 
@@ -87,7 +87,7 @@ class GradientMixtureTrainerConfig(MixtureTrainerConfig):
     """Configuration for gradient-based mixture trainer."""
 
     _target_: str = "plugins.models.hmog.trainers.GradientMixtureTrainer"
-    lr_init: float = 1e-3
+    lr_init: float = 1e-4
     lr_final_ratio: float = 1
     batch_size: int = 256
     l2_reg: float = 0.0001
@@ -102,7 +102,7 @@ class FullModelTrainerConfig:
     """Base configuration for full model trainers."""
 
     n_epochs: int = 100
-    min_prob: float = 1e-3
+    min_prob: float = 1e-4
     obs_min_var: float = 1e-6
     obs_jitter: float = 0
     lat_min_var: float = 0
@@ -114,12 +114,12 @@ class GradientFullModelTrainerConfig(FullModelTrainerConfig):
     """Configuration for gradient-based full model trainer."""
 
     _target_: str = "plugins.models.hmog.trainers.GradientFullModelTrainer"
-    lr_init: float = 3e-4
+    lr_init: float = 1e-4
     lr_final_ratio: float = 1
     batch_size: int = 256
     l1_reg: float = 0
     l2_reg: float = 0.0001
-    re_reg: float = 1
+    re_reg: float = 0.1
     grad_clip: float = 8
 
 

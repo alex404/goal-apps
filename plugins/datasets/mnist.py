@@ -10,11 +10,12 @@ import numpy as np
 from hydra.core.config_store import ConfigStore
 from jax import Array
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 from numpy.typing import NDArray
 from torchvision import datasets, transforms
 
 from apps.configs import ClusteringDatasetConfig
-from apps.plugins import ClusteringDataset, ObservableArtifact
+from apps.plugins import ClusteringDataset
 
 
 @dataclass
@@ -124,12 +125,8 @@ Original error: {e!s}"""
         return 10  # Digits 0-9
 
     @override
-    def observable_artifact(self, observable: Array) -> ObservableArtifact:
-        return ObservableArtifact(obs=observable, shape=(28, 28))
-
-    @override
     @staticmethod
-    def paint_observable(observable: ObservableArtifact, axes: Axes):
+    def paint_observable(observable: Array, axes: Axes):
         """Visualize a single MNIST digit.
 
         Args:
@@ -142,10 +139,72 @@ Original error: {e!s}"""
         """
 
         # Create figure
-        obs = observable.obs
         shp_rws, shp_cls = observable.shape
 
         # Display image
-        img = obs.reshape(shp_rws, shp_cls)
+        img = observable.reshape(shp_rws, shp_cls)
         axes.imshow(img, cmap="gray", interpolation="nearest")
         axes.axis("off")
+
+    @override
+    def paint_prototype(
+        self, cluster_id: int, prototype: Array, members: Array, axes: Axes
+    ) -> None:
+        """Visualize an MNIST digit prototype and selected members.
+
+        Args:
+            prototype_artifact: Artifact containing prototype and member digits
+            axes: Matplotlib axes to draw on
+        """
+        from matplotlib.gridspec import GridSpecFromSubplotSpec
+
+        # Turn off the main axes frame
+        axes.set_axis_off()
+
+        # Get subplot specification and figure
+        subplot_spec = axes.get_subplotspec()
+        fig = axes.get_figure()
+
+        if subplot_spec is None:
+            raise ValueError("paint_prototype requires a subplot")
+
+        assert isinstance(fig, Figure)
+
+        # Create a grid layout: prototype on left, members grid on right
+        gs = GridSpecFromSubplotSpec(
+            1, 2, subplot_spec=subplot_spec, width_ratios=[1, 3], wspace=0.2
+        )
+
+        # Create axes for prototype and members grid
+        proto_ax = fig.add_subplot(gs[0, 0])
+
+        # Determine grid size for members (up to 16 members in a 4x4 grid)
+        n_members = min(16, members.shape[0])
+        grid_size = int(np.ceil(np.sqrt(n_members)))
+        members_gs = GridSpecFromSubplotSpec(
+            grid_size, grid_size, subplot_spec=gs[0, 1], wspace=0.1, hspace=0.1
+        )
+
+        # Plot prototype
+        prototype_img = prototype.reshape(28, 28)
+        proto_ax.imshow(prototype_img, cmap="gray", interpolation="nearest")
+        proto_ax.set_title(f"Cluster {cluster_id}")
+        proto_ax.axis("off")
+
+        # Plot selected members in grid
+        for i in range(n_members):
+            member_ax = fig.add_subplot(members_gs[i // grid_size, i % grid_size])
+            member_img = members[i].reshape(28, 28)
+            member_ax.imshow(member_img, cmap="gray", interpolation="nearest")
+            member_ax.axis("off")
+
+        # Add cluster size text
+        axes.text(
+            0.98,
+            0.02,
+            f"n={members.shape[0]}",
+            transform=axes.transAxes,
+            horizontalalignment="right",
+            verticalalignment="bottom",
+            bbox=dict(facecolor="white", alpha=0.7, pad=3),
+        )

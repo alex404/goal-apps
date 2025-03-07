@@ -13,7 +13,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 from apps.configs import ClusteringDatasetConfig
-from apps.plugins import ClusteringDataset, ObservableArtifact
+from apps.plugins import ClusteringDataset
 
 
 @dataclass
@@ -141,27 +141,14 @@ class NeuralTracesDataset(ClusteringDataset):
     def data_dim(self) -> int:
         return self.chirp_len + self.bar_len + self.feature_len
 
-    @override
-    def observable_artifact(self, observable: Array) -> ObservableArtifact:
-        """Convert neural trace to visualization-friendly format.
-
-        Args:
-            observable: Neural trace array of shape (data_dim,)
-
-        Returns:
-            ObservableArtifact containing the chirp response for visualization
-        """
-        # Extract chirp response
-        x_height = observable.shape[0]
-        y_height = np.round(x_height / 2)
-        return ObservableArtifact(obs=observable, shape=(y_height, x_height))
-
     @staticmethod
     @override
-    def paint_observable(observable: ObservableArtifact, axes: Axes) -> None:
+    def paint_observable(observable: Array, axes: Axes) -> None:
         """Visualize a single neural trace."""
         from matplotlib.gridspec import GridSpecFromSubplotSpec
 
+        x_height = observable.shape[0]
+        y_height = np.round(x_height / 2)
         # Turn off the main axes
         axes.set_axis_off()
 
@@ -195,9 +182,9 @@ class NeuralTracesDataset(ClusteringDataset):
         # Extract data
         chirp_len = 249
         bar_len = 32
-        chirp_response = observable.obs[:chirp_len]
-        bar_response = observable.obs[chirp_len : chirp_len + bar_len]
-        features = observable.obs[chirp_len + bar_len :]
+        chirp_response = observable[:chirp_len]
+        bar_response = observable[chirp_len : chirp_len + bar_len]
+        features = observable[chirp_len + bar_len :]
 
         # Plot chirp response without title
         chirp_ax.plot(chirp_response, color="black", linewidth=1)
@@ -225,4 +212,114 @@ class NeuralTracesDataset(ClusteringDataset):
             va="center",
             ha="left",
             transform=feat_ax.transAxes,
+        )
+
+    @override
+    def paint_prototype(
+        self, cluster_id: int, prototype: Array, members: Array, axes: Axes
+    ) -> None:
+        """Visualize a neural trace prototype and its cluster members with transparency.
+
+        Args:
+            prototype_artifact: Artifact containing prototype and member traces
+            axes: Matplotlib axes to draw on
+        """
+        from matplotlib.gridspec import GridSpecFromSubplotSpec
+
+        # Turn off the main axes
+        axes.set_axis_off()
+
+        subplot_spec = axes.get_subplotspec()
+        fig = axes.get_figure()
+
+        if subplot_spec is None:
+            raise ValueError("paint_prototype requires a subplot")
+
+        assert isinstance(fig, Figure)
+
+        # Create a grid within the provided axes
+        gs = GridSpecFromSubplotSpec(
+            1,
+            3,
+            subplot_spec=subplot_spec,
+            width_ratios=[1.5, 1, 0.5],
+            wspace=0.15,
+        )
+
+        # Create subplots for each component
+        chirp_ax = Axes(fig, gs[0, 0])
+        bar_ax = Axes(fig, gs[0, 1])
+        feat_ax = Axes(fig, gs[0, 2])
+
+        # Add the subplots to the figure
+        axes.figure.add_subplot(chirp_ax)
+        axes.figure.add_subplot(bar_ax)
+        axes.figure.add_subplot(feat_ax)
+
+        # Extract data dimensions
+        chirp_len = 249
+        bar_len = 32
+        n_members = members.shape[0]
+
+        # Compute alpha based on number of traces
+        base_alpha = min(0.4, 10.0 / max(1, n_members))
+
+        # First plot all member traces with transparency
+        for i in range(n_members):
+            trace = members[i]
+            chirp_response = trace[:chirp_len]
+            bar_response = trace[chirp_len : chirp_len + bar_len]
+
+            # Plot member chirp response with transparency
+            chirp_ax.plot(
+                chirp_response, color="black", linewidth=0.5, alpha=base_alpha
+            )
+
+            # Plot member bar response with transparency
+            bar_ax.plot(bar_response, color="black", linewidth=0.5, alpha=base_alpha)
+
+        # Then plot the prototype on top with full opacity
+        proto_trace = prototype
+        proto_chirp = proto_trace[:chirp_len]
+        proto_bar = proto_trace[chirp_len : chirp_len + bar_len]
+        proto_features = proto_trace[chirp_len + bar_len :]
+
+        # Plot prototype chirp response
+        chirp_ax.plot(proto_chirp, color="red", linewidth=1.5)
+        chirp_ax.set_title(f"Cluster {cluster_id}")
+        chirp_ax.set_xticks([])
+        chirp_ax.spines["top"].set_visible(False)
+        chirp_ax.spines["right"].set_visible(False)
+
+        # Plot prototype bar response
+        bar_ax.plot(proto_bar, color="red", linewidth=1.5)
+        bar_ax.set_xticks([])
+        bar_ax.spines["top"].set_visible(False)
+        bar_ax.spines["right"].set_visible(False)
+
+        # Show features as text
+        feat_ax.axis("off")
+        feature_names = ["Bar DS p-value", "Bar OS p-value", "ROI size (μm²)"]
+        feature_text = "\n".join(
+            f"{name}: {value:.3f}" for name, value in zip(feature_names, proto_features)
+        )
+        feat_ax.text(
+            0.05,
+            0.5,
+            feature_text,
+            fontsize=7,  # Smaller font
+            va="center",
+            ha="left",
+            transform=feat_ax.transAxes,
+        )
+
+        # Add cluster size annotation
+        axes.text(
+            0.98,
+            0.02,
+            f"n={n_members}",
+            transform=axes.transAxes,
+            horizontalalignment="right",
+            verticalalignment="bottom",
+            bbox=dict(facecolor="white", alpha=0.7, pad=3),
         )

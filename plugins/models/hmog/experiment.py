@@ -154,17 +154,6 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         )
 
     @override
-    def cluster_assignments(self, params: Array, data: Array) -> Array:
-        def data_point_cluster(x: Array) -> Array:
-            with self.model as m:
-                cat_pst = m.lat_man.prior(m.posterior_at(m.natural_point(params), x))
-                with m.lat_man.lat_man as lm:
-                    probs = lm.to_probs(lm.to_mean(cat_pst))
-            return jnp.argmax(probs, axis=-1)
-
-        return jax.vmap(data_point_cluster)(data)
-
-    @override
     def analyze(
         self,
         key: Array,

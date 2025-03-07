@@ -2,7 +2,7 @@ defaults:
   - config_schema
   - _self_
 
-run_name: ${now:%Y%m%d_%H%M%S}
+run_name: ${now:%Y%m%d-%H%M%S}
 device: gpu
 jit: true
 use_local: true
