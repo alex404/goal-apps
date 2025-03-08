@@ -110,6 +110,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     @override
     def initialize_model(self, key: Array, data: Array) -> Array:
         """Initialize model parameters."""
+        noise_scale = 0.01
         keys = jax.random.split(key, 3)
         key_cat, key_comp, key_int = keys
 
@@ -120,17 +121,18 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         obs_params = self.model.obs_man.to_natural(obs_means)
 
         with self.model.upr_hrm as uh:
-            cat_params = uh.lat_man.initialize(key_cat)
+            cat_params = uh.lat_man.initialize(key_cat, shape=noise_scale)
             key_comps = jax.random.split(key_comp, self.n_clusters)
             component_list = [
-                uh.obs_man.initialize(key_compi).array for key_compi in key_comps
+                uh.obs_man.initialize(key_compi, shape=noise_scale).array
+                for key_compi in key_comps
             ]
             components = jnp.stack(component_list)
             mix_params = uh.join_natural_mixture(
                 uh.cmp_man.natural_point(components), cat_params
             )
 
-        int_noise = 0.1 * jax.random.normal(key_int, self.model.int_man.shape)
+        int_noise = noise_scale * jax.random.normal(key_int, self.model.int_man.shape)
         lkl_params = self.model.lkl_man.join_params(
             obs_params,
             self.model.int_man.point(self.model.int_man.rep.from_dense(int_noise)),
