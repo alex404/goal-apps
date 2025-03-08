@@ -37,9 +37,8 @@ class Dataset(ABC):
     def test_data(self) -> Array:
         """Test data with shape (n_test, data_dim)."""
 
-    @staticmethod
     @abstractmethod
-    def paint_observable(observable: Array, axes: Axes):
+    def paint_observable(self, observable: Array, axes: Axes):
         """A function for rendering an observation from the dataset.
 
         Args:

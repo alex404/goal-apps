@@ -139,8 +139,7 @@ Original error: {e!s}"""
         return 10  # Digits 0-9
 
     @override
-    @staticmethod
-    def paint_observable(observable: Array, axes: Axes):
+    def paint_observable(self, observable: Array, axes: Axes):
         img = observable.reshape(N_ROWS, N_COLS)
         axes.imshow(img, cmap="gray", interpolation="nearest")
         axes.axis("off")

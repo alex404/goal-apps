@@ -45,7 +45,7 @@ class GradientLGMPretrainerConfig(LGMTrainerConfig):
     """Configuration for gradient-based LGM trainer."""
 
     _target_: str = "plugins.models.hmog.trainers.GradientLGMPretrainer"
-    n_epochs: int = 500
+    n_epochs: int = 1000
     lr_init: float = 1e-3
     lr_final_ratio: float = 0.1
     batch_size: int = 256
@@ -60,6 +60,7 @@ class GradientLGMTrainerConfig(LGMTrainerConfig):
     """Configuration for gradient-based LGM trainer."""
 
     _target_: str = "plugins.models.hmog.trainers.GradientLGMTrainer"
+    n_epochs: int = 200
     lr_init: float = 1e-4
     lr_final_ratio: float = 1
     batch_size: int = 256
@@ -76,7 +77,7 @@ class GradientLGMTrainerConfig(LGMTrainerConfig):
 class MixtureTrainerConfig:
     """Base configuration for mixture trainers."""
 
-    n_epochs: int = 100
+    n_epochs: int = 200
     min_prob: float = 1e-4
     min_var: float = 0
     jitter: float = 0
@@ -101,7 +102,7 @@ class GradientMixtureTrainerConfig(MixtureTrainerConfig):
 class FullModelTrainerConfig:
     """Base configuration for full model trainers."""
 
-    n_epochs: int = 100
+    n_epochs: int = 0
     min_prob: float = 1e-4
     obs_min_var: float = 1e-6
     obs_jitter: float = 0
@@ -114,7 +115,7 @@ class GradientFullModelTrainerConfig(FullModelTrainerConfig):
     """Configuration for gradient-based full model trainer."""
 
     _target_: str = "plugins.models.hmog.trainers.GradientFullModelTrainer"
-    lr_init: float = 1e-4
+    lr_init: float = 3e-5
     lr_final_ratio: float = 1
     batch_size: int = 256
     l1_reg: float = 0

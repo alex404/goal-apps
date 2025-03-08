@@ -54,7 +54,7 @@ def cluster_assignments[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 probs = lm.to_probs(lm.to_mean(cat_pst))
         return jnp.argmax(probs, axis=-1)
 
-    return jax.vmap(data_point_cluster)(data)
+    return jax.lax.map(data_point_cluster, data, batch_size=2048)
 
 
 def get_component_prototypes[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
@@ -109,7 +109,7 @@ def compute_component_divergences[ObsRep: PositiveDefinite, LatRep: PositiveDefi
     def kl_div_from_one_to_all(i: Array) -> Array:
         return jax.vmap(kl_div_between_components, in_axes=(None, 0))(i, idxs)
 
-    kl_matrix = jax.vmap(kl_div_from_one_to_all)(idxs)
+    kl_matrix = jax.lax.map(kl_div_from_one_to_all, idxs)
     symmetric_kl = (kl_matrix + kl_matrix.T) / 2
 
     # Convert to numpy and handle distances
@@ -388,9 +388,9 @@ def log_artifacts[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     """
     # from_scratch if params is provided
     if params is not None:
+        handler.save_params(epoch, params.array)
         clusters = get_cluster_hierarchy(model, params)
         cluster_statistics = get_cluster_statistics(model, dataset, params)
-        handler.save_params(epoch, params.array)
     else:
         clusters = handler.load_artifact(epoch, ClusterHierarchy)
         cluster_statistics = handler.load_artifact(epoch, ClusterStatistics)
