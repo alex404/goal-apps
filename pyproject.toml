@@ -9,6 +9,9 @@ dependencies = [
     "hydra-core",
     "wandb",
     "typer",
+    "pandas",
+    "h5py",
+    "tables",
 ]
 
 [project.scripts]
@@ -26,7 +29,6 @@ gpu = [
 
 datasets = [
     "torchvision",
-    "pandas",
 ]
 
 [build-system]

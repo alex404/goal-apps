@@ -1,5 +1,6 @@
 """MNIST dataset implementation."""
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import override
@@ -16,6 +17,9 @@ from torchvision import datasets, transforms
 
 from apps.configs import ClusteringDatasetConfig
 from apps.plugins import ClusteringDataset
+
+N_ROWS = 28
+N_COLS = 28
 
 
 @dataclass
@@ -99,6 +103,16 @@ Original error: {e!s}"""
 
     @property
     @override
+    def observable_shape(self) -> tuple[int, int]:
+        return (N_ROWS, N_COLS)
+
+    @property
+    @override
+    def cluster_shape(self) -> tuple[int, int]:
+        return (N_ROWS, math.ceil(N_COLS * 1.5))
+
+    @property
+    @override
     def train_data(self) -> Array:
         return self._train_images
 
@@ -118,7 +132,7 @@ Original error: {e!s}"""
     @property
     @override
     def data_dim(self) -> int:
-        return 784  # 28x28 images
+        return N_ROWS * N_COLS
 
     @property
     def n_classes(self) -> int:
@@ -127,27 +141,12 @@ Original error: {e!s}"""
     @override
     @staticmethod
     def paint_observable(observable: Array, axes: Axes):
-        """Visualize a single MNIST digit.
-
-        Args:
-            obs: Flattened image array of shape (784,)
-
-        Returns:
-            Tuple of:
-            - Image dimensions (height, width)
-            - Figure containing the visualization
-        """
-
-        # Create figure
-        shp_rws, shp_cls = observable.shape
-
-        # Display image
-        img = observable.reshape(shp_rws, shp_cls)
+        img = observable.reshape(N_ROWS, N_COLS)
         axes.imshow(img, cmap="gray", interpolation="nearest")
         axes.axis("off")
 
     @override
-    def paint_prototype(
+    def paint_cluster(
         self, cluster_id: int, prototype: Array, members: Array, axes: Axes
     ) -> None:
         """Visualize an MNIST digit prototype and selected members.
@@ -178,33 +177,23 @@ Original error: {e!s}"""
         # Create axes for prototype and members grid
         proto_ax = fig.add_subplot(gs[0, 0])
 
-        # Determine grid size for members (up to 16 members in a 4x4 grid)
-        n_members = min(16, members.shape[0])
-        grid_size = int(np.ceil(np.sqrt(n_members)))
-        members_gs = GridSpecFromSubplotSpec(
-            grid_size, grid_size, subplot_spec=gs[0, 1], wspace=0.1, hspace=0.1
-        )
-
         # Plot prototype
-        prototype_img = prototype.reshape(28, 28)
+        prototype_img = prototype.reshape(N_ROWS, N_COLS)
         proto_ax.imshow(prototype_img, cmap="gray", interpolation="nearest")
-        proto_ax.set_title(f"Cluster {cluster_id}")
+        proto_ax.set_title(f"Cluster {cluster_id}\nSize: {members.shape[0]}")
         proto_ax.axis("off")
 
-        # Plot selected members in grid
-        for i in range(n_members):
-            member_ax = fig.add_subplot(members_gs[i // grid_size, i % grid_size])
-            member_img = members[i].reshape(28, 28)
-            member_ax.imshow(member_img, cmap="gray", interpolation="nearest")
-            member_ax.axis("off")
+        # Determine grid size for members (up to 16 members in a 4x4 grid)
+        if members.shape[0] > 0:
+            n_members = min(16, members.shape[0])
+            grid_size = int(np.ceil(np.sqrt(n_members)))
+            members_gs = GridSpecFromSubplotSpec(
+                grid_size, grid_size, subplot_spec=gs[0, 1], wspace=0.1, hspace=0.1
+            )
 
-        # Add cluster size text
-        axes.text(
-            0.98,
-            0.02,
-            f"n={members.shape[0]}",
-            transform=axes.transAxes,
-            horizontalalignment="right",
-            verticalalignment="bottom",
-            bbox=dict(facecolor="white", alpha=0.7, pad=3),
-        )
+            # Plot selected members in grid
+            for i in range(n_members):
+                member_ax = fig.add_subplot(members_gs[i // grid_size, i % grid_size])
+                member_img = members[i].reshape(N_ROWS, N_COLS)
+                member_ax.imshow(member_img, cmap="gray", interpolation="nearest")
+                member_ax.axis("off")

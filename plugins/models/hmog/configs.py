@@ -47,7 +47,7 @@ class GradientLGMPretrainerConfig(LGMTrainerConfig):
     _target_: str = "plugins.models.hmog.trainers.GradientLGMPretrainer"
     n_epochs: int = 500
     lr_init: float = 1e-3
-    lr_final_ratio: float = 0.2
+    lr_final_ratio: float = 0.1
     batch_size: int = 256
     l1_reg: float = 0
     l2_reg: float = 0.0001

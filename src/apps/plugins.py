@@ -24,6 +24,11 @@ class Dataset(ABC):
 
     @property
     @abstractmethod
+    def observable_shape(self) -> tuple[int, int]:
+        """Shape of the observable data (used for plotting)."""
+
+    @property
+    @abstractmethod
     def train_data(self) -> Array:
         """Training data with shape (n_train, data_dim)."""
 
@@ -35,7 +40,12 @@ class Dataset(ABC):
     @staticmethod
     @abstractmethod
     def paint_observable(observable: Array, axes: Axes):
-        """A function for rendering an observation from the dataset."""
+        """A function for rendering an observation from the dataset.
+
+        Args:
+            observable: A single observation from the dataset (data_dim,)
+            axes: Matplotlib axes to draw on
+        """
 
 
 dataclass(frozen=True)
@@ -80,11 +90,23 @@ class ClusteringDataset(Dataset, ABC):
 
     cache_dir: Path
 
+    @property
     @abstractmethod
-    def paint_prototype(
+    def cluster_shape(self) -> tuple[int, int]:
+        """Shape of the cluster prototypes visaulization (used for plotting)."""
+
+    @abstractmethod
+    def paint_cluster(
         self, cluster_id: int, prototype: Array, members: Array, axes: Axes
-    ) -> None:
-        """Visualize a prototype and its cluster members."""
+    ):
+        """Visualize a prototype and its cluster members.
+
+        Args:
+            cluster_id: The cluster index (scalar)
+            prototype: The prototype for the cluster (data_dim,)
+            members: The members of the cluster (n_members, data_dim)
+            axes: Matplotlib axes to draw on
+        """
 
 
 # Models

@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
+import scipy.cluster.hierarchy
 from goal.geometry import (
     Natural,
     Point,
@@ -17,6 +18,7 @@ from goal.geometry import (
 from goal.models import (
     DifferentiableHMoG,
 )
+from h5py import File, Group
 from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
@@ -25,7 +27,7 @@ from numpy.typing import NDArray
 from apps.plugins import (
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact, JSONDict, RunHandler
+from apps.runtime.handler import Artifact, RunHandler
 from apps.runtime.logger import JaxLogger
 
 ### Analysis Args ###
@@ -83,39 +85,115 @@ def get_component_prototypes[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
     return prototypes
 
 
-### Prototypes ###
+def compute_component_divergences[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
+    model: DifferentiableHMoG[ObsRep, LatRep],
+    params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+) -> tuple[Array, Array, NDArray[np.float64]]:
+    """Compute divergence statistics between mixture components.
+
+    Returns:
+        Tuple of (kl_matrix, symmetric_kl, linkage_matrix)
+    """
+    # Get raw KL divergences
+    mix_params = model.prior(params)
+    comp_lats, _ = model.upr_hrm.split_natural_mixture(mix_params)
+
+    def kl_div_between_components(i: Array, j: Array) -> Array:
+        comp_i = model.upr_hrm.cmp_man.get_replicate(comp_lats, i)
+        comp_i_mean = model.upr_hrm.obs_man.to_mean(comp_i)
+        comp_j = model.upr_hrm.cmp_man.get_replicate(comp_lats, j)
+        return model.upr_hrm.obs_man.relative_entropy(comp_i_mean, comp_j)
+
+    idxs = jnp.arange(model.upr_hrm.n_categories)
+
+    def kl_div_from_one_to_all(i: Array) -> Array:
+        return jax.vmap(kl_div_between_components, in_axes=(None, 0))(i, idxs)
+
+    kl_matrix = jax.vmap(kl_div_from_one_to_all)(idxs)
+    symmetric_kl = (kl_matrix + kl_matrix.T) / 2
+
+    # Convert to numpy and handle distances
+    dist_matrix = np.array(symmetric_kl, dtype=np.float64)
+
+    # Ensure non-negative distances and exact zero diagonal
+    min_off_diag = np.min(dist_matrix[~np.eye(dist_matrix.shape[0], dtype=bool)])
+    if min_off_diag < 0:
+        dist_matrix = dist_matrix - min_off_diag
+
+    # Ensure perfect symmetry
+    dist_matrix = (dist_matrix + dist_matrix.T) / 2
+
+    # Force diagonal to exactly zero
+    np.fill_diagonal(dist_matrix, 0.0)
+
+    # Import scipy here for clarity
+    import scipy.cluster.hierarchy
+    import scipy.spatial.distance
+
+    # Convert to condensed form
+    dist_vector = scipy.spatial.distance.squareform(dist_matrix)
+
+    # Compute linkage matrix using average linkage
+    linkage_matrix = scipy.cluster.hierarchy.linkage(
+        dist_vector,
+        method="average",  # Using UPGMA clustering
+    )
+
+    return kl_matrix, symmetric_kl, linkage_matrix
+
+
+### ClusterCollection ###
 
 
 @dataclass(frozen=True)
-class ClusterCollection(Artifact):
+class ClusterStatistics(Artifact):
     """Collection of cluster prototypes with their members."""
 
-    prototypes: list[Array]  # One prototype per cluster
-    members: list[
-        Array
-    ]  # List of arrays where each array has shape (n_members, data_dim)
+    prototypes: list[Array]  # list of prototypes
+    members: list[Array]  # list of (n_members, data_dim)
 
     @override
-    def to_json(self) -> JSONDict:
-        return {
-            "prototypes": [p.tolist() for p in self.prototypes],
-            "members": [m.tolist() for m in self.members],
-        }
+    def save_to_hdf5(self, file: File) -> None:
+        """Save cluster collection to HDF5 file."""
+
+        # Create groups for prototypes and members
+        proto_group = file.create_group("prototypes")
+        members_group = file.create_group("members")
+
+        # Save each prototype
+        for i, proto in enumerate(self.prototypes):
+            proto_group.create_dataset(f"{i}", data=np.array(proto))
+
+        # Save each member array
+        for i, member_array in enumerate(self.members):
+            members_group.create_dataset(f"{i}", data=np.array(member_array))
 
     @classmethod
     @override
-    def from_json(cls, json_dict: JSONDict) -> ClusterCollection:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return cls(
-            prototypes=[jnp.array(p) for p in json_dict["prototypes"]],
-            members=[jnp.array(m) for m in json_dict["members"]],
-        )
+    def load_from_hdf5(cls, file: File) -> ClusterStatistics:
+        """Load cluster collection from HDF5 file."""
+
+        # Load prototypes
+        proto_group = file["prototypes"]
+        assert isinstance(proto_group, Group)
+        n_clusters = len(proto_group)
+
+        prototypes = [jnp.array(proto_group[f"{i}"]) for i in range(n_clusters)]
+
+        # Load members
+        members_group = file["members"]
+        assert isinstance(members_group, Group)
+
+        members = [jnp.array(members_group[f"{i}"]) for i in range(n_clusters)]
+
+        return cls(prototypes=prototypes, members=members)
 
 
-def get_cluster_collection[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
+def get_cluster_statistics[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     model: DifferentiableHMoG[ObsRep, LatRep],
     dataset: ClusteringDataset,
     params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-) -> ClusterCollection:
+) -> ClusterStatistics:
     """Generate collection of clusters with their members."""
 
     train_data = dataset.train_data
@@ -133,32 +211,36 @@ def get_cluster_collection[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         # Limit number of members if needed
         cluster_members.append(members)
 
-    return ClusterCollection(
+    return ClusterStatistics(
         prototypes=prototypes,
         members=cluster_members,
     )
 
 
-def cluster_collection_plotter(
+def cluster_statistics_plotter(
     dataset: ClusteringDataset,
-) -> Callable[[ClusterCollection], Figure]:
+) -> Callable[[ClusterStatistics], Figure]:
     """Create a grid of cluster prototype visualizations."""
 
-    def plot_cluster_collection(collection: ClusterCollection) -> Figure:
+    def plot_cluster_statistics(collection: ClusterStatistics) -> Figure:
         n_clusters = len(collection.prototypes)
 
-        # Determine grid layout
-        n_cols = min(3, n_clusters)
-        n_rows = (n_clusters + n_cols - 1) // n_cols
-
+        grid_shape = int(np.ceil(np.sqrt(n_clusters)))
+        cluster_rows, cluster_cols = dataset.cluster_shape
+        # normalize cluster shape
+        cluster_rows /= np.max([cluster_rows, cluster_cols])
+        cluster_cols /= np.max([cluster_rows, cluster_cols])
+        scl = 5
         # Create figure
-        fig = plt.figure(figsize=(6 * n_cols, 5 * n_rows))
-        gs = GridSpec(n_rows, n_cols, figure=fig)
+        fig = plt.figure(
+            figsize=(scl * grid_shape * cluster_cols, scl * grid_shape * cluster_rows)
+        )
+        gs = GridSpec(grid_shape, grid_shape, figure=fig)
 
         # Plot each cluster
         for i in range(n_clusters):
-            ax = fig.add_subplot(gs[i // n_cols, i % n_cols])
-            dataset.paint_prototype(
+            ax = fig.add_subplot(gs[i // grid_shape, i % grid_shape])
+            dataset.paint_cluster(
                 cluster_id=i,
                 prototype=collection.prototypes[i],
                 members=collection.members[i],
@@ -168,138 +250,8 @@ def cluster_collection_plotter(
         plt.tight_layout()
         return fig
 
-    return plot_cluster_collection
+    return plot_cluster_statistics
 
-
-### Divergences ###
-
-
-# @dataclass(frozen=True)
-# class Divergences(Artifact):
-#     """Artifact containing divergence analysis results."""
-#
-#     kl_matrix: Array  # Raw KL divergences
-#     symmetric_kl: Array  # Symmetrized KL divergences
-#     linkage_matrix: NDArray[np.float64]  # Linkage matrix for hierarchical clustering
-#
-#     @override
-#     def to_json(self) -> JSONDict:
-#         return {
-#             "kl_matrix": self.kl_matrix.tolist(),
-#             "symmetric_kl": self.symmetric_kl.tolist(),
-#             "linkage_matrix": self.linkage_matrix.tolist(),
-#         }
-#
-#     @classmethod
-#     @override
-#     def from_json(cls, json_dict: JSONDict) -> Divergences:  # pyright: ignore[reportIncompatibleMethodOverride]
-#         return cls(
-#             kl_matrix=jnp.array(json_dict["kl_matrix"]),
-#             symmetric_kl=jnp.array(json_dict["symmetric_kl"]),
-#             linkage_matrix=np.array(
-#                 json_dict["linkage_matrix"], dtype=np.float64
-#             ),  # Keep as numpy array
-#         )
-#
-#
-# def get_component_divergences[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
-#     model: DifferentiableHMoG[ObsRep, LatRep],
-#     params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-# ) -> Divergences:
-#     # Get raw KL divergences (keeping existing code)
-#     mix_params = model.prior(params)
-#     comp_lats, _ = model.upr_hrm.split_natural_mixture(mix_params)
-#
-#     def kl_div_between_components(i: Array, j: Array) -> Array:
-#         comp_i = model.upr_hrm.cmp_man.get_replicate(comp_lats, i)
-#         comp_i_mean = model.upr_hrm.obs_man.to_mean(comp_i)
-#         comp_j = model.upr_hrm.cmp_man.get_replicate(comp_lats, j)
-#         return model.upr_hrm.obs_man.relative_entropy(comp_i_mean, comp_j)
-#
-#     idxs = jnp.arange(model.upr_hrm.n_categories)
-#
-#     def kl_div_from_one_to_all(i: Array) -> Array:
-#         return jax.vmap(kl_div_between_components, in_axes=(None, 0))(i, idxs)
-#
-#     kl_matrix = jax.vmap(kl_div_from_one_to_all)(idxs)
-#     symmetric_kl = (kl_matrix + kl_matrix.T) / 2
-#
-#     # Convert to numpy and handle distances
-#     dist_matrix = np.array(symmetric_kl, dtype=np.float64)
-#
-#     # Ensure non-negative distances and exact zero diagonal
-#     min_off_diag = np.min(dist_matrix[~np.eye(dist_matrix.shape[0], dtype=bool)])
-#     if min_off_diag < 0:
-#         dist_matrix = (
-#             dist_matrix - min_off_diag
-#         )  # Shift everything up to make minimum 0
-#
-#     # Ensure perfect symmetry
-#     dist_matrix = (dist_matrix + dist_matrix.T) / 2
-#
-#     # Force diagonal to exactly zero
-#     np.fill_diagonal(dist_matrix, 0.0)
-#
-#     # Double check validity before converting
-#     assert np.allclose(dist_matrix, dist_matrix.T)  # Symmetry
-#     assert np.allclose(np.diag(dist_matrix), 0)  # Zero diagonal
-#     assert np.all(dist_matrix >= 0)  # Non-negative distances
-#
-#     # Convert to condensed form
-#     dist_vector = scipy.spatial.distance.squareform(dist_matrix)
-#
-#     # Compute linkage matrix using average linkage
-#     linkage_matrix = scipy.cluster.hierarchy.linkage(
-#         dist_vector,
-#         method="average",  # Using UPGMA clustering
-#     )
-#
-#     return Divergences(
-#         kl_matrix=kl_matrix, symmetric_kl=symmetric_kl, linkage_matrix=linkage_matrix
-#     )
-#
-#
-# def plot_divergence_matrix(
-#     divergences: Divergences,
-# ) -> Figure:
-#     fig = plt.figure(figsize=(15, 5))
-#
-#     # Create GridSpec for layout
-#     gs = GridSpec(1, 3, width_ratios=[1, 1, 1.2])
-#
-#     # Plot raw KL divergences
-#     ax1 = fig.add_subplot(gs[0])
-#     im1 = ax1.imshow(divergences.kl_matrix, cmap="viridis")
-#     plt.colorbar(im1, ax=ax1, label="KL Divergence")
-#     ax1.set_title("Raw KL Divergences")
-#     ax1.set_xlabel("Component j")
-#     ax1.set_ylabel("Component i")
-#
-#     # Plot symmetric KL divergences
-#     ax2 = fig.add_subplot(gs[1])
-#     im2 = ax2.imshow(divergences.symmetric_kl, cmap="viridis")
-#     plt.colorbar(im2, ax=ax2, label="Symmetric KL Divergence")
-#     ax2.set_title("Symmetric KL Divergences")
-#     ax2.set_xlabel("Component j")
-#     ax2.set_ylabel("Component i")
-#
-#     # Plot dendrogram
-#     ax3 = fig.add_subplot(gs[2])
-#     scipy.cluster.hierarchy.dendrogram(
-#         divergences.linkage_matrix, ax=ax3, leaf_rotation=90, leaf_font_size=10
-#     )
-#     ax3.set_title("Hierarchical Clustering Dendrogram")
-#
-#     # Add grid lines to matrix plots
-#     for ax in [ax1, ax2]:
-#         n_rws = divergences.kl_matrix.shape[0]
-#         ax.set_xticks(np.arange(-0.5, n_rws, 1), minor=True)
-#         ax.set_yticks(np.arange(-0.5, n_rws, 1), minor=True)
-#         ax.grid(which="minor", color="w", linestyle="-", linewidth=0.5)
-#
-#     plt.tight_layout()
-#     return fig
-#
 
 ### Cluster Hierarchy ###
 
@@ -312,100 +264,108 @@ class ClusterHierarchy(Artifact):
     linkage_matrix: NDArray[np.float64]
 
     @override
-    def to_json(self) -> JSONDict:
-        return {
-            "prototypes": [p.tolist() for p in self.prototypes],
-            "linkage_matrix": self.linkage_matrix.tolist(),
-        }
+    def save_to_hdf5(self, file: File) -> None:
+        """Save hierarchy data to HDF5 file."""
+        # Save prototypes
+        proto_group = file.create_group("prototypes")
+        for i, proto in enumerate(self.prototypes):
+            proto_group.create_dataset(f"{i}", data=np.array(proto))
+
+        # Save linkage matrix
+        file.create_dataset("linkage_matrix", data=self.linkage_matrix)
 
     @classmethod
     @override
-    def from_json(cls, json_dict: JSONDict) -> ClusterHierarchy:  # pyright: ignore[reportIncompatibleMethodOverride]
-        return cls(
-            prototypes=[jnp.array(p) for p in json_dict["prototypes"]],
-            linkage_matrix=np.array(json_dict["linkage_matrix"], dtype=np.float64),
+    def load_from_hdf5(cls, file: File) -> ClusterHierarchy:
+        """Load hierarchy data from HDF5 file."""
+        # Load prototypes
+        proto_group = file["prototypes"]
+        assert isinstance(proto_group, Group)
+        n_protos = len(proto_group)
+        assert isinstance(proto_group, Group)
+        prototypes = [jnp.array(proto_group[f"{i}"]) for i in range(n_protos)]
+
+        # Load linkage matrix
+        linkage_matrix = np.array(file["linkage_matrix"][()])
+
+        return cls(prototypes=prototypes, linkage_matrix=linkage_matrix)
+
+
+def get_cluster_hierarchy[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
+    model: DifferentiableHMoG[ObsRep, LatRep],
+    params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+) -> ClusterHierarchy:
+    """Generate clustering hierarchy analysis."""
+    prototypes = get_component_prototypes(model, params)
+    _, _, linkage_matrix = compute_component_divergences(model, params)
+    return ClusterHierarchy(prototypes=prototypes, linkage_matrix=linkage_matrix)
+
+
+def hierarchy_plotter(
+    dataset: ClusteringDataset,
+) -> Callable[[ClusterHierarchy], Figure]:
+    """Plot dendrogram with corresponding prototype visualizations."""
+
+    def plot_cluster_hierarchy(hierarchy: ClusterHierarchy) -> Figure:
+        n_clusters = len(hierarchy.prototypes)
+
+        prototype_shape = dataset.observable_shape
+
+        # Compute figure dimensions
+
+        dendrogram_width = 6  # Fixed width for dendrogram
+        height, width = prototype_shape
+        prototype_width = (
+            width / height * dendrogram_width
+        )  # Scale width based on shape
+        spacing = 4
+
+        # Total figure width
+        fig_width = dendrogram_width + spacing + prototype_width
+
+        # Height per prototype/cluster
+        cluster_height = 1.0  # Base height per cluster
+        fig_height = n_clusters * cluster_height
+
+        # Create figure with grid
+        fig = plt.figure(figsize=(fig_width, fig_height))
+
+        # Create gridspec with two columns
+        gs = GridSpec(
+            n_clusters,
+            2,
+            width_ratios=[dendrogram_width, prototype_width],
+            wspace=spacing / fig_width,  # Normalize spacing
+            figure=fig,
         )
 
+        # Plot dendrogram in left column
+        dendrogram_ax = fig.add_subplot(gs[:, 0])
+        # Using scipy's dendrogram with modified orientation
+        dendrogram_results = scipy.cluster.hierarchy.dendrogram(
+            hierarchy.linkage_matrix,
+            orientation="left",
+            ax=dendrogram_ax,
+            leaf_font_size=10,
+            leaf_label_func=lambda x: f"Cluster {x}",
+        )
+        dendrogram_ax.set_xlabel("Relative Entropy")
 
-# def get_cluster_hierarchy[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
-#     prototypes: Prototypes, divergences: Divergences
-# ) -> ClusterHierarchy:
-#     """Generate combined clustering hierarchy analysis."""
-#     return ClusterHierarchy(
-#         prototypes=prototypes.prototypes, linkage_matrix=divergences.linkage_matrix
-#     )
-#
-#
-# def hierarchy_plotter(
-#     dataset: ClusteringDataset,
-# ) -> Callable[[ClusterHierarchy], Figure]:
-#     """Plot dendrogram with corresponding prototype visualizations."""
-#
-#     def plot_cluster_hierarchy(hierarchy: ClusterHierarchy) -> Figure:
-#         n_clusters = len(hierarchy.prototypes)
-#
-#         # Create prototype artifacts
-#         prototype_artifacts = [
-#             dataset.observable_artifact(p) for p in hierarchy.prototypes
-#         ]
-#         prototype_shape = prototype_artifacts[0].shape
-#
-#         # Compute figure dimensions
-#
-#         dendrogram_width = 6  # Fixed width for dendrogram
-#         height, width = prototype_shape
-#         prototype_width = (
-#             width / height * dendrogram_width
-#         )  # Scale width based on shape
-#         spacing = 4
-#
-#         # Total figure width
-#         fig_width = dendrogram_width + spacing + prototype_width
-#
-#         # Height per prototype/cluster
-#         cluster_height = 1.0  # Base height per cluster
-#         fig_height = n_clusters * cluster_height
-#
-#         # Create figure with grid
-#         fig = plt.figure(figsize=(fig_width, fig_height))
-#
-#         # Create gridspec with two columns
-#         gs = GridSpec(
-#             n_clusters,
-#             2,
-#             width_ratios=[dendrogram_width, prototype_width],
-#             wspace=spacing / fig_width,  # Normalize spacing
-#             figure=fig,
-#         )
-#
-#         # Plot dendrogram in left column
-#         dendrogram_ax = fig.add_subplot(gs[:, 0])
-#         # Using scipy's dendrogram with modified orientation
-#         dendrogram_results = scipy.cluster.hierarchy.dendrogram(
-#             hierarchy.linkage_matrix,
-#             orientation="left",
-#             ax=dendrogram_ax,
-#             leaf_font_size=10,
-#             leaf_label_func=lambda x: f"Cluster {x}",
-#         )
-#         dendrogram_ax.set_xlabel("Relative Entropy")
-#
-#         leaf_order = dendrogram_results["leaves"]
-#
-#         if leaf_order is None:
-#             raise ValueError("Failed to get leaf order from dendrogram.")
-#
-#         leaf_order = leaf_order[::-1]
-#
-#         for i, leaf_idx in enumerate(leaf_order):
-#             prototype_ax = fig.add_subplot(gs[i, 1])
-#             dataset.paint_observable(prototype_artifacts[leaf_idx], prototype_ax)
-#             # prototype_ax.set_title(f"Cluster {leaf_idx}", fontsize=8, y=1.0, pad=8)
-#
-#         return fig
-#
-#     return plot_cluster_hierarchy
-#
+        leaf_order = dendrogram_results["leaves"]
+
+        if leaf_order is None:
+            raise ValueError("Failed to get leaf order from dendrogram.")
+
+        leaf_order = leaf_order[::-1]
+
+        for i, leaf_idx in enumerate(leaf_order):
+            prototype_ax = fig.add_subplot(gs[i, 1])
+            dataset.paint_observable(hierarchy.prototypes[leaf_idx], prototype_ax)
+            # prototype_ax.set_title(f"Cluster {leaf_idx}", fontsize=8, y=1.0, pad=8)
+
+        return fig
+
+    return plot_cluster_hierarchy
 
 
 def log_artifacts[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
@@ -428,23 +388,16 @@ def log_artifacts[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     """
     # from_scratch if params is provided
     if params is not None:
-        # prototypes = get_component_prototypes(model, params)
-        # divergences = get_component_divergences(model, params)
-        # clusters = get_cluster_hierarchy(prototypes, divergences)
-        cluster_collection = get_cluster_collection(model, dataset, params)
+        clusters = get_cluster_hierarchy(model, params)
+        cluster_statistics = get_cluster_statistics(model, dataset, params)
         handler.save_params(epoch, params.array)
     else:
-        # prototypes = handler.load_artifact(epoch, Prototypes)
-        # divergences = handler.load_artifact(epoch, Divergences)
-        # clusters = handler.load_artifact(epoch, ClusterHierarchy)
-        cluster_collection = handler.load_artifact(epoch, ClusterCollection)
+        clusters = handler.load_artifact(epoch, ClusterHierarchy)
+        cluster_statistics = handler.load_artifact(epoch, ClusterStatistics)
 
     # Plot and save
-    # plot_prototypes = prototypes_plotter(dataset)
-    # plot_hierarchy = hierarchy_plotter(dataset)
-    # logger.log_artifact(handler, epoch, prototypes, plot_prototypes)
-    # logger.log_artifact(handler, epoch, divergences, plot_divergence_matrix)
-    # logger.log_artifact(handler, epoch, clusters, plot_hierarchy)
-    logger.log_artifact(
-        handler, epoch, cluster_collection, cluster_collection_plotter(dataset)
-    )
+    plot_hierarchy = hierarchy_plotter(dataset)
+    plot_clusters = cluster_statistics_plotter(dataset)
+
+    logger.log_artifact(handler, epoch, clusters, plot_hierarchy)
+    logger.log_artifact(handler, epoch, cluster_statistics, plot_clusters)

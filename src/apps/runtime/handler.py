@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Self, TypeVar, cast
 
-import jax
+import h5py
+import numpy as np
+import pandas as pd
 from jax import Array
 from jax import numpy as jnp
 from matplotlib.figure import Figure
@@ -17,18 +18,9 @@ from matplotlib.figure import Figure
 from ..util import to_snake_case
 
 type MetricDict = dict[str, tuple[Array, Array]]  # Single snapshot
-type MetricHistory = dict[str, list[tuple[int, float]]]  # Time series### Loggers ###
+type MetricHistory = dict[str, list[tuple[int, float]]]  # Time series
 
-
-### Path and IO Handler ###
-
-# Define the type recursively
-type JSONDict = dict[str, Any]
-type JSONList = list[Any]
-type JSONPrimitive = str | int | float | bool | None
-type JSONValue = JSONDict | JSONList | JSONPrimitive
-
-# Artifacts
+### Artifacts ###
 
 
 @dataclass(frozen=True)
@@ -36,16 +28,18 @@ class Artifact(ABC):
     """Base class for data that can be logged and visualized."""
 
     @abstractmethod
-    def to_json(self) -> JSONValue:
-        """Convert artifact data to JSON-serializable format."""
+    def save_to_hdf5(self, file: h5py.File) -> None:
+        """Save artifact data to an open HDF5 file."""
 
     @classmethod
     @abstractmethod
-    def from_json(cls, json_dict: JSONValue) -> Self:
-        pass
+    def load_from_hdf5(cls, file: h5py.File) -> Self:
+        """Load artifact data from an open HDF5 file."""
 
 
-# Run Handler
+### Run Handler ###
+
+T = TypeVar("T", bound=Artifact)
 
 
 class RunHandler:
@@ -69,6 +63,7 @@ class RunHandler:
 
     @property
     def cache_dir(self) -> Path:
+        """Directory for cached data (e.g., datasets)."""
         return self.project_root / ".cache"
 
     def _get_epoch_dir(self, epoch: int, create: bool = True) -> Path:
@@ -79,29 +74,17 @@ class RunHandler:
         return epoch_dir
 
     def _get_artifact_path(
-        self, epoch: int, artifact_class: type[Artifact], suffix: str
+        self, epoch: int, artifact_class: type[T], suffix: str
     ) -> Path:
         """Get the path for an artifact file with given suffix."""
         epoch_dir = self._get_epoch_dir(epoch)
         return epoch_dir / f"{to_snake_case(artifact_class.__name__)}{suffix}"
 
-    def _save_json(self, data: JSONValue, path: Path) -> None:
-        """Save JSON data to a path relative to run_dir."""
-        full_path = self.run_dir / path
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(full_path, "w") as f:
-            json.dump(data, f, indent=2)
-
-    def _load_json(self, path: Path) -> JSONValue:
-        """Load JSON data from a path relative to run_dir."""
-        full_path = self.run_dir / path
-        with open(full_path) as f:
-            return json.load(f)
-
     def save_artifact(self, epoch: int, artifact: Artifact) -> None:
         """Save an artifact at a given epoch."""
-        path = self._get_artifact_path(epoch, type(artifact), ".json")
-        self._save_json(artifact.to_json(), path)
+        path = self._get_artifact_path(epoch, type(artifact), ".h5")
+        with h5py.File(path, "w") as f:
+            artifact.save_to_hdf5(f)
 
     def save_artifact_figure(
         self, epoch: int, artifact_class: type[Artifact], fig: Figure
@@ -112,25 +95,48 @@ class RunHandler:
 
     def load_artifact[T: Artifact](self, epoch: int, artifact_class: type[T]) -> T:
         """Load an artifact from a specific epoch."""
-        path = self._get_artifact_path(epoch, artifact_class, ".json")
-        json_data = self._load_json(path)
-        return artifact_class.from_json(json_data)
+        path = self._get_artifact_path(epoch, artifact_class, ".h5")
+        with h5py.File(path, "r") as f:
+            return artifact_class.load_from_hdf5(f)
 
     def save_params(self, epoch: int, params: Array) -> None:
         """Save parameters at a given epoch."""
-        params_list = params.tolist()
-        path = self._get_epoch_dir(epoch) / "params.json"
-        self._save_json(params_list, path)
+        path = self._get_epoch_dir(epoch) / "params.h5"
+        with h5py.File(path, "w") as f:
+            # Convert JAX array to numpy for storage
+            f.create_dataset("params", data=np.array(params))
 
     def load_params(self, epoch: int) -> Array:
         """Load parameters from a specific epoch."""
-        path = self._get_epoch_dir(epoch, create=False) / "params.json"
-        params_list = self._load_json(path)
-        return jax.numpy.array(params_list)
+        path = self._get_epoch_dir(epoch, create=False) / "params.h5"
+        with h5py.File(path, "r") as f:
+            # Use .get() method which is more likely to be recognized by the type checker
+            dataset = f.get("params")
+            if dataset is None:
+                raise KeyError("params dataset not found in HDF5 file")
+            # Convert to numpy array first
+            data = np.array(dataset)
+            return jnp.array(data)
 
     def save_metrics(self, metrics: MetricHistory) -> None:
-        """Save training metrics."""
-        self._save_json(metrics, Path("metrics.json"))
+        """Save training metrics to HDF5 using pandas HDFStore."""
+        # Convert metrics to pandas DataFrame
+        rows: list[dict[str, Any]] = []
+        for metric_name, values in metrics.items():
+            for epoch, value in values:
+                rows.append(
+                    {"metric": metric_name, "epoch": int(epoch), "value": float(value)}
+                )
+
+        if not rows:
+            # Create empty DataFrame if no metrics
+            df = pd.DataFrame(columns=["metric", "epoch", "value"])
+        else:
+            df = pd.DataFrame(rows)
+
+        # Save to HDF5 using pandas
+        path = self.run_dir / "metrics.h5"
+        df.to_hdf(path, key="metrics", mode="w")
 
     def save_metrics_figure(self, fig: Figure) -> None:
         """Save the metrics summary figure."""
@@ -138,12 +144,34 @@ class RunHandler:
         fig.savefig(path, bbox_inches="tight")
 
     def load_metrics(self) -> MetricHistory:
-        """Load training metrics."""
-        return self._load_json(Path("metrics.json"))  # pyright: ignore[reportReturnType]
+        """Load training metrics from HDF5."""
+        path = self.run_dir / "metrics.h5"
+
+        if not path.exists():
+            return {}
+
+        df = pd.read_hdf(path, key="metrics")
+
+        # Convert DataFrame back to MetricHistory format
+        result: MetricHistory = {}
+        for metric_name, group_df in df.groupby("metric"):
+            # Ensure metric_name is str
+            metric_str = str(metric_name)
+            # Sort and convert to list of tuples
+            sorted_df = cast(pd.DataFrame, group_df.sort_values("epoch"))
+            result[metric_str] = []
+
+            # Iterate through rows safely
+            for _, row in sorted_df.iterrows():
+                epoch = int(row["epoch"])
+                value = float(row["value"])
+                result[metric_str].append((epoch, value))
+
+        return result
 
     def save_debug_state(
         self,
-        param_dit: dict[str, Array],
+        param_dict: dict[str, Array],
         context: str,
     ) -> None:
         """Save parameter states for debugging.
@@ -155,9 +183,9 @@ class RunHandler:
         debug_dir = self.run_dir / "debug" / context
         debug_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save all parameter states
-        for name, array in param_dit.items():
-            jnp.save(debug_dir / f"{name}.npy", array)
+        # Save all parameter states using numpy save (simpler than HDF5 for debug)
+        for name, array in param_dict.items():
+            np.save(debug_dir / f"{name}.npy", np.array(array))
 
     def get_available_epochs(self) -> list[int]:
         """Get all epochs where we have analysis results."""
