@@ -1,0 +1,28 @@
+# Neural traces experiment configuration
+defaults:
+  - hmog_cyc
+  - _self_
+
+num_cycles: 40
+
+pre:
+  batch_size: 1024
+  min_var: 0.000001  # 1e-6
+  n_epochs: 10000
+  lr_init: 0.0003    # 3e-4
+  lr_final_ratio: 0.333
+
+lgm:
+  batch_size: 512
+  re_reg: 0.1
+  n_epochs: 250
+  min_var: 0.000001  # 1e-6
+  lr_init: 0.0001    # 1e-4
+
+mix:
+  batch_size: 512
+  n_epochs: 250
+  lr_init: 0.0001    # 1e-4
+
+full:
+  n_epochs: 0

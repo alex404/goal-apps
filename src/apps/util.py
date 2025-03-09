@@ -2,7 +2,6 @@
 
 import logging
 import re
-from pathlib import Path
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
@@ -54,34 +53,10 @@ def _parse_args_to_parameters(args: list[str]) -> dict[str, Any]:
     return parameters
 
 
-def create_sweep_config(overrides: list[str], base_sweep: str | None) -> dict[str, Any]:
-    """Create wandb sweep config from override strings.
-
-    If a base_sweep is provided, CLI arguments from that file will be loaded first,
-    with command-line overrides taking precedence.
-    """
+def create_sweep_config(overrides: list[str]) -> dict[str, Any]:
+    """Create wandb sweep config from override strings."""
     # Parse all overrides into a single dictionary
     parameters = {}
-
-    # First load base sweep if provided
-    if base_sweep is not None:
-        proot = Path(__file__).parents[2]
-        sweep_dir = str(proot / "config" / "sweeps")
-        sweep_path = Path(sweep_dir) / f"{base_sweep}.cli"
-
-        try:
-            with open(sweep_path) as f:
-                base_args = []
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        base_args.append(line)
-
-            # Parse base arguments into parameters dictionary
-            parameters.update(_parse_args_to_parameters(base_args))
-            log.info(f"Loaded {len(base_args)} arguments from {sweep_path}")
-        except Exception:
-            logging.exception("Error loading base sweep config")
 
     # Then parse CLI overrides (these will overwrite any overlapping parameters)
     cli_parameters = _parse_args_to_parameters(overrides)

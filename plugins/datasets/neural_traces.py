@@ -167,6 +167,8 @@ class NeuralTracesDataset(ClusteringDataset):
 
         # Count members and set title
         n_members = members.shape[0]
+
+        axes.axis("off")
         axes.set_title(f"Cluster {cluster_id} (Size: {n_members})")
 
         # Limit the number of members to display
