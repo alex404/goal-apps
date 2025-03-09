@@ -1,0 +1,12 @@
+# Neural traces experiment configuration
+defaults:
+  - neural_traces
+  - _self_
+
+dataset_name: "all-rgc"
+chirp_len: 249
+bar_len: 32
+feature_len: 3
+train_split: 0.8
+random_seed: 42
+

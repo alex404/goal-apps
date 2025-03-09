@@ -6,7 +6,7 @@ run_name: ${now:%Y%m%d-%H%M%S}
 device: gpu
 jit: true
 use_local: true
-use_wandb: false
+use_wandb: true
 log_level: INFO
 project: "goal"
 group: null

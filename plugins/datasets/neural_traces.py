@@ -1,7 +1,7 @@
 """Neural trace dataset implementation."""
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import override
 
@@ -31,13 +31,15 @@ class NeuralTracesConfig(ClusteringDatasetConfig):
         random_seed: Seed for train/test split
     """
 
-    _target_: str = "plugins.datasets.neural_traces.NeuralTracesDataset"
-    dataset_name: str = "all-rgc"
-    chirp_len: int = 249
-    bar_len: int = 32
-    feature_len: int = 3
-    train_split: float = 0.8
-    random_seed: int = 42
+    _target_: str = field(
+        default="plugins.datasets.neural_traces.NeuralTracesDataset", init=False
+    )
+    dataset_name: str
+    chirp_len: int
+    bar_len: int
+    feature_len: int
+    train_split: float
+    random_seed: int
 
 
 # Register config
@@ -54,12 +56,12 @@ class NeuralTracesDataset(ClusteringDataset):
     def __init__(
         self,
         cache_dir: Path,
-        dataset_name: str = "all-rgc",
-        chirp_len: int = 249,
-        bar_len: int = 32,
-        feature_len: int = 3,
-        train_split: float = 0.8,
-        random_seed: int = 42,
+        dataset_name: str,
+        chirp_len: int,
+        bar_len: int,
+        feature_len: int,
+        train_split: float,
+        random_seed: int,
     ) -> None:
         """Load neural traces dataset.
 
