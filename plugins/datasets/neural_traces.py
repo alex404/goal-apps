@@ -35,6 +35,7 @@ class NeuralTracesConfig(ClusteringDatasetConfig):
         default="plugins.datasets.neural_traces.NeuralTracesDataset", init=False
     )
     dataset_name: str
+    use_8hz_chirp: bool
     chirp_len: int
     bar_len: int
     feature_len: int
@@ -57,6 +58,7 @@ class NeuralTracesDataset(ClusteringDataset):
         self,
         cache_dir: Path,
         dataset_name: str,
+        use_8hz_chirp: bool,
         chirp_len: int,
         bar_len: int,
         feature_len: int,
@@ -79,20 +81,22 @@ class NeuralTracesDataset(ClusteringDataset):
         """
         self.cache_dir: Path = cache_dir
         self.dataset_name: str = dataset_name
+        self.use_8hz_chirp: bool = use_8hz_chirp
         self.chirp_len: int = chirp_len
         self.bar_len: int = bar_len
         self.feature_len: int = feature_len
 
         # Create cache directories
-        dataset_dir = cache_dir / dataset_name
+        dataset_dir = cache_dir / "neural-traces"
         raw_dir = dataset_dir / "raw"
-        processed_dir = dataset_dir / "processed"
+        processed_dir = dataset_dir / "processed" / dataset_name
         raw_dir.mkdir(parents=True, exist_ok=True)
         processed_dir.mkdir(parents=True, exist_ok=True)
 
         # Check if processed files exist
-        train_cache = processed_dir / "train_data.npy"
-        test_cache = processed_dir / "test_data.npy"
+        chirp_type = "8hz" if use_8hz_chirp else "preproc"
+        train_cache = processed_dir / f"train_data_{chirp_type}.npy"
+        test_cache = processed_dir / f"test_data_{chirp_type}.npy"
 
         if train_cache.exists() and test_cache.exists():
             # Load cached split
@@ -106,8 +110,16 @@ class NeuralTracesDataset(ClusteringDataset):
             quality_mask = (df.chirp_qidx > 0.35) | (df.bar_qidx > 0.6)
             selected_df = df[quality_mask]
 
+            chirp_col = "chirp_8Hz_average_norm" if use_8hz_chirp else "preproc_chirp"
+
+            if chirp_col not in selected_df.columns:
+                raise ValueError(
+                    f"Column {chirp_col} not found in dataset. Available columns: {', '.join(selected_df.columns)}"
+                )
+
+            chirp_matrix = np.vstack(selected_df[chirp_col].values)
+
             # Concatenate data
-            chirp_matrix = np.vstack(selected_df["preproc_chirp"].values)
             bar_matrix = np.vstack(selected_df["preproc_bar"].values)
             features = ["bar_ds_pvalue", "bar_os_pvalue", "roi_size_um2"]
             feature_matrix = selected_df[features].values

@@ -101,9 +101,6 @@ sweep_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and ex
 sweep_validate = typer.Option(
     False, "--validate", help="Validate an example config from the sweep"
 )
-sweep_base_sweep = typer.Option(
-    None, "--base-sweep", "-b", help="Name of base config file (under config/sweeps)"
-)
 sweep_project = typer.Option("goal", "--project", "-p", help="W&B project name")
 
 
@@ -113,14 +110,13 @@ def sweep(
     project: str = sweep_project,
     dry_run: bool = sweep_dry_run,
     validate: bool = sweep_validate,
-    base_sweep: str | None = sweep_base_sweep,
 ):
     """Launch a wandb hyperparameter sweep.
 
     Example:
         goal clustering sweep latent_dim=[4,8,12,16,20] n_clusters=[4,8,16]
     """
-    sweep_config = create_sweep_config(overrides, base_sweep)
+    sweep_config = create_sweep_config(overrides)
 
     # Create config tree visualization
     print_sweep_tree(sweep_config)
