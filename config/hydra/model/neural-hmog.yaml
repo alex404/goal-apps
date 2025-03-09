@@ -6,26 +6,32 @@ defaults:
 num_cycles: 40
 
 pre:
-  batch_size: 64
+  batch_size: 512
   min_var: 1e-5
   n_epochs: 10000
-  lr_init: 1e-5
+  lr_init: 1e-4
   lr_final_ratio: 0.1
-  grad_clip: 0
+  grad_clip: 10
 
 lgm:
-  batch_size: 64
+  batch_size: 512
   re_reg: 0.1
   n_epochs: 250
   min_var: 1e-5
-  lr_init: 1e-6
-  grad_clip: 0
+  lr_init: 1e-5
+  grad_clip: 10
 
 mix:
-  batch_size: 64
+  batch_size: 512
   n_epochs: 250
-  lr_init: 1e-6
-  grad_clip: 0
+  lr_init: 1e-5
+  grad_clip: 10
 
 full:
+  batch_size: 256
   n_epochs: 0
+  lr_init: 3e-4
+  grad_clip: 10
+  obs_min_var: 1e-5
+  lat_min_var: 1e-5
+

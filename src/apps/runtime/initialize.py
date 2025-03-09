@@ -151,6 +151,7 @@ def initialize_run(
 
     log.info("Loading dataset...")
     dataset: Dataset = hydra.utils.instantiate(cfg.dataset, cache_dir=handler.cache_dir)
+    log.info(f"Loaded dataset with {len(dataset.train_data)} training data points.")
 
     # Instantiate model
     log.info("Loading model...")

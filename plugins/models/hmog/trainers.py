@@ -502,8 +502,6 @@ class GradientTrainer[
         epoch_offset: int,
         hmog_params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
     ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
-        """Train LinearGaussianModel using gradient descent."""
-
         model = self.model(hmog_model)
         train_data = dataset.train_data
         params0, masked_params0 = self.from_hmog_params(hmog_model, hmog_params0)
@@ -511,6 +509,10 @@ class GradientTrainer[
         n_batches = train_data.shape[0] // self.batch_size
 
         lr_schedule = self.lr_init
+
+        optim = optax.adamw(
+            learning_rate=lr_schedule,
+        )
 
         # Initialize standard normal latent
         if self.lr_final_ratio < 1.0:
@@ -520,9 +522,7 @@ class GradientTrainer[
                 alpha=self.lr_final_ratio,
             )
         # Configure optimizer
-        optimizer: Optimizer[Natural, Model] = Optimizer.adamw(
-            model, learning_rate=lr_schedule, weight_decay=self.l2_reg
-        )
+        optimizer: Optimizer[Natural, Model] = Optimizer(optim, model)
 
         if self.grad_clip > 0.0:
             optimizer = optimizer.with_grad_clip(self.grad_clip)
