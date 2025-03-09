@@ -171,10 +171,14 @@ class NeuralTracesDataset(ClusteringDataset):
 
         # Limit the number of members to display
         display_members = members
-        max_display_members = 5000
+        max_display_members = 1000
         if n_members > max_display_members:
             indices = np.random.choice(n_members, max_display_members, replace=False)
             display_members = members[indices]
+            axes.set_title(
+                f"Cluster {cluster_id} (Size: {n_members}, Display: {max_display_members})"
+            )
+
         n_display_members = display_members.shape[0]
 
         # Prepare figure geometry and axes
