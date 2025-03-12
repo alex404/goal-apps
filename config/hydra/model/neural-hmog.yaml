@@ -3,10 +3,10 @@ defaults:
   - hmog_cyc
   - _self_
 
-num_cycles: 40
+num_cycles: 80
 
 pre:
-  batch_size: 512
+  batch_size: 1024
   min_var: 1e-5
   n_epochs: 10000
   lr_init: 1e-4
@@ -14,7 +14,7 @@ pre:
   grad_clip: 10
 
 lgm:
-  batch_size: 512
+  batch_size: 1024
   re_reg: 0.1
   n_epochs: 250
   min_var: 1e-5
@@ -22,7 +22,7 @@ lgm:
   grad_clip: 10
 
 mix:
-  batch_size: 512
+  batch_size: 1024
   n_epochs: 250
   lr_init: 1e-5
   grad_clip: 10
