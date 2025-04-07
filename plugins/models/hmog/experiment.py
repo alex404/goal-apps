@@ -14,8 +14,8 @@ from goal.geometry import (
     PositiveDefinite,
 )
 from goal.models import (
-    DifferentiableHMoG,
-    differentiable_hmog,
+    SymmetricHMoG,
+    symmetric_hmog,
 )
 from jax import Array
 
@@ -51,7 +51,7 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     """Experiment framework for HMoGs."""
 
     # Training configuration
-    model: DifferentiableHMoG[ObsRep, LatRep]
+    model: SymmetricHMoG[ObsRep, LatRep]
 
     lgm: LGMTrainer[ObsRep, LatRep]
     mix: MixtureTrainer[ObsRep, LatRep]
@@ -74,12 +74,12 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         obs_rep_type = obs_rep.value
         lat_rep_type = lat_rep.value
 
-        self.model = differentiable_hmog(  # pyright: ignore[reportAttributeAccessIssue]
+        self.model = symmetric_hmog(  # pyright: ignore[reportAttributeAccessIssue]
             obs_dim=data_dim,
             obs_rep=obs_rep_type,
             lat_dim=latent_dim,
-            n_components=n_clusters,
             lat_rep=lat_rep_type,
+            n_components=n_clusters,
         )
 
         self.lgm = lgm
@@ -137,10 +137,11 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             obs_params,
             self.model.int_man.point(self.model.int_man.rep.from_dense(int_noise)),
         )
+
         return self.model.join_conjugated(lkl_params, mix_params).array
 
     def log_likelihood(
-        self, params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], data: Array
+        self, params: Point[Natural, SymmetricHMoG[ObsRep, LatRep]], data: Array
     ) -> Array:
         return self.model.average_log_observable_density(params, data)
 
@@ -178,43 +179,6 @@ class HMoGExperiment[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
         else:
             log.info("Loading existing artifacts.")
             log_artifacts(handler, dataset, logger, self.model, epoch)
-
-
-class ThreeStageHMoGExperiment(HMoGExperiment[PositiveDefinite, PositiveDefinite]):
-    @override
-    def train(
-        self,
-        key: Array,
-        handler: RunHandler,
-        dataset: ClusteringDataset,
-        logger: JaxLogger,
-    ) -> None:
-        keys = jax.random.split(key, 4)
-
-        params0 = self.model.natural_point(
-            self.initialize_model(keys[0], dataset.train_data)
-        )
-        epoch = 0
-
-        params1 = self.lgm.train(
-            keys[1], handler, dataset, self.model, logger, epoch, params0
-        )
-
-        epoch += self.lgm.n_epochs
-
-        params2 = self.mix.train(
-            keys[2], handler, dataset, self.model, logger, epoch, params1
-        )
-
-        epoch += self.mix.n_epochs
-        log_artifacts(handler, dataset, logger, self.model, epoch, params2)
-
-        params3 = self.full.train(
-            keys[3], handler, dataset, self.model, logger, epoch, params2
-        )
-
-        epoch += self.full.n_epochs
-        log_artifacts(handler, dataset, logger, self.model, epoch, params3)
 
 
 class CyclicHMoGExperiment(HMoGExperiment[PositiveDefinite, PositiveDefinite]):

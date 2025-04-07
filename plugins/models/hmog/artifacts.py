@@ -16,6 +16,7 @@ from goal.geometry import (
     PositiveDefinite,
 )
 from goal.models import (
+    AnalyticLinearGaussianModel,
     DifferentiableHMoG,
 )
 from h5py import File, Group
@@ -48,10 +49,11 @@ def cluster_assignments[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     model: DifferentiableHMoG[ObsRep, LatRep], params: Array, data: Array
 ) -> Array:
     def data_point_cluster(x: Array) -> Array:
-        with model as m:
-            cat_pst = m.lat_man.prior(m.posterior_at(m.natural_point(params), x))
-            with m.lat_man.lat_man as lm:
-                probs = lm.to_probs(lm.to_mean(cat_pst))
+        cat_pst = model.pst_lat_man.prior(
+            model.posterior_at(model.natural_point(params), x)
+        )
+        with model.lat_man.lat_man as lm:
+            probs = lm.to_probs(lm.to_mean(cat_pst))
         return jnp.argmax(probs, axis=-1)
 
     return jax.lax.map(data_point_cluster, data, batch_size=2048)
@@ -69,16 +71,20 @@ def get_component_prototypes[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
 
     # For each component, compute the observable distribution and get its mean
     prototypes: list[Array] = []
+
+    ana_lgm = AnalyticLinearGaussianModel(
+        obs_dim=model.lwr_hrm.obs_dim,  # Original latent becomes observable
+        obs_rep=PositiveDefinite,
+        lat_dim=model.lwr_hrm.lat_dim,  # Original observable becomes latent
+    )
+
     for i in range(comp_lats.shape[0]):
         # Get latent mean for this component
-        with model.lwr_hrm as lh:
-            comp_lat_params = model.upr_hrm.cmp_man.get_replicate(
-                comp_lats, jnp.asarray(i)
-            )
-            lwr_hrm_params = lh.join_conjugated(lkl_params, comp_lat_params)
-            lwr_hrm_means = lh.to_mean(lwr_hrm_params)
-            lwr_hrm_obs = lh.split_params(lwr_hrm_means)[0]
-            obs_means = lh.obs_man.split_mean_second_moment(lwr_hrm_obs)[0].array
+        comp_lat_params = model.upr_hrm.cmp_man.get_replicate(comp_lats, jnp.asarray(i))
+        lwr_hrm_params = ana_lgm.join_conjugated(lkl_params, comp_lat_params)
+        lwr_hrm_means = ana_lgm.to_mean(lwr_hrm_params)
+        lwr_hrm_obs = ana_lgm.split_params(lwr_hrm_means)[0]
+        obs_means = ana_lgm.obs_man.split_mean_second_moment(lwr_hrm_obs)[0].array
 
         prototypes.append(obs_means)
 
@@ -139,7 +145,7 @@ def compute_component_divergences[ObsRep: PositiveDefinite, LatRep: PositiveDefi
         method="average",  # Using UPGMA clustering
     )
 
-    return kl_matrix, symmetric_kl, linkage_matrix
+    return kl_matrix, symmetric_kl, linkage_matrix  # pyright: ignore[reportReturnType]
 
 
 ### ClusterCollection ###
@@ -286,7 +292,7 @@ class ClusterHierarchy(Artifact):
         prototypes = [jnp.array(proto_group[f"{i}"]) for i in range(n_protos)]
 
         # Load linkage matrix
-        linkage_matrix = np.array(file["linkage_matrix"][()])
+        linkage_matrix = np.array(file["linkage_matrix"][()])  # pyright: ignore[reportIndexIssue]
 
         return cls(prototypes=prototypes, linkage_matrix=linkage_matrix)
 

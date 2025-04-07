@@ -24,11 +24,11 @@ from goal.geometry import (
     Replicated,
 )
 from goal.models import (
-    DifferentiableHMoG,
     DifferentiableMixture,
     Euclidean,
     FullNormal,
     Normal,
+    SymmetricHMoG,
 )
 from jax import Array
 
@@ -84,12 +84,11 @@ def bound_mixture_parameters[Rep: PositiveDefinite](
 
 def log_epoch_metrics[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     dataset: ClusteringDataset,
-    hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+    hmog_model: SymmetricHMoG[ObsRep, LatRep],
     logger: JaxLogger,
-    params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+    params: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
     epoch: Array,
-    batch_grads: None
-    | Point[Mean, Replicated[DifferentiableHMoG[ObsRep, LatRep]]] = None,
+    batch_grads: None | Point[Mean, Replicated[SymmetricHMoG[ObsRep, LatRep]]] = None,
     log_freq: int = 1,
 ) -> None:
     """Log metrics for an epoch."""
@@ -175,7 +174,7 @@ def log_epoch_metrics[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             z = lh.lat_man.to_natural(lh.lat_man.standard_normal())
             lgm_params = lh.join_conjugated(lkl_params, z)
             # Get posterior means for the dataset
-            lgm_means = lh.expectation_step(lgm_params, train_data)
+            lgm_means = lh.posterior_statistics(lgm_params, train_data)
             lgm_lat_means = lh.split_params(lgm_means)[2]
 
             # Get mean and covariance from latent means
@@ -274,7 +273,7 @@ def log_epoch_metrics[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
                 }
             )
 
-        def norm_grads(grad: Point[Mean, DifferentiableHMoG[ObsRep, LatRep]]) -> Array:
+        def norm_grads(grad: Point[Mean, SymmetricHMoG[ObsRep, LatRep]]) -> Array:
             obs_grad, lwr_int_grad, upr_grad = hmog_model.split_params(grad)
             obs_loc_grad, obs_prs_grad = hmog_model.obs_man.split_params(obs_grad)
             lat_grad, upr_int_grad, cat_grad = hmog_model.upr_hrm.split_params(upr_grad)
@@ -297,7 +296,7 @@ def log_epoch_metrics[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             )
 
         if batch_grads is not None:
-            batch_man: Replicated[DifferentiableHMoG[ObsRep, LatRep]] = Replicated(
+            batch_man: Replicated[SymmetricHMoG[ObsRep, LatRep]] = Replicated(
                 hmog_model, batch_grads.shape[0]
             )
             grad_norms = batch_man.map(norm_grads, batch_grads).T
@@ -338,12 +337,10 @@ class GradientTrainer[
     grad_clip: float
 
     @abstractmethod
-    def model(self, hmog_model: DifferentiableHMoG[ObsRep, LatRep]) -> Model: ...
+    def model(self, hmog_model: SymmetricHMoG[ObsRep, LatRep]) -> Model: ...
 
     @abstractmethod
-    def masked_model(
-        self, hmog_model: DifferentiableHMoG[ObsRep, LatRep]
-    ) -> Masked: ...
+    def masked_model(self, hmog_model: SymmetricHMoG[ObsRep, LatRep]) -> Masked: ...
 
     @abstractmethod
     def bound_parameters(
@@ -355,7 +352,7 @@ class GradientTrainer[
     @abstractmethod
     def make_loss_fn(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         masked_params: Point[Natural, Masked],
         batch: Array,
     ) -> Callable[[Point[Natural, Model]], Array]: ...
@@ -363,30 +360,28 @@ class GradientTrainer[
     @abstractmethod
     def make_pad_grad(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
-    ) -> Callable[
-        [Point[Mean, Model]], Point[Mean, DifferentiableHMoG[ObsRep, LatRep]]
-    ]: ...
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
+    ) -> Callable[[Point[Mean, Model]], Point[Mean, SymmetricHMoG[ObsRep, LatRep]]]: ...
 
     @abstractmethod
     def to_hmog_params(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         params: Point[Natural, Model],
         masked_params: Point[Natural, Masked],
-    ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]: ...
+    ) -> Point[Natural, SymmetricHMoG[ObsRep, LatRep]]: ...
 
     @abstractmethod
     def from_hmog_params(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
-        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
+        params: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
     ) -> tuple[Point[Natural, Model], Point[Natural, Masked]]: ...
 
     def make_minibatch_step(
         self,
         handler: RunHandler,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         logger: JaxLogger,
         optimizer: Optimizer[Natural, Model],
         masked_params: Point[Natural, Masked],
@@ -429,7 +424,7 @@ class GradientTrainer[
         self,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         logger: JaxLogger,
         optimizer: Optimizer[Natural, Model],
         masked_params: Point[Natural, Masked],
@@ -470,9 +465,10 @@ class GradientTrainer[
             )
 
             batch_man: Replicated[Model] = Replicated(model, grads_array.shape[0])
-            batch_grads: Point[Mean, ...] = batch_man.point(grads_array)
+            batch_grads: Point[Mean, Replicated[Model]] = batch_man.point(grads_array)
+            # batch_grads = batch_man.point(grads_array)
             pad_grad = self.make_pad_grad(hmog_model)
-            batch_grads = batch_man.man_map(pad_grad, batch_grads)
+            full_batch_grads = batch_man.man_map(pad_grad, batch_grads)
 
             # Extract likelihood for full model evaluation
             hmog_params = self.to_hmog_params(hmog_model, new_params, masked_params)
@@ -484,7 +480,7 @@ class GradientTrainer[
                 logger,
                 hmog_params,
                 epoch + epoch_offset,
-                batch_grads,
+                full_batch_grads,
                 10,
             )
 
@@ -497,11 +493,11 @@ class GradientTrainer[
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         logger: JaxLogger,
         epoch_offset: int,
-        hmog_params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-    ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
+        hmog_params0: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
+    ) -> Point[Natural, SymmetricHMoG[ObsRep, LatRep]]:
         model = self.model(hmog_model)
         train_data = dataset.train_data
         params0, masked_params0 = self.from_hmog_params(hmog_model, hmog_params0)
@@ -564,11 +560,11 @@ class LGMTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](ABC):
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         logger: JaxLogger,
         epoch_offset: int,
-        hmog_params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-    ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]: ...
+        hmog_params0: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
+    ) -> Point[Natural, SymmetricHMoG[ObsRep, LatRep]]: ...
 
 
 type LikelihoodModel[ObsRep: PositiveDefinite] = AffineMap[
@@ -595,13 +591,13 @@ class GradientLGMTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
 
     @override
     def model(
-        self, hmog_model: DifferentiableHMoG[ObsRep, LatRep]
+        self, hmog_model: SymmetricHMoG[ObsRep, LatRep]
     ) -> LikelihoodModel[ObsRep]:
         return hmog_model.lkl_man
 
     @override
     def masked_model(
-        self, hmog_model: DifferentiableHMoG[ObsRep, LatRep]
+        self, hmog_model: SymmetricHMoG[ObsRep, LatRep]
     ) -> DifferentiableMixture[FullNormal, Normal[LatRep]]:
         return hmog_model.upr_hrm
 
@@ -613,7 +609,7 @@ class GradientLGMTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     ) -> Point[Natural, LikelihoodModel[ObsRep]]:
         """Bound observable precisions."""
         obs_params, int_params = model.split_params(params)
-        obs_man = model.cod_sub.sup_man
+        obs_man = model.cod_sub.amb_man
         obs_means = obs_man.to_mean(obs_params)
         bounded_obs_means = obs_man.regularize_covariance(
             obs_means, self.jitter, self.min_var
@@ -624,7 +620,7 @@ class GradientLGMTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     @override
     def make_loss_fn(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         masked_params: Point[
             Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]
         ],
@@ -645,7 +641,7 @@ class GradientLGMTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
             with hmog_model.lwr_hrm as lh:
                 z = lh.lat_man.to_natural(lh.lat_man.standard_normal())
                 lgm_params = lh.join_conjugated(lkl_params, z)
-                lgm_means = lh.expectation_step(lgm_params, batch)
+                lgm_means = lh.posterior_statistics(lgm_params, batch)
                 lgm_lat_means = lh.split_params(lgm_means)[2]
                 re_loss = self.re_reg * lh.lat_man.relative_entropy(lgm_lat_means, z)
 
@@ -656,18 +652,20 @@ class GradientLGMTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     @override
     def make_pad_grad(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
     ) -> Callable[
         [Point[Mean, LikelihoodModel[ObsRep]]],
-        Point[Mean, DifferentiableHMoG[ObsRep, LatRep]],
+        Point[Mean, SymmetricHMoG[ObsRep, LatRep]],
     ]:
         def pad_grad(
             grad: Point[Mean, LikelihoodModel[ObsRep]],
-        ) -> Point[Mean, DifferentiableHMoG[ObsRep, LatRep]]:
+        ) -> Point[Mean, SymmetricHMoG[ObsRep, LatRep]]:
             """Pad LGM gradient with zeros for mixture component."""
             # Create zero gradient for mixture component
-            mix_grad: Point[Mean, ...] = self.masked_model(hmog_model).point(
-                jnp.zeros(self.masked_model(hmog_model).dim)
+            mix_grad: Point[Mean, DifferentiableMixture[FullNormal, Normal[LatRep]]] = (
+                self.masked_model(hmog_model).point(
+                    jnp.zeros(self.masked_model(hmog_model).dim)
+                )
             )
 
             obs_grad, int_grad = hmog_model.lkl_man.split_params(grad)
@@ -678,20 +676,20 @@ class GradientLGMTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     @override
     def to_hmog_params(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         params: Point[Natural, LikelihoodModel[ObsRep]],
         masked_params: Point[
             Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]
         ],
-    ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
+    ) -> Point[Natural, SymmetricHMoG[ObsRep, LatRep]]:
         """Convert trained LGM parameters and fixed mixture parameters to full HMoG parameters."""
         return hmog_model.join_conjugated(params, masked_params)
 
     @override
     def from_hmog_params(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
-        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
+        params: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
     ) -> tuple[
         Point[Natural, LikelihoodModel[ObsRep]],
         Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
@@ -713,7 +711,7 @@ class GradientLGMPretrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
     @override
     def make_loss_fn(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         masked_params: Point[
             Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]
         ],
@@ -755,11 +753,11 @@ class MixtureTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](ABC):
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         logger: JaxLogger,
         epoch_offset: int,
-        hmog_params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-    ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]: ...
+        hmog_params0: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
+    ) -> Point[Natural, SymmetricHMoG[ObsRep, LatRep]]: ...
 
 
 @dataclass(frozen=True)
@@ -780,13 +778,13 @@ class GradientMixtureTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
 
     @override
     def model(
-        self, hmog_model: DifferentiableHMoG[ObsRep, LatRep]
+        self, hmog_model: SymmetricHMoG[ObsRep, LatRep]
     ) -> DifferentiableMixture[FullNormal, Normal[LatRep]]:
         return hmog_model.upr_hrm
 
     @override
     def masked_model(
-        self, hmog_model: DifferentiableHMoG[ObsRep, LatRep]
+        self, hmog_model: SymmetricHMoG[ObsRep, LatRep]
     ) -> LikelihoodModel[ObsRep]:
         return hmog_model.lkl_man
 
@@ -803,7 +801,7 @@ class GradientMixtureTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
     @override
     def make_loss_fn(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         masked_params: Point[Natural, LikelihoodModel[ObsRep]],
         batch: Array,
     ) -> Callable[
@@ -825,19 +823,21 @@ class GradientMixtureTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
     @override
     def make_pad_grad(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
     ) -> Callable[
         [Point[Mean, DifferentiableMixture[FullNormal, Normal[LatRep]]]],
-        Point[Mean, DifferentiableHMoG[ObsRep, LatRep]],
+        Point[Mean, SymmetricHMoG[ObsRep, LatRep]],
     ]:
         masked_model = self.masked_model(hmog_model)
 
         def pad_grad(
             grad: Point[Mean, DifferentiableMixture[FullNormal, Normal[LatRep]]],
-        ) -> Point[Mean, DifferentiableHMoG[ObsRep, LatRep]]:
+        ) -> Point[Mean, SymmetricHMoG[ObsRep, LatRep]]:
             """Pad mixture gradient with zeros for LGM component."""
             # Create zero gradient for LGM component
-            lkl_grad: Point[Mean, ...] = masked_model.point(jnp.zeros(masked_model.dim))
+            lkl_grad: Point[Mean, LikelihoodModel[ObsRep]] = masked_model.point(
+                jnp.zeros(masked_model.dim)
+            )
 
             # Extract components
             obs_grad, int_grad = masked_model.split_params(lkl_grad)
@@ -850,18 +850,18 @@ class GradientMixtureTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
     @override
     def to_hmog_params(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         params: Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
         masked_params: Point[Natural, LikelihoodModel[ObsRep]],
-    ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
+    ) -> Point[Natural, SymmetricHMoG[ObsRep, LatRep]]:
         """Convert trained mixture parameters and fixed LGM parameters to full HMoG parameters."""
         return hmog_model.join_conjugated(masked_params, params)
 
     @override
     def from_hmog_params(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
-        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
+        params: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
     ) -> tuple[
         Point[Natural, DifferentiableMixture[FullNormal, Normal[LatRep]]],
         Point[Natural, LikelihoodModel[ObsRep]],
@@ -892,11 +892,11 @@ class FullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](ABC):
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         logger: JaxLogger,
         epoch_offset: int,
-        hmog_params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-    ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]: ...
+        hmog_params0: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
+    ) -> Point[Natural, SymmetricHMoG[ObsRep, LatRep]]: ...
 
 
 @dataclass(frozen=True)
@@ -904,7 +904,7 @@ class GradientFullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinit
     GradientTrainer[
         ObsRep,
         LatRep,
-        DifferentiableHMoG[ObsRep, LatRep],
+        SymmetricHMoG[ObsRep, LatRep],
         Null,
     ],
     FullModelTrainer[ObsRep, LatRep],
@@ -921,20 +921,20 @@ class GradientFullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinit
 
     @override
     def model(
-        self, hmog_model: DifferentiableHMoG[ObsRep, LatRep]
-    ) -> DifferentiableHMoG[ObsRep, LatRep]:
+        self, hmog_model: SymmetricHMoG[ObsRep, LatRep]
+    ) -> SymmetricHMoG[ObsRep, LatRep]:
         return hmog_model
 
     @override
-    def masked_model(self, hmog_model: DifferentiableHMoG[ObsRep, LatRep]) -> Null:
+    def masked_model(self, hmog_model: SymmetricHMoG[ObsRep, LatRep]) -> Null:
         return Null()
 
     @override
     def bound_parameters(
         self,
-        model: DifferentiableHMoG[ObsRep, LatRep],
-        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-    ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
+        model: SymmetricHMoG[ObsRep, LatRep],
+        params: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
+    ) -> Point[Natural, SymmetricHMoG[ObsRep, LatRep]]:
         """Apply all parameter bounds to HMoG."""
         # Split parameters
         lkl_params, mix_params = model.split_conjugated(params)
@@ -958,12 +958,12 @@ class GradientFullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinit
     @override
     def make_loss_fn(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
         masked_params: Point[Natural, Null],
         batch: Array,
-    ) -> Callable[[Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]], Array]:
+    ) -> Callable[[Point[Natural, SymmetricHMoG[ObsRep, LatRep]]], Array]:
         def _loss_fn(
-            params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+            params: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
         ) -> Array:
             # Cross-entropy loss
             ce_loss = -hmog_model.average_log_observable_density(params, batch)
@@ -977,7 +977,7 @@ class GradientFullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinit
                 z = lh.lat_man.to_natural(lh.lat_man.standard_normal())
                 lkl_params = lh.lkl_man.join_params(obs_params, int_params)
                 lgm_params = lh.join_conjugated(lkl_params, z)
-                lgm_means = lh.expectation_step(lgm_params, batch)
+                lgm_means = lh.posterior_statistics(lgm_params, batch)
                 lgm_lat_means = lh.split_params(lgm_means)[2]
                 re_loss = self.re_reg * lh.lat_man.relative_entropy(lgm_lat_means, z)
 
@@ -988,16 +988,16 @@ class GradientFullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinit
     @override
     def make_pad_grad(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
     ) -> Callable[
-        [Point[Mean, DifferentiableHMoG[ObsRep, LatRep]]],
-        Point[Mean, DifferentiableHMoG[ObsRep, LatRep]],
+        [Point[Mean, SymmetricHMoG[ObsRep, LatRep]]],
+        Point[Mean, SymmetricHMoG[ObsRep, LatRep]],
     ]:
         """Identity function since we're already working with the full HMoG gradient."""
 
         def pad_grad(
-            grad: Point[Mean, DifferentiableHMoG[ObsRep, LatRep]],
-        ) -> Point[Mean, DifferentiableHMoG[ObsRep, LatRep]]:
+            grad: Point[Mean, SymmetricHMoG[ObsRep, LatRep]],
+        ) -> Point[Mean, SymmetricHMoG[ObsRep, LatRep]]:
             """Identity function since we're already working with the full HMoG gradient."""
             return grad
 
@@ -1006,21 +1006,19 @@ class GradientFullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinit
     @override
     def to_hmog_params(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
-        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
+        params: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
         masked_params: Point[Natural, Null],
-    ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
+    ) -> Point[Natural, SymmetricHMoG[ObsRep, LatRep]]:
         """Identity function since we're already working with full HMoG parameters."""
         return params
 
     @override
     def from_hmog_params(
         self,
-        hmog_model: DifferentiableHMoG[ObsRep, LatRep],
-        params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-    ) -> tuple[
-        Point[Natural, DifferentiableHMoG[ObsRep, LatRep]], Point[Natural, Null]
-    ]:
+        hmog_model: SymmetricHMoG[ObsRep, LatRep],
+        params: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
+    ) -> tuple[Point[Natural, SymmetricHMoG[ObsRep, LatRep]], Point[Natural, Null]]:
         """Return the full parameters without splitting."""
         return params, Null().point(jnp.asarray([]))
 
@@ -1037,11 +1035,11 @@ class GradientFullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinit
 #         key: Array,
 #         handler: RunHandler,
 #         dataset: ClusteringDataset,
-#         model: DifferentiableHMoG[ObsRep, LatRep],
+#         model: SymmetricHMoG[ObsRep, LatRep],
 #         logger: JaxLogger,
 #         epoch_offset: int,
-#         params0: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
-#     ) -> Point[Natural, DifferentiableHMoG[ObsRep, LatRep]]:
+#         params0: Point[Natural, SymmetricHMoG[ObsRep, LatRep]],
+#     ) -> Point[Natural, SymmetricHMoG[ObsRep, LatRep]]:
 #         # Standard normal latent for LGM
 #         train_data = dataset.train_data
 #         lkl_params0, mix_params0 = model.split_conjugated(params0)
@@ -1051,7 +1049,7 @@ class GradientFullModelTrainer[ObsRep: PositiveDefinite, LatRep: PositiveDefinit
 #             def step(
 #                 epoch: Array, lgm_params: Point[Natural, LinearGaussianModel[ObsRep]]
 #             ) -> Point[Natural, LinearGaussianModel[ObsRep]]:
-#                 lgm_means = lh.expectation_step(lgm_params, train_data)
+#                 lgm_means = lh.posterior_statistics(lgm_params, train_data)
 # def bound_observable_variances[Rep: PositiveDefinite](
 #     model: LinearGaussianModel[Rep],
 #     means: Point[Mean, LinearGaussianModel[Rep]],
