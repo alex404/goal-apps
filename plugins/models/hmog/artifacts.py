@@ -13,11 +13,9 @@ import scipy.cluster.hierarchy
 from goal.geometry import (
     Natural,
     Point,
-    PositiveDefinite,
 )
 from goal.models import (
     AnalyticLinearGaussianModel,
-    DifferentiableHMoG,
 )
 from h5py import File, Group
 from jax import Array
@@ -30,6 +28,10 @@ from apps.plugins import (
 )
 from apps.runtime.handler import Artifact, RunHandler
 from apps.runtime.logger import JaxLogger
+
+from .base import (
+    HMoG,
+)
 
 ### Analysis Args ###
 
@@ -45,23 +47,25 @@ class AnalysisArgs:
 ### Helpers ###
 
 
-def cluster_assignments[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
-    model: DifferentiableHMoG[ObsRep, LatRep], params: Array, data: Array
-) -> Array:
+def cluster_assignments[
+    M: HMoG,
+](model: M, params: Array, data: Array) -> Array:
     def data_point_cluster(x: Array) -> Array:
-        cat_pst = model.pst_lat_man.prior(
+        cat_pst = model.upr_hrm.prior(
             model.posterior_at(model.natural_point(params), x)
         )
-        with model.lat_man.lat_man as lm:
+        with model.upr_hrm.lat_man as lm:
             probs = lm.to_probs(lm.to_mean(cat_pst))
         return jnp.argmax(probs, axis=-1)
 
     return jax.lax.map(data_point_cluster, data, batch_size=2048)
 
 
-def get_component_prototypes[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
-    model: DifferentiableHMoG[ObsRep, LatRep],
-    params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+def get_component_prototypes[
+    M: HMoG,
+](
+    model: M,
+    params: Point[Natural, M],
 ) -> list[Array]:
     # Split into likelihood and mixture parameters
     lkl_params, mix_params = model.split_conjugated(params)
@@ -74,7 +78,7 @@ def get_component_prototypes[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
 
     ana_lgm = AnalyticLinearGaussianModel(
         obs_dim=model.lwr_hrm.obs_dim,  # Original latent becomes observable
-        obs_rep=PositiveDefinite,
+        obs_rep=model.lwr_hrm.obs_rep,
         lat_dim=model.lwr_hrm.lat_dim,  # Original observable becomes latent
     )
 
@@ -91,9 +95,11 @@ def get_component_prototypes[ObsRep: PositiveDefinite, LatRep: PositiveDefinite]
     return prototypes
 
 
-def compute_component_divergences[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
-    model: DifferentiableHMoG[ObsRep, LatRep],
-    params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+def compute_component_divergences[
+    M: HMoG,
+](
+    model: M,
+    params: Point[Natural, M],
 ) -> tuple[Array, Array, NDArray[np.float64]]:
     """Compute divergence statistics between mixture components.
 
@@ -195,10 +201,12 @@ class ClusterStatistics(Artifact):
         return cls(prototypes=prototypes, members=members)
 
 
-def get_cluster_statistics[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
-    model: DifferentiableHMoG[ObsRep, LatRep],
+def get_cluster_statistics[
+    M: HMoG,
+](
+    model: M,
     dataset: ClusteringDataset,
-    params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+    params: Point[Natural, M],
 ) -> ClusterStatistics:
     """Generate collection of clusters with their members."""
 
@@ -297,9 +305,11 @@ class ClusterHierarchy(Artifact):
         return cls(prototypes=prototypes, linkage_matrix=linkage_matrix)
 
 
-def get_cluster_hierarchy[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
-    model: DifferentiableHMoG[ObsRep, LatRep],
-    params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]],
+def get_cluster_hierarchy[
+    M: HMoG,
+](
+    model: M,
+    params: Point[Natural, M],
 ) -> ClusterHierarchy:
     """Generate clustering hierarchy analysis."""
     prototypes = get_component_prototypes(model, params)
@@ -374,13 +384,13 @@ def hierarchy_plotter(
     return plot_cluster_hierarchy
 
 
-def log_artifacts[ObsRep: PositiveDefinite, LatRep: PositiveDefinite](
+def log_artifacts[M: HMoG](
     handler: RunHandler,
     dataset: ClusteringDataset,
     logger: JaxLogger,
-    model: DifferentiableHMoG[ObsRep, LatRep],
+    model: M,
     epoch: int,
-    params: Point[Natural, DifferentiableHMoG[ObsRep, LatRep]] | None = None,
+    params: Point[Natural, M] | None = None,
 ) -> None:
     """Generate and save plots from artifacts.
 

@@ -3,23 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any
 
-from goal.geometry import Diagonal, PositiveDefinite, Scale
 from hydra.core.config_store import ConfigStore
 from omegaconf import MISSING
 
 from apps.configs import ClusteringModelConfig
-
-### Covariance Reps ###
-
-
-class RepresentationType(Enum):
-    scale = Scale
-    diagonal = Diagonal
-    positive_definite = PositiveDefinite
-
 
 ### LGM Trainer Configs ###
 
@@ -51,7 +40,7 @@ class GradientLGMPretrainerConfig(LGMTrainerConfig):
     batch_size: int = 256
     l1_reg: float = 0
     l2_reg: float = 0.0001
-    re_reg: float = 0.1
+    re_reg: float = 0
     grad_clip: float = 8
 
 
@@ -66,7 +55,7 @@ class GradientLGMTrainerConfig(LGMTrainerConfig):
     batch_size: int = 256
     l1_reg: float = 0
     l2_reg: float = 0.0001
-    re_reg: float = 0.1
+    re_reg: float = 0
     grad_clip: float = 8
 
 
@@ -120,7 +109,7 @@ class GradientFullModelTrainerConfig(FullModelTrainerConfig):
     batch_size: int = 256
     l1_reg: float = 0
     l2_reg: float = 0.0001
-    re_reg: float = 0.1
+    re_reg: float = 0
     grad_clip: float = 8
 
 
@@ -158,8 +147,6 @@ class HMoGConfig(ClusteringModelConfig):
     data_dim: int = MISSING
     latent_dim: int = 10
     n_clusters: int = 10
-    obs_rep: RepresentationType = RepresentationType.diagonal
-    lat_rep: RepresentationType = RepresentationType.diagonal
 
     # Training configuration
     lgm: LGMTrainerConfig = field(default=MISSING)
@@ -169,20 +156,59 @@ class HMoGConfig(ClusteringModelConfig):
 
 
 @dataclass
-class ThreeStageHMoGConfig(HMoGConfig):
-    """HMoG configuration with three-stage training."""
+class SymmetricHMoGConfig(HMoGConfig):
+    """HMoG configuration with cyclic training."""
 
-    _target_: str = "plugins.models.hmog.experiment.ThreeStageHMoGExperiment"
-    defaults: list[Any] = field(default_factory=lambda: three_stage_defaults)
+    _target_: str = "plugins.models.hmog.experiment.SymmetricHMoGExperiment"
+    num_cycles: int = 10
+    defaults: list[Any] = field(default_factory=lambda: cycle_defaults)
+
+
+### DifferentiableHMoG Trainer Config ###
 
 
 @dataclass
-class CyclicHMoGConfig(HMoGConfig):
-    """HMoG configuration with cyclic training."""
+class DifferentiableModelTrainerConfig:
+    """Configuration for single-stage DifferentiableHMoG trainer."""
 
-    _target_: str = "plugins.models.hmog.experiment.CyclicHMoGExperiment"
-    num_cycles: int = 10
-    defaults: list[Any] = field(default_factory=lambda: cycle_defaults)
+    _target_: str = "plugins.models.hmog.trainers.DifferentiableModelTrainer"
+    n_epochs: int = 5000
+    pretrain_epochs: int = 1000
+    lr_init: float = 1e-4
+    lr_final_ratio: float = 1
+    batch_size: int = 256
+    l1_reg: float = 0
+    l2_reg: float = 0.001
+    re_reg: float = 0
+    grad_clip: float = 8
+    min_prob: float = 1e-4
+    obs_min_var: float = 1e-6
+    obs_jitter: float = 0
+    lat_min_var: float = 1e-6
+    lat_jitter: float = 0
+
+
+### Main Configuration ###
+
+differentiable_defaults: list[Any] = [
+    {"trainer": "differentiable"},
+]
+
+
+@dataclass
+class DifferentiableHMoGConfig(ClusteringModelConfig):
+    """Configuration for DifferentiableHMoG model."""
+
+    _target_: str = "plugins.models.hmog.experiment.DifferentiableHMoGExperiment"
+    data_dim: int = MISSING
+    latent_dim: int = 10
+    n_clusters: int = 10
+
+    # Single trainer for the entire model
+    trainer: DifferentiableModelTrainerConfig = field(default=MISSING)
+    analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
+
+    defaults: list[Any] = field(default_factory=lambda: differentiable_defaults)
 
 
 ### Config Registration ###
@@ -198,5 +224,12 @@ cs.store(group="model/mix", name="gradient", node=GradientMixtureTrainerConfig)
 
 cs.store(group="model/full", name="gradient", node=GradientFullModelTrainerConfig)
 
-cs.store(group="model", name="hmog_3s", node=ThreeStageHMoGConfig)
-cs.store(group="model", name="hmog_cyc", node=CyclicHMoGConfig)
+cs.store(group="model", name="hmog_sym", node=SymmetricHMoGConfig)
+
+### Config Registration ###
+
+# Add these lines to the existing registration section:
+cs.store(
+    group="model/trainer", name="differentiable", node=DifferentiableModelTrainerConfig
+)
+cs.store(group="model", name="hmog_diff", node=DifferentiableHMoGConfig)
