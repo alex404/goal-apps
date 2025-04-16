@@ -14,8 +14,8 @@ from goal.geometry import (
     Point,
 )
 from goal.models import (
-    SymmetricHMoG,
-    symmetric_hmog,
+    DifferentiableHMoG,
+    differentiable_hmog,
 )
 from jax import Array
 
@@ -45,7 +45,7 @@ class HMoGExperiment(ClusteringModel, ABC):
     """Experiment framework for HMoGs."""
 
     # Training configuration
-    model: SymmetricHMoG[Diagonal, Diagonal]
+    model: DifferentiableHMoG[Diagonal, Diagonal]
     pre: LGMTrainer[Diagonal]
     trainer: GradientTrainer
 
@@ -65,11 +65,11 @@ class HMoGExperiment(ClusteringModel, ABC):
     ) -> None:
         super().__init__()
 
-        self.model = symmetric_hmog(
+        self.model = differentiable_hmog(
             obs_dim=data_dim,
             obs_rep=Diagonal,
             lat_dim=latent_dim,
-            lat_rep=Diagonal,
+            pst_rep=Diagonal,
             n_components=n_clusters,
         )
 
@@ -110,7 +110,7 @@ class HMoGExperiment(ClusteringModel, ABC):
 
         obs_means = self.model.obs_man.average_sufficient_statistic(data)
         obs_means = self.model.obs_man.regularize_covariance(
-            obs_means, self.lgm.jitter, self.lgm.min_var
+            obs_means, self.pre.jitter, self.pre.min_var
         )
         obs_params = self.model.obs_man.to_natural(obs_means)
 
@@ -138,7 +138,7 @@ class HMoGExperiment(ClusteringModel, ABC):
 
     def log_likelihood(
         self,
-        params: Point[Natural, SymmetricHMoG[Diagonal, Diagonal]],
+        params: Point[Natural, DifferentiableHMoG[Diagonal, Diagonal]],
         data: Array,
     ) -> Array:
         return self.model.average_log_observable_density(params, data)
