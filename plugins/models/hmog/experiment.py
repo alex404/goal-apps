@@ -7,13 +7,13 @@ from abc import ABC
 from typing import override
 
 import jax
-import jax.numpy as jnp
 from goal.geometry import (
     Diagonal,
     Natural,
     Point,
 )
 from goal.models import (
+    AnalyticLinearGaussianModel,
     DifferentiableHMoG,
     differentiable_hmog,
 )
@@ -104,37 +104,40 @@ class HMoGExperiment(ClusteringModel, ABC):
     @override
     def initialize_model(self, key: Array, data: Array) -> Array:
         """Initialize model parameters."""
-        noise_scale = 0.01
-        keys = jax.random.split(key, 3)
-        key_cat, key_comp, key_int = keys
 
-        obs_means = self.model.obs_man.average_sufficient_statistic(data)
-        obs_means = self.model.obs_man.regularize_covariance(
-            obs_means, self.pre.jitter, self.pre.min_var
-        )
-        obs_params = self.model.obs_man.to_natural(obs_means)
+        return self.model.initialize_from_sample(key, data, shape=1).array
 
-        with self.model.upr_hrm as uh:
-            cat_params = uh.lat_man.initialize(key_cat, shape=noise_scale)
-            key_comps = jax.random.split(key_comp, self.n_clusters)
-            anchor = uh.obs_man.initialize(key_comps[0], shape=noise_scale)
-
-            component_list = [
-                uh.obs_emb.sub_man.initialize(key_compi, shape=noise_scale).array
-                for key_compi in key_comps[1:]
-            ]
-            components = jnp.stack(component_list)
-            mix_params = uh.join_params(
-                anchor, uh.int_man.point(components), cat_params
-            )
-
-        int_noise = noise_scale * jax.random.normal(key_int, self.model.int_man.shape)
-        lkl_params = self.model.lkl_man.join_params(
-            obs_params,
-            self.model.int_man.point(self.model.int_man.rep.from_dense(int_noise)),
-        )
-
-        return self.model.join_conjugated(lkl_params, mix_params).array
+        # noise_scale = 0.01
+        # keys = jax.random.split(key, 3)
+        # key_cat, key_comp, key_int = keys
+        #
+        # obs_means = self.model.obs_man.average_sufficient_statistic(data)
+        # obs_means = self.model.obs_man.regularize_covariance(
+        #     obs_means, self.pre.jitter, self.pre.min_var
+        # )
+        # obs_params = self.model.obs_man.to_natural(obs_means)
+        #
+        # with self.model.upr_hrm as uh:
+        #     cat_params = uh.lat_man.initialize(key_cat, shape=noise_scale)
+        #     key_comps = jax.random.split(key_comp, self.n_clusters)
+        #     anchor = uh.obs_man.initialize(key_comps[0], shape=noise_scale)
+        #
+        #     component_list = [
+        #         uh.obs_emb.sub_man.initialize(key_compi, shape=noise_scale).array
+        #         for key_compi in key_comps[1:]
+        #     ]
+        #     components = jnp.stack(component_list)
+        #     mix_params = uh.join_params(
+        #         anchor, uh.int_man.point(components), cat_params
+        #     )
+        #
+        # int_noise = noise_scale * jax.random.normal(key_int, self.model.int_man.shape)
+        # lkl_params = self.model.lkl_man.join_params(
+        #     obs_params,
+        #     self.model.int_man.point(self.model.int_man.rep.from_dense(int_noise)),
+        # )
+        #
+        # return self.model.join_conjugated(lkl_params, mix_params).array
 
     def log_likelihood(
         self,
@@ -198,6 +201,15 @@ class HMoGExperiment(ClusteringModel, ABC):
         # Track total epochs
         epoch = 0
 
+        init_obs_params, init_int_params, init_lat_params = self.model.split_params(
+            params
+        )
+        init_lkl_params = self.model.lwr_hrm.lkl_man.join_params(
+            init_obs_params, init_int_params
+        )
+        with self.model.lwr_hrm as lh:
+            ana_lgm = AnalyticLinearGaussianModel(lh.obs_dim, lh.obs_rep, lh.lat_dim)
+
         # Train LGM (mixture params fixed)
         if self.pre.n_epochs > 0:
             log.info("Pre-training LGM parameters")
@@ -205,10 +217,9 @@ class HMoGExperiment(ClusteringModel, ABC):
                 pre_key,
                 handler,
                 dataset,
-                self.model,
+                ana_lgm,
                 logger,
-                epoch,
-                params,
+                init_lkl_params,
             )
             epoch += self.pre.n_epochs
 
