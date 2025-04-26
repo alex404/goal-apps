@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Callable
+from typing import Any, Callable
 
 import jax
 import jax.numpy as jnp
@@ -97,7 +97,8 @@ class GradientTrainer:
     n_epochs: int
     lr_init: float
     lr_final_ratio: float
-    batch_size: int
+    batch_size: None | int
+    batch_steps: int
     grad_clip: float
 
     # Regularization parameters
@@ -115,25 +116,41 @@ class GradientTrainer:
     # Strategy
     mask_type: MaskingStrategy
 
-    def bound_parameters(
-        self, model: HMoG, params: Point[Natural, HMoG]
-    ) -> Point[Natural, HMoG]:
-        """Apply bounds to parameters for numerical stability."""
-        # Split parameters
-        obs_params, int_params, lat_params = model.split_params(params)
+    def bound_means(self, model: HMoG, means: Point[Mean, HMoG]) -> Point[Mean, HMoG]:
+        """Apply bounds to posterior statistics for numerical stability."""
+        # Split posterior statistics
+        obs_means, int_means, lat_means = model.split_params(means)
 
-        # Bound observable parameters
-        with model.obs_man as om:
-            obs_means = om.to_mean(obs_params)
-            bounded_obs_means = om.regularize_covariance(
-                obs_means, self.obs_jitter, self.obs_min_var
+        # For observable parameters, bound the variances
+        bounded_obs_means = model.lwr_hrm.obs_man.regularize_covariance(
+            obs_means, self.obs_jitter, self.obs_min_var
+        )
+
+        # Bound latent parameters
+        with model.upr_hrm as uh:
+            # Split latent parameters
+            comp_means, prob_means = uh.split_mean_mixture(lat_means)
+
+            def bound_normals(
+                comp_means: Point[Mean, Normal[Any]],
+            ) -> Point[Mean, Normal[Any]]:
+                return uh.obs_man.regularize_covariance(
+                    comp_means, self.obs_jitter, self.obs_min_var
+                )
+
+            bounded_comp_means = uh.cmp_man.man_map(bound_normals, comp_means)
+
+            probs = uh.lat_man.to_probs(prob_means)
+            bounded_probs0 = jnp.clip(probs, self.min_prob, 1.0)
+            bounded_probs = bounded_probs0 / jnp.sum(bounded_probs0)
+            bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
+
+            bounded_lat_means = uh.join_mean_mixture(
+                bounded_comp_means, bounded_prob_means
             )
-            bounded_obs_params = om.to_natural(bounded_obs_means)
 
-        # Additional bounds could be added here for other parameters
-
-        # Rejoin parameters
-        return model.join_params(bounded_obs_params, int_params, lat_params)
+        # Rejoin all parameters
+        return model.join_params(bounded_obs_means, int_means, bounded_lat_means)
 
     def make_loss_fn(
         self, model: HMoG, batch: Array
@@ -192,7 +209,7 @@ class GradientTrainer:
 
         return mask_fn
 
-    def make_minibatch_step(
+    def make_batch_step(
         self,
         handler: RunHandler,
         model: HMoG,
@@ -202,45 +219,70 @@ class GradientTrainer:
         [tuple[OptState, Point[Natural, HMoG]], Array],
         tuple[tuple[OptState, Point[Natural, HMoG]], Array],
     ]:
-        """Create step function for processing a single minibatch."""
-        # Create gradient mask function based on training phase
+        """Create step function for processing a single batch.
+
+        Works for both standard SGD and EM-style updates.
+        """
+        # Create gradient mask function
         mask_gradient = self.create_gradient_mask(model)
 
-        def minibatch_step(
+        def batch_step(
             carry: tuple[OptState, Point[Natural, HMoG]],
             batch: Array,
         ) -> tuple[tuple[OptState, Point[Natural, HMoG]], Array]:
             opt_state, params = carry
 
-            # Compute full gradient
-            grad = model.grad(self.make_loss_fn(model, batch), params)
+            # Compute posterior statistics once for this batch
+            posterior_stats = model.mean_posterior_statistics(params, batch)
 
-            # Apply gradient mask
-            masked_grad = mask_gradient(grad)
+            # Apply bounds to posterior statistics
+            bounded_posterior = self.bound_means(model, posterior_stats)
 
-            # Update parameters
-            opt_state, new_params = optimizer.update(opt_state, masked_grad, params)
+            # Define the inner step function for scan
+            def inner_step(
+                carry: tuple[OptState, Point[Natural, HMoG]],
+                _: None,  # Dummy input since we don't need per-step inputs
+            ) -> tuple[tuple[OptState, Point[Natural, HMoG]], Array]:
+                current_opt_state, current_params = carry
 
-            # Apply parameter bounds
-            bound_params = self.bound_parameters(model, new_params)
+                # Compute gradient as difference between posterior and current prior
+                prior_stats = model.to_mean(current_params)
+                grad = prior_stats - bounded_posterior
 
-            # Monitor parameters for debugging
-            logger.monitor_params(
-                {
-                    "original": params.array,
-                    "post_update": new_params.array,
-                    "post_bounds": bound_params.array,
-                    "batch": batch,
-                    "grad": grad.array,
-                    "masked_grad": masked_grad.array,
-                },
-                handler,
-                context=str(self.mask_type),
+                # Apply gradient mask
+                masked_grad = mask_gradient(grad)
+
+                # Update parameters
+                current_opt_state, new_params = optimizer.update(
+                    current_opt_state, masked_grad, current_params
+                )
+
+                # Monitor parameters for debugging
+                logger.monitor_params(
+                    {
+                        "original": current_params.array,
+                        "post_update": new_params.array,
+                        "batch": batch,
+                        "grad": grad.array,
+                        "masked_grad": masked_grad.array,
+                    },
+                    handler,
+                    context=f"mask: {self.mask_type}",
+                )
+
+                return (current_opt_state, new_params), masked_grad.array
+
+            # Run inner steps using jax.lax.scan
+            (final_opt_state, final_params), all_grads = jax.lax.scan(
+                inner_step,
+                (opt_state, params),
+                None,  # No inputs needed
+                length=self.batch_steps,
             )
 
-            return (opt_state, bound_params), masked_grad.array
+            return (final_opt_state, final_params), all_grads
 
-        return minibatch_step
+        return batch_step
 
     def train(
         self,
@@ -256,7 +298,12 @@ class GradientTrainer:
         n_epochs = self.n_epochs
 
         train_data = dataset.train_data
-        n_batches = train_data.shape[0] // self.batch_size
+        if self.batch_size is None:
+            batch_size = train_data.shape[0]
+            n_batches = 1
+        else:
+            n_batches = train_data.shape[0] // self.batch_size
+            batch_size = self.batch_size
 
         # Configure learning rate
         if self.lr_final_ratio < 1.0:
@@ -292,19 +339,21 @@ class GradientTrainer:
             shuffle_key, next_key = jax.random.split(epoch_key)
 
             # Create minibatch step with the appropriate mask
-            minibatch_step = self.make_minibatch_step(handler, model, logger, optimizer)
+            batch_step = self.make_batch_step(handler, model, logger, optimizer)
 
             # Shuffle and batch data
             shuffled_indices = jax.random.permutation(shuffle_key, train_data.shape[0])
-            batched_indices = shuffled_indices[: n_batches * self.batch_size]
+            batched_indices = shuffled_indices[: n_batches * batch_size]
             batched_data = train_data[batched_indices].reshape(
-                (n_batches, self.batch_size, -1)
+                (n_batches, batch_size, -1)
             )
 
             # Process all batches
-            (opt_state, new_params), grads_array = jax.lax.scan(
-                minibatch_step, (opt_state, params), batched_data
+            (opt_state, new_params), gradss_array = jax.lax.scan(
+                batch_step, (opt_state, params), batched_data
             )
+            # gradss_array shape: (n_batches, n_steps, param_dim)
+            grads_array = gradss_array.reshape(-1, *gradss_array.shape[2:])
 
             # Create batch gradients for logging
             batch_man = Replicated(model, grads_array.shape[0])
@@ -318,7 +367,7 @@ class GradientTrainer:
                 new_params,
                 epoch + epoch_offset,
                 batch_grads,
-                log_freq=10,
+                log_freq=1,
             )
 
             return opt_state, new_params, next_key
@@ -346,16 +395,16 @@ class LGMPretrainer[ObsRep: PositiveDefinite]:
     n_epochs: int
     batch_size: int
     lr_init: float
-    lr_final_ratio: float = 0.1
-    grad_clip: float = 10.0
+    lr_final_ratio: float
+    grad_clip: float
 
     # Regularization parameters
-    l1_reg: float = 0.0
-    l2_reg: float = 1e-4
+    l1_reg: float
+    l2_reg: float
 
     # Parameter bounds
-    min_var: float = 1e-6
-    jitter: float = 0.0
+    min_var: float
+    jitter: float
 
     def bound_parameters(
         self,

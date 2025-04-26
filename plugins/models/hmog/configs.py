@@ -54,9 +54,10 @@ class GradientTrainerConfig:
     n_epochs: int = 200
     lr_init: float = 1e-5
     lr_final_ratio: float = 1.0
-    batch_size: int = 256
+    batch_size: int | None = None
+    batch_steps: int = 1000
     l1_reg: float = 0.0
-    l2_reg: float = 0.0001
+    l2_reg: float = 0.001
     re_reg: float = 1
     grad_clip: float = 8.0
     min_prob: float = 1e-4
