@@ -81,7 +81,7 @@ def relative_entropy_regularization[
     sub_lat_params = lgm.lat_man.join_location_precision(lat_loc, dia_prs)
     obs_params, int_params = lgm.lkl_man.split_params(lkl_params)
     lgm_params = lgm.join_params(obs_params, int_params, sub_lat_params)
-    lgm_means = lgm.posterior_statistics(lgm_params, batch)
+    lgm_means = lgm.mean_posterior_statistics(lgm_params, batch)
     lgm_lat_means = lgm.split_params(lgm_means)[2]
     return lgm.lat_man.relative_entropy(lgm_lat_means, z), lgm_lat_means
 
@@ -100,7 +100,7 @@ def relative_entropy_regularization_full[
     ana_lgm = AnalyticLinearGaussianModel(lgm.obs_dim, lgm.obs_rep, lgm.lat_dim)
     z = ana_lgm.lat_man.to_natural(ana_lgm.lat_man.standard_normal())
     lgm_params = ana_lgm.join_conjugated(lkl_params, z)
-    lgm_means = ana_lgm.posterior_statistics(lgm_params, batch)
+    lgm_means = ana_lgm.mean_posterior_statistics(lgm_params, batch)
     lgm_lat_means = ana_lgm.split_params(lgm_means)[2]
     re_loss = ana_lgm.lat_man.relative_entropy(lgm_lat_means, z)
     return ana_lgm, re_loss, lgm_lat_means
