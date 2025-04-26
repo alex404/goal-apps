@@ -198,7 +198,6 @@ class GradientTrainer:
         model: HMoG,
         logger: JaxLogger,
         optimizer: Optimizer[Natural, HMoG],
-        mask_type: str,
     ) -> Callable[
         [tuple[OptState, Point[Natural, HMoG]], Array],
         tuple[tuple[OptState, Point[Natural, HMoG]], Array],
@@ -236,7 +235,7 @@ class GradientTrainer:
                     "masked_grad": masked_grad.array,
                 },
                 handler,
-                context=mask_type,
+                context=str(self.mask_type),
             )
 
             return (opt_state, bound_params), masked_grad.array
@@ -252,7 +251,6 @@ class GradientTrainer:
         logger: JaxLogger,
         epoch_offset: int,
         params0: Point[Natural, HMoG],
-        mask_type: str,
     ) -> Point[Natural, HMoG]:
         """Train the model with the specified gradient masking strategy."""
         n_epochs = self.n_epochs
@@ -281,7 +279,7 @@ class GradientTrainer:
         opt_state = optimizer.init(params0)
 
         # Log training phase
-        log.info(f"Training {mask_type} parameters for {n_epochs} epochs")
+        log.info(f"Training {self.mask_type} parameters for {n_epochs} epochs")
 
         # Create epoch step function
         def epoch_step(
@@ -294,9 +292,7 @@ class GradientTrainer:
             shuffle_key, next_key = jax.random.split(epoch_key)
 
             # Create minibatch step with the appropriate mask
-            minibatch_step = self.make_minibatch_step(
-                handler, model, logger, optimizer, mask_type
-            )
+            minibatch_step = self.make_minibatch_step(handler, model, logger, optimizer)
 
             # Shuffle and batch data
             shuffled_indices = jax.random.permutation(shuffle_key, train_data.shape[0])
@@ -339,7 +335,7 @@ type LinearModel[ObsRep: PositiveDefinite] = AffineMap[
 
 
 @dataclass(frozen=True)
-class LGMTrainer[ObsRep: PositiveDefinite]:
+class LGMPretrainer[ObsRep: PositiveDefinite]:
     """Standalone trainer for AnalyticLinearGaussianModel.
 
     This trainer provides a simplified way to pre-train an LGM component
@@ -414,12 +410,11 @@ class LGMTrainer[ObsRep: PositiveDefinite]:
         lkl_params: Point[Natural, LinearModel[ObsRep]],
     ) -> Point[Natural, LinearModel[ObsRep]]:
         # Initialize parameters if not provided
-        # Combine components
-        ana_hmog = differentiable_hmog(
+        hmog = differentiable_hmog(
             lgm.obs_dim, lgm.obs_rep, lgm.lat_dim, PositiveDefinite, 10
         )
-        mix_params = ana_hmog.upr_hrm.zeros()
-        mix_grad = ana_hmog.upr_hrm.zeros()
+        mix_params = hmog.upr_hrm.zeros()
+        mix_grad = hmog.upr_hrm.zeros()
 
         z = lgm.lat_man.to_natural(lgm.lat_man.standard_normal())
 
@@ -472,32 +467,34 @@ class LGMTrainer[ObsRep: PositiveDefinite]:
         ]:
             opt_state, lkl_params = carry
 
-            params = lgm.join_conjugated(lkl_params, z)
+            lgm_params = lgm.join_conjugated(lkl_params, z)
             # Compute gradient
-            grad = lgm.grad(self.make_loss_fn(lgm, batch), params)
-            obs_grad, int_grad, _ = lgm.split_params(grad)
+            lkl_grad = lgm.grad(self.make_loss_fn(lgm, batch), lgm_params)
+            obs_grad, int_grad, _ = lgm.split_params(lkl_grad)
             lkl_grad = lgm.lkl_man.join_params(obs_grad, int_grad)
 
             # Update parameters
-            opt_state, new_params = optimizer.update(opt_state, lkl_grad, lkl_params)
+            opt_state, new_lkl_params = optimizer.update(
+                opt_state, lkl_grad, lkl_params
+            )
 
             # Apply parameter bounds
-            bound_params = self.bound_parameters(lgm, new_params)
+            bound_lkl_params = self.bound_parameters(lgm, new_lkl_params)
 
             # Monitor parameters for debugging
             logger.monitor_params(
                 {
-                    "original": params.array,
-                    "post_update": new_params.array,
-                    "post_bounds": bound_params.array,
+                    "original": lkl_params.array,
+                    "post_update": new_lkl_params.array,
+                    "post_bounds": bound_lkl_params.array,
                     "batch": batch,
-                    "grad": grad.array,
+                    "grad": lkl_grad.array,
                 },
                 handler,
                 context="lgm_pretrain",
             )
 
-            return (opt_state, bound_params), grad.array
+            return (opt_state, bound_lkl_params), lkl_grad.array
 
         # Define epoch step function
         def epoch_step(
@@ -537,22 +534,20 @@ class LGMTrainer[ObsRep: PositiveDefinite]:
             hmog_grads_array = jax.vmap(pad_lgm_grad)(lkl_grads_array)
             lgm_params = lgm.join_conjugated(new_params, z)
             (obs_params, int_params, lat_params) = lgm.split_params(lgm_params)
-            _, lat_int_params, lat_lat_params = ana_hmog.upr_hrm.split_params(
-                mix_params
-            )
-            new_mix_params = ana_hmog.upr_hrm.join_params(
+            _, lat_int_params, lat_lat_params = hmog.upr_hrm.split_params(mix_params)
+            new_mix_params = hmog.upr_hrm.join_params(
                 lat_params, lat_int_params, lat_lat_params
             )
-            hmog_params = ana_hmog.join_params(obs_params, int_params, new_mix_params)
+            hmog_params = hmog.join_params(obs_params, int_params, new_mix_params)
 
             # Create batch gradients for logging
-            batch_man = Replicated(ana_hmog, hmog_grads_array.shape[0])
+            batch_man = Replicated(hmog, hmog_grads_array.shape[0])
             batch_grads = batch_man.point(hmog_grads_array)
 
             # Log metrics
             log_epoch_metrics(
                 dataset,
-                ana_hmog,
+                hmog,
                 logger,
                 hmog_params,
                 epoch,

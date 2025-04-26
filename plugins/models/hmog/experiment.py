@@ -29,7 +29,7 @@ from apps.runtime.logger import JaxLogger
 from .artifacts import AnalysisArgs, log_artifacts
 from .trainers import (
     GradientTrainer,
-    LGMTrainer,
+    LGMPretrainer,
 )
 
 ### Preamble ###
@@ -46,8 +46,10 @@ class HMoGExperiment(ClusteringModel, ABC):
 
     # Training configuration
     model: DifferentiableHMoG[Diagonal, Diagonal]
-    pre: LGMTrainer[Diagonal]
-    trainer: GradientTrainer
+    pre: LGMPretrainer[Diagonal]
+    lgm: GradientTrainer
+    mix: GradientTrainer
+    full: GradientTrainer
 
     num_cycles: int
 
@@ -58,8 +60,10 @@ class HMoGExperiment(ClusteringModel, ABC):
         data_dim: int,
         latent_dim: int,
         n_clusters: int,
-        pre: LGMTrainer[Diagonal],
-        trainer: GradientTrainer,
+        pre: LGMPretrainer[Diagonal],
+        lgm: GradientTrainer,
+        mix: GradientTrainer,
+        full: GradientTrainer,
         analysis: AnalysisArgs,
         num_cycles: int,
     ) -> None:
@@ -74,7 +78,9 @@ class HMoGExperiment(ClusteringModel, ABC):
         )
 
         self.pre = pre
-        self.trainer = trainer
+        self.lgm = lgm
+        self.mix = mix
+        self.full = full
         self.analysis = analysis
 
         log.info(f"Initialized HMoG model with dimension {self.model.dim}.")
@@ -88,7 +94,9 @@ class HMoGExperiment(ClusteringModel, ABC):
     @override
     def n_epochs(self) -> int:
         """Calculate total number of epochs across all cycles."""
-        return self.pre.n_epochs + self.num_cycles * self.trainer.n_epochs
+        return self.pre.n_epochs + self.num_cycles * (
+            self.lgm.n_epochs + self.mix.n_epochs + self.full.n_epochs
+        )
 
     @property
     def latent_dim(self) -> int:
@@ -105,18 +113,16 @@ class HMoGExperiment(ClusteringModel, ABC):
     def initialize_model(self, key: Array, data: Array) -> Array:
         """Initialize model parameters."""
 
-        return self.model.initialize_from_sample(key, data, shape=1).array
+        noise_scale = 0.01
+        keys = jax.random.split(key, 3)
+        key_cat, key_comp, key_int = keys
 
-        # noise_scale = 0.01
-        # keys = jax.random.split(key, 3)
-        # key_cat, key_comp, key_int = keys
-        #
-        # obs_means = self.model.obs_man.average_sufficient_statistic(data)
-        # obs_means = self.model.obs_man.regularize_covariance(
-        #     obs_means, self.pre.jitter, self.pre.min_var
-        # )
-        # obs_params = self.model.obs_man.to_natural(obs_means)
-        #
+        obs_means = self.model.obs_man.average_sufficient_statistic(data)
+        obs_means = self.model.obs_man.regularize_covariance(
+            obs_means, self.pre.jitter, self.pre.min_var
+        )
+        obs_params = self.model.obs_man.to_natural(obs_means)
+
         # with self.model.upr_hrm as uh:
         #     cat_params = uh.lat_man.initialize(key_cat, shape=noise_scale)
         #     key_comps = jax.random.split(key_comp, self.n_clusters)
@@ -130,14 +136,14 @@ class HMoGExperiment(ClusteringModel, ABC):
         #     mix_params = uh.join_params(
         #         anchor, uh.int_man.point(components), cat_params
         #     )
-        #
-        # int_noise = noise_scale * jax.random.normal(key_int, self.model.int_man.shape)
-        # lkl_params = self.model.lkl_man.join_params(
-        #     obs_params,
-        #     self.model.int_man.point(self.model.int_man.rep.from_dense(int_noise)),
-        # )
-        #
-        # return self.model.join_conjugated(lkl_params, mix_params).array
+        mix_params = self.model.upr_hrm.initialize(key_comp, shape=noise_scale)
+
+        int_noise = noise_scale * jax.random.normal(key_int, self.model.int_man.shape)
+        int_params = self.model.int_man.point(
+            self.model.int_man.rep.from_dense(int_noise)
+        )
+
+        return self.model.join_params(obs_params, int_params, mix_params).array
 
     def log_likelihood(
         self,
@@ -201,27 +207,32 @@ class HMoGExperiment(ClusteringModel, ABC):
         # Track total epochs
         epoch = 0
 
-        init_obs_params, init_int_params, init_lat_params = self.model.split_params(
-            params
-        )
-        init_lkl_params = self.model.lwr_hrm.lkl_man.join_params(
-            init_obs_params, init_int_params
-        )
         with self.model.lwr_hrm as lh:
             ana_lgm = AnalyticLinearGaussianModel(lh.obs_dim, lh.obs_rep, lh.lat_dim)
 
         # Train LGM (mixture params fixed)
         if self.pre.n_epochs > 0:
+            obs_params, int_params, lat_params = self.model.split_params(params)
+            lkl_params = self.model.lwr_hrm.lkl_man.join_params(obs_params, int_params)
+
             log.info("Pre-training LGM parameters")
-            params = self.pre.train(
+            lkl_params = self.pre.train(
                 pre_key,
                 handler,
                 dataset,
                 ana_lgm,
                 logger,
-                init_lkl_params,
+                lkl_params,
             )
             epoch += self.pre.n_epochs
+
+            obs_params, int_params = self.model.lkl_man.split_params(lkl_params)
+
+            params = self.model.join_params(
+                obs_params,
+                int_params,
+                lat_params,
+            )
 
         # Cycle between Mixture and LGM training
         for cycle in range(self.num_cycles):
@@ -268,7 +279,7 @@ class HMoGExperiment(ClusteringModel, ABC):
 #     """Experiment for DifferentiableHMoG models."""
 #
 #     model: DifferentiableHMoG[Diagonal, Diagonal]
-#     pre: LGMTrainer[Diagonal, Diagonal]
+#     pre: LGMPretrainer[Diagonal, Diagonal]
 #     trainer: DifferentiableModelTrainer[Diagonal, Diagonal]
 #     analysis: AnalysisArgs
 #

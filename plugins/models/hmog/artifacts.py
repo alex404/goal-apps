@@ -71,7 +71,7 @@ def get_component_prototypes[
     lkl_params, mix_params = model.split_conjugated(params)
 
     # Extract components from mixture
-    comp_lats, _ = model.upr_hrm.split_natural_mixture(mix_params)
+    comp_lats, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
 
     # For each component, compute the observable distribution and get its mean
     prototypes: list[Array] = []
@@ -84,7 +84,9 @@ def get_component_prototypes[
 
     for i in range(comp_lats.shape[0]):
         # Get latent mean for this component
-        comp_lat_params = model.upr_hrm.cmp_man.get_replicate(comp_lats, jnp.asarray(i))
+        comp_lat_params = model.con_upr_hrm.cmp_man.get_replicate(
+            comp_lats, jnp.asarray(i)
+        )
         lwr_hrm_params = ana_lgm.join_conjugated(lkl_params, comp_lat_params)
         lwr_hrm_means = ana_lgm.to_mean(lwr_hrm_params)
         lwr_hrm_obs = ana_lgm.split_params(lwr_hrm_means)[0]
@@ -108,15 +110,16 @@ def compute_component_divergences[
     """
     # Get raw KL divergences
     mix_params = model.prior(params)
-    comp_lats, _ = model.upr_hrm.split_natural_mixture(mix_params)
+    with model.con_upr_hrm as ch:
+        comp_lats, _ = ch.split_natural_mixture(mix_params)
 
-    def kl_div_between_components(i: Array, j: Array) -> Array:
-        comp_i = model.upr_hrm.cmp_man.get_replicate(comp_lats, i)
-        comp_i_mean = model.upr_hrm.obs_man.to_mean(comp_i)
-        comp_j = model.upr_hrm.cmp_man.get_replicate(comp_lats, j)
-        return model.upr_hrm.obs_man.relative_entropy(comp_i_mean, comp_j)
+        def kl_div_between_components(i: Array, j: Array) -> Array:
+            comp_i = ch.cmp_man.get_replicate(comp_lats, i)
+            comp_i_mean = ch.obs_man.to_mean(comp_i)
+            comp_j = ch.cmp_man.get_replicate(comp_lats, j)
+            return ch.obs_man.relative_entropy(comp_i_mean, comp_j)
 
-    idxs = jnp.arange(model.upr_hrm.n_categories)
+        idxs = jnp.arange(ch.n_categories)
 
     def kl_div_from_one_to_all(i: Array) -> Array:
         return jax.vmap(kl_div_between_components, in_axes=(None, 0))(i, idxs)
