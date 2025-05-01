@@ -23,9 +23,7 @@ from goal.geometry import (
 )
 from goal.models import (
     AnalyticLinearGaussianModel,
-    DifferentiableMixture,
     Euclidean,
-    FullNormal,
     Normal,
     differentiable_hmog,
 )
@@ -37,7 +35,7 @@ from apps.plugins import (
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
-from .base import HMoG, fori, log_epoch_metrics, relative_entropy_regularization_full
+from .base import HMoG, fori, log_epoch_metrics
 
 ### Constants ###
 
@@ -55,35 +53,6 @@ log = logging.getLogger(__name__)
 
 
 ### Helpers ###
-
-
-def bound_mixture_parameters[Rep: PositiveDefinite](
-    model: DifferentiableMixture[FullNormal, Normal[Rep]],
-    params: Point[Natural, DifferentiableMixture[FullNormal, Normal[Rep]]],
-    min_prob: float,
-    min_var: float,
-    jitter: float,
-) -> Point[Natural, DifferentiableMixture[FullNormal, Normal[Rep]]]:
-    """Bound mixture probabilities and latent variances."""
-    lkl_params, cat_params = model.split_conjugated(params)
-    lat_params, int_params = model.lkl_man.split_params(lkl_params)
-
-    # Bound latent variances
-    with model.obs_man as om:
-        lat_means = om.to_mean(lat_params)
-        bounded_lat_means = om.regularize_covariance(lat_means, jitter, min_var)
-        bounded_lat_params = om.to_natural(bounded_lat_means)
-
-    # Bound categorical probabilities
-    with model.lat_man as lm:
-        cat_means = lm.to_mean(cat_params)
-        probs = lm.to_probs(cat_means)
-        bounded_probs = jnp.clip(probs, min_prob, 1.0)
-        bounded_probs = bounded_probs / jnp.sum(bounded_probs)
-        bounded_cat_params = lm.to_natural(lm.from_probs(bounded_probs))
-
-    bounded_lkl_params = model.lkl_man.join_params(bounded_lat_params, int_params)
-    return model.join_conjugated(bounded_lkl_params, bounded_cat_params)
 
 
 ### Symmetric Gradient Trainer ###
@@ -129,24 +98,26 @@ class GradientTrainer:
         # Bound latent parameters
         with model.upr_hrm as uh:
             # Split latent parameters
-            comp_means, prob_means = uh.split_mean_mixture(lat_means)
+            comp_meanss, prob_means = uh.split_mean_mixture(lat_means)
+            lat_obs_means, _, _ = model.upr_hrm.split_params(lat_means)
 
-            def bound_normals(
+            def whiten_and_bound(
                 comp_means: Point[Mean, Normal[Any]],
             ) -> Point[Mean, Normal[Any]]:
+                whitened_comp_means = uh.obs_man.whiten(comp_means, lat_obs_means)
                 return uh.obs_man.regularize_covariance(
-                    comp_means, self.obs_jitter, self.obs_min_var
+                    whitened_comp_means, self.obs_jitter, self.obs_min_var
                 )
 
-            bounded_comp_means = uh.cmp_man.man_map(bound_normals, comp_means)
+            bounded_comp_meanss = uh.cmp_man.man_map(whiten_and_bound, comp_meanss)
 
             probs = uh.lat_man.to_probs(prob_means)
-            bounded_probs0 = jnp.clip(probs, self.min_prob, 1.0)
+            bounded_probs0 = jnp.clip(probs, self.min_prob, 1.0 - self.min_prob)
             bounded_probs = bounded_probs0 / jnp.sum(bounded_probs0)
             bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
 
             bounded_lat_means = uh.join_mean_mixture(
-                bounded_comp_means, bounded_prob_means
+                bounded_comp_meanss, bounded_prob_means
             )
 
         # Rejoin all parameters
@@ -171,15 +142,15 @@ class GradientTrainer:
             l2_loss = self.l2_reg * jnp.sum(jnp.square(params.array))
 
             # Relative entropy regularization
-            lkl_params = model.lkl_man.join_params(obs_params, int_params)
-            re_loss = (
-                self.re_reg
-                * relative_entropy_regularization_full(
-                    model.lwr_hrm, batch, lkl_params
-                )[1]
-            )
+            # lkl_params = model.lkl_man.join_params(obs_params, int_params)
+            # re_loss = (
+            #     self.re_reg
+            #     * relative_entropy_regularization_full(
+            #         model.lwr_hrm, batch, lkl_params
+            #     )[1]
+            # )
 
-            return ce_loss + l1_loss + l2_loss + re_loss
+            return ce_loss + l1_loss + l2_loss  # + re_loss
 
         return loss_fn
 
@@ -226,6 +197,22 @@ class GradientTrainer:
         # Create gradient mask function
         mask_gradient = self.create_gradient_mask(model)
 
+        # define a function that extracts model.upr_hrm.obs_man parameters from a mean hmog point
+        def debug_lat_obs_means(
+            means: Point[Mean, HMoG],
+            pst: bool,
+        ) -> None:
+            _, _, lat_means = model.split_params(means)
+            obs_lat_means, _, _ = model.upr_hrm.split_params(lat_means)
+            olm_mean, olm_cov = model.upr_hrm.obs_man.split_mean_covariance(
+                obs_lat_means
+            )
+            if pst:
+                jax.debug.print("Posterior obs mean: {}", olm_mean.array)
+                jax.debug.print("Posterior obs cov: {}", olm_cov.array)
+            else:
+                jax.debug.print("Prior obs means: {}", obs_lat_means.array)
+
         def batch_step(
             carry: tuple[OptState, Point[Natural, HMoG]],
             batch: Array,
@@ -237,6 +224,7 @@ class GradientTrainer:
 
             # Apply bounds to posterior statistics
             bounded_posterior = self.bound_means(model, posterior_stats)
+            # debug_lat_obs_means(bounded_posterior, True)
 
             # Define the inner step function for scan
             def inner_step(
@@ -267,7 +255,7 @@ class GradientTrainer:
                         "masked_grad": masked_grad.array,
                     },
                     handler,
-                    context=f"mask: {self.mask_type}",
+                    context=f"{self.mask_type}",
                 )
 
                 return (current_opt_state, new_params), masked_grad.array
@@ -367,7 +355,7 @@ class GradientTrainer:
                 new_params,
                 epoch + epoch_offset,
                 batch_grads,
-                log_freq=1,
+                log_freq=10,
             )
 
             return opt_state, new_params, next_key

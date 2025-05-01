@@ -52,16 +52,16 @@ class GradientTrainerConfig:
 
     _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
     n_epochs: int = 200
-    lr_init: float = 1e-5
+    lr_init: float = 1e-4
     lr_final_ratio: float = 1.0
     batch_size: int | None = None
     batch_steps: int = 1000
     l1_reg: float = 0.0
     l2_reg: float = 0.001
-    re_reg: float = 1
+    re_reg: float = 0
     grad_clip: float = 8.0
-    min_prob: float = 1e-4
-    obs_min_var: float = 1e-5
+    min_prob: float = 1e-3
+    obs_min_var: float = 1e-4
     lat_min_var: float = 1e-5
     obs_jitter: float = 0.0
     lat_jitter: float = 0.0
