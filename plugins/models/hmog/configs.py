@@ -29,20 +29,6 @@ class EMLGMTrainerConfig(LGMTrainerConfig):
     _target_: str = "plugins.models.hmog.trainers.EMLGMTrainer"
 
 
-@dataclass
-class GradientLGMPretrainerConfig(LGMTrainerConfig):
-    """Configuration for gradient-based LGM trainer."""
-
-    _target_: str = "plugins.models.hmog.trainers.LGMPretrainer"
-    n_epochs: int = 1000
-    lr_init: float = 1e-4
-    lr_final_ratio: float = 0.1
-    batch_size: int = 256
-    l1_reg: float = 0
-    l2_reg: float = 0.0001
-    grad_clip: float = 8
-
-
 ### Gradient Trainer Configs ###
 
 
@@ -51,18 +37,17 @@ class GradientTrainerConfig:
     """Base configuration for gradient-based trainers."""
 
     _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
-    n_epochs: int = 200
+    n_epochs: int = 100
     lr_init: float = 1e-4
     lr_final_ratio: float = 1.0
     batch_size: int | None = None
     batch_steps: int = 1000
-    l1_reg: float = 0.0
-    l2_reg: float = 0.001
-    re_reg: float = 0
+    l1_reg: float = 0.001
+    l2_reg: float = 0.01
     grad_clip: float = 8.0
-    min_prob: float = 1e-3
-    obs_min_var: float = 1e-4
-    lat_min_var: float = 1e-5
+    min_prob: float = 1e-4
+    obs_min_var: float = 1e-5
+    lat_min_var: float = 1e-6
     obs_jitter: float = 0.0
     lat_jitter: float = 0.0
 
@@ -106,7 +91,6 @@ class AnalysisConfig:
 ### Main Configuration ###
 
 cycle_defaults: list[Any] = [
-    {"pre": "pretrain"},
     {"lgm": "gradient_lgm"},
     {"mix": "gradient_mixture"},
     {"full": "gradient_full"},
@@ -121,7 +105,6 @@ class HMoGConfig(ClusteringModelConfig):
     n_clusters: int = 10
 
     # Training configuration
-    pre: GradientLGMPretrainerConfig = field(default=MISSING)
     lgm: GradientTrainerConfig = field(default=MISSING)
     mix: GradientTrainerConfig = field(default=MISSING)
     full: GradientTrainerConfig = field(default=MISSING)
@@ -142,7 +125,6 @@ class SymmetricHMoGConfig(HMoGConfig):
 cs = ConfigStore.instance()
 
 # Register base configs
-cs.store(group="model/pre", name="pretrain", node=GradientLGMPretrainerConfig)
 cs.store(group="model/lgm", name="gradient_lgm", node=GradientLGMTrainerConfig)
 cs.store(group="model/mix", name="gradient_mixture", node=GradientMixtureTrainerConfig)
 cs.store(group="model/full", name="gradient_full", node=GradientFullModelTrainerConfig)
