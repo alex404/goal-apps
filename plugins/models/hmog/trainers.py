@@ -245,9 +245,11 @@ class GradientTrainer:
                 # Monitor parameters for debugging
                 logger.monitor_params(
                     {
-                        "original": current_params.array,
-                        "post_update": new_params.array,
+                        "original_params": current_params.array,
+                        "updated_params": new_params.array,
                         "batch": batch,
+                        "posterior_stats": bounded_posterior.array,
+                        "prior_stats": prior_stats.array,
                         "grad": grad.array,
                         "masked_grad": masked_grad.array,
                     },
