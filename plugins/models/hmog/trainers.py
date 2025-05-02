@@ -220,7 +220,7 @@ class GradientTrainer:
             posterior_stats = model.mean_posterior_statistics(params, batch)
 
             # Apply bounds to posterior statistics
-            bounded_posterior = self.bound_means(model, posterior_stats)
+            bounded_posterior_stats = self.bound_means(model, posterior_stats)
             # debug_lat_obs_means(bounded_posterior, True)
 
             # Define the inner step function for scan
@@ -232,7 +232,7 @@ class GradientTrainer:
 
                 # Compute gradient as difference between posterior and current prior
                 prior_stats = model.to_mean(current_params)
-                grad = prior_stats - bounded_posterior
+                grad = prior_stats - bounded_posterior_stats
 
                 # Apply gradient mask
                 masked_grad = mask_gradient(grad)
@@ -248,7 +248,8 @@ class GradientTrainer:
                         "original_params": current_params.array,
                         "updated_params": new_params.array,
                         "batch": batch,
-                        "posterior_stats": bounded_posterior.array,
+                        "posterior_stats": posterior_stats.array,
+                        "bounded_posterior_stats": bounded_posterior_stats.array,
                         "prior_stats": prior_stats.array,
                         "grad": grad.array,
                         "masked_grad": masked_grad.array,
