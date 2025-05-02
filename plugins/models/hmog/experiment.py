@@ -107,7 +107,7 @@ class HMoGExperiment(ClusteringModel, ABC):
     def initialize_model(self, key: Array, data: Array) -> Array:
         """Initialize model parameters."""
 
-        noise_scale = 0.002
+        noise_scale = 0.01
         keys = jax.random.split(key, 3)
         key_cat, key_comp, key_int = keys
 

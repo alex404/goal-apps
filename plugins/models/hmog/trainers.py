@@ -113,9 +113,15 @@ class GradientTrainer:
             bounded_probs = bounded_probs0 / jnp.sum(bounded_probs0)
             bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
 
-            bounded_lat_means = uh.join_mean_mixture(
+            bounded_lat_means0 = uh.join_mean_mixture(
                 bounded_comp_meanss, bounded_prob_means
             )
+
+            _, bounded_lat_int, bounded_lat_cat = uh.split_params(bounded_lat_means0)
+
+            z = uh.obs_man.standard_normal()
+
+            bounded_lat_means = uh.join_params(z, bounded_lat_int, bounded_lat_cat)
 
         # Rejoin all parameters
         return model.join_params(bounded_obs_means, int_means, bounded_lat_means)
