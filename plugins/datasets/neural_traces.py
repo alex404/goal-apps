@@ -154,6 +154,11 @@ class NeuralTracesDataset(ClusteringDataset):
 
     @property
     @override
+    def has_labels(self) -> bool:
+        return False
+
+    @property
+    @override
     def data_dim(self) -> int:
         return self.chirp_len + self.bar_len + self.feature_len
 

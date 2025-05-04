@@ -122,10 +122,17 @@ Original error: {e!s}"""
         return self._test_images
 
     @property
+    @override
+    def has_labels(self) -> bool:
+        return True
+
+    @property
+    @override
     def train_labels(self) -> Array:
         return self._train_labels
 
     @property
+    @override
     def test_labels(self) -> Array:
         return self._test_labels
 

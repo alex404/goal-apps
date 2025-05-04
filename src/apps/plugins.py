@@ -107,6 +107,21 @@ class ClusteringDataset(Dataset, ABC):
             axes: Matplotlib axes to draw on
         """
 
+    @property
+    @abstractmethod
+    def has_labels(self) -> bool:
+        """Return True if the dataset has labels."""
+
+    @property
+    def train_labels(self) -> Array:
+        """Training labels with shape (n_train,)."""
+        raise NotImplementedError("train_labels is not implemented for this dataset.")
+
+    @property
+    def test_labels(self) -> Array:
+        """Test labels with shape (n_test,)."""
+        raise NotImplementedError("test_labels is not implemented for this dataset.")
+
 
 # Models
 
