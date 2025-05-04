@@ -113,7 +113,7 @@ class HMoGExperiment(ClusteringModel, ABC):
 
         obs_means = self.model.obs_man.average_sufficient_statistic(data)
         obs_means = self.model.obs_man.regularize_covariance(
-            obs_means, self.lgm.obs_jitter, self.lgm.obs_min_var
+            obs_means, self.lgm.obs_jitter_var, self.lgm.obs_min_var
         )
         obs_params = self.model.obs_man.to_natural(obs_means)
 

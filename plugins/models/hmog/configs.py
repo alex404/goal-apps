@@ -29,8 +29,9 @@ class GradientTrainerConfig:
     min_prob: float = 1e-4
     obs_min_var: float = 1e-5
     lat_min_var: float = 1e-6
-    obs_jitter: float = 0.0
-    lat_jitter: float = 0.0
+    obs_jitter_var: float = 0.0
+    lat_jitter_var: float = 0.0
+    eigen_floor_prs: float = 1e-6
 
 
 @dataclass

@@ -22,5 +22,6 @@ full:
   min_prob: 1e-4
   obs_min_var: 1e-5
   lat_min_var: 1e-5
-  lat_jitter: 1e-5
-  l2_reg: 1e-3
+  eigen_floor_prs: 1e-5
+  l1_reg: 0
+  l2_reg: 0

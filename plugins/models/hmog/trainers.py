@@ -77,8 +77,9 @@ class GradientTrainer:
     min_prob: float
     obs_min_var: float
     lat_min_var: float
-    obs_jitter: float
-    lat_jitter: float
+    obs_jitter_var: float
+    lat_jitter_var: float
+    eigen_floor_prs: float
 
     # Strategy
     mask_type: MaskingStrategy
@@ -93,7 +94,7 @@ class GradientTrainer:
             # Compute how much to add to diagonal (shifting strategy)
             # This only modifies diagonal elements by adding a constant
             # Create array of the same shape as diagonal with the shift value
-            jitter_array = jnp.full(uh.obs_man.cov_man.dim, self.lat_jitter)
+            jitter_array = jnp.full(uh.obs_man.cov_man.dim, self.lat_jitter_var)
 
             # Create a natural point with the jitter
             jitter_point = uh.obs_man.cov_man.natural_point(jitter_array)
@@ -118,7 +119,7 @@ class GradientTrainer:
 
         # For observable parameters, bound the variances
         bounded_obs_means = model.lwr_hrm.obs_man.regularize_covariance(
-            obs_means, self.obs_jitter, self.obs_min_var
+            obs_means, self.obs_jitter_var, self.obs_min_var
         )
 
         # Bound latent parameters
@@ -132,7 +133,7 @@ class GradientTrainer:
             ) -> Point[Mean, Normal[Any]]:
                 whitened_comp_means = uh.obs_man.whiten(comp_means, lat_obs_means)
                 return uh.obs_man.regularize_covariance(
-                    whitened_comp_means, self.obs_jitter, self.obs_min_var
+                    whitened_comp_means, self.lat_jitter_var, self.lat_min_var
                 )
 
             bounded_comp_meanss = uh.cmp_man.man_map(whiten_and_bound, comp_meanss)
@@ -159,7 +160,7 @@ class GradientTrainer:
         self,
         model: HMoG,
         params: Point[Natural, HMoG],
-        min_eigenvalue: float,
+        eigen_floor_prs: float,
     ) -> Point[Natural, HMoG]:
         """
         Ensure the precision matrices of the latent components are positive definite.
@@ -181,38 +182,16 @@ class GradientTrainer:
 
             min_eig = jnp.min(eigenvalues)
 
-            # Only proceed if not positive definite
-            def fix_diagonal(
-                dia_params: Point[Natural, DiagonalNormal],
-            ) -> Point[Natural, DiagonalNormal]:
-                with model.upr_hrm as uh:
-                    # Compute how much to add to diagonal (shifting strategy)
-                    # This only modifies diagonal elements by adding a constant
-                    diag_shift = min_eigenvalue - min_eig
-                    # Create array of the same shape as diagonal with the shift value
-                    shift_array = jnp.full(uh.obs_man.cov_man.dim, diag_shift)
+            with model.upr_hrm as uh:
+                diag_shift = jnp.maximum(eigen_floor_prs - min_eig, 0)
+                shift_array = jnp.full(uh.obs_man.cov_man.dim, diag_shift)
+                shift_point = uh.obs_man.cov_man.natural_point(shift_array)
 
-                    # Create a natural point with the shift
-                    shift_point = uh.obs_man.cov_man.natural_point(shift_array)
-
-                    # Add the shift to the precision parameters
-                    loc_params, prs_params = uh.obs_man.split_location_precision(
-                        dia_params
-                    )
-                    shifted_dia_params = prs_params + shift_point
-
-                    # Join back with location parameters
-                    return uh.obs_man.join_location_precision(
-                        loc_params, shifted_dia_params
-                    )
-
-            # Conditional application
-            return jax.lax.cond(
-                min_eig < min_eigenvalue,
-                lambda dia: fix_diagonal(dia),
-                lambda dia: dia,
-                dia_params,
-            )
+                loc_params, prs_params = uh.obs_man.split_location_precision(dia_params)
+                shifted_dia_params = prs_params + shift_point
+                return uh.obs_man.join_location_precision(
+                    loc_params, shifted_dia_params
+                )
 
         # Apply the function to all components
         pd_cmp_params = model.upr_hrm.cmp_man.man_map(
@@ -283,22 +262,6 @@ class GradientTrainer:
         # Create gradient mask function
         mask_gradient = self.create_gradient_mask(model)
 
-        # define a function that extracts model.upr_hrm.obs_man parameters from a mean hmog point
-        def debug_lat_obs_means(
-            means: Point[Mean, HMoG],
-            pst: bool,
-        ) -> None:
-            _, _, lat_means = model.split_params(means)
-            obs_lat_means, _, _ = model.upr_hrm.split_params(lat_means)
-            olm_mean, olm_cov = model.upr_hrm.obs_man.split_mean_covariance(
-                obs_lat_means
-            )
-            if pst:
-                jax.debug.print("Posterior obs mean: {}", olm_mean.array)
-                jax.debug.print("Posterior obs cov: {}", olm_cov.array)
-            else:
-                jax.debug.print("Prior obs means: {}", obs_lat_means.array)
-
         def batch_step(
             carry: tuple[OptState, Point[Natural, HMoG]],
             batch: Array,
@@ -330,7 +293,7 @@ class GradientTrainer:
                 masked_grad = mask_gradient(grad)
 
                 # Update parameters
-                current_opt_state, new_params = optimizer.update(
+                new_opt_state, new_params = optimizer.update(
                     current_opt_state, masked_grad, current_params
                 )
 
@@ -350,7 +313,7 @@ class GradientTrainer:
                     context=f"{self.mask_type}",
                 )
 
-                return (current_opt_state, new_params), masked_grad.array
+                return (new_opt_state, new_params), masked_grad.array
 
             # Run inner steps using jax.lax.scan
             (final_opt_state, final_params), all_grads = jax.lax.scan(
@@ -418,9 +381,6 @@ class GradientTrainer:
             # Split key for shuffling
             shuffle_key, next_key = jax.random.split(epoch_key)
 
-            # Apply jitter to precision parameters
-            params = self.precision_jitter(model, params)
-
             # Create minibatch step with the appropriate mask
             batch_step = self.make_batch_step(handler, model, logger, optimizer)
 
@@ -441,6 +401,10 @@ class GradientTrainer:
             # Create batch gradients for logging
             batch_man = Replicated(model, grads_array.shape[0])
             batch_grads = batch_man.point(grads_array)
+
+            new_params = self.ensure_positive_definite_components(
+                model, new_params, eigen_floor_prs=self.eigen_floor_prs
+            )
 
             # Log metrics
             log_epoch_metrics(
