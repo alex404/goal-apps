@@ -10,25 +10,6 @@ from omegaconf import MISSING
 
 from apps.configs import ClusteringModelConfig
 
-### LGM Trainer Configs ###
-
-
-@dataclass
-class LGMTrainerConfig:
-    """Base configuration for LGM trainers."""
-
-    n_epochs: int = 100
-    min_var: float = 1e-6
-    jitter: float = 0
-
-
-@dataclass
-class EMLGMTrainerConfig(LGMTrainerConfig):
-    """Configuration for EM-based LGM trainer."""
-
-    _target_: str = "plugins.models.hmog.trainers.EMLGMTrainer"
-
-
 ### Gradient Trainer Configs ###
 
 
@@ -38,7 +19,7 @@ class GradientTrainerConfig:
 
     _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
     n_epochs: int = 200
-    lr_init: float = 1e-4
+    lr_init: float = 3e-4
     lr_final_ratio: float = 1.0
     batch_size: int | None = None
     batch_steps: int = 1000
@@ -112,7 +93,7 @@ class HMoGConfig(ClusteringModelConfig):
 
 
 @dataclass
-class SymmetricHMoGConfig(HMoGConfig):
+class DifferentiableHMoGConfig(HMoGConfig):
     """HMoG configuration with cyclic training."""
 
     _target_: str = "plugins.models.hmog.experiment.HMoGExperiment"
@@ -130,4 +111,4 @@ cs.store(group="model/mix", name="gradient_mixture", node=GradientMixtureTrainer
 cs.store(group="model/full", name="gradient_full", node=GradientFullModelTrainerConfig)
 
 # Register model configs
-cs.store(group="model", name="hmog_sym", node=SymmetricHMoGConfig)
+cs.store(group="model", name="hmog_diff", node=DifferentiableHMoGConfig)

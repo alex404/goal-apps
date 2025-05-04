@@ -22,6 +22,7 @@ from goal.geometry import (
     Replicated,
 )
 from goal.models import (
+    DiagonalNormal,
     Euclidean,
     Normal,
 )
@@ -82,6 +83,34 @@ class GradientTrainer:
     # Strategy
     mask_type: MaskingStrategy
 
+    def precision_jitter(
+        self, model: HMoG, params: Point[Natural, HMoG]
+    ) -> Point[Natural, HMoG]:
+        obs_params, int_params, lat_params = model.split_params(params)
+
+        with model.upr_hrm as uh:
+            lat_obs_params, lat_int_params, lat_cat_params = uh.split_params(lat_params)
+            # Compute how much to add to diagonal (shifting strategy)
+            # This only modifies diagonal elements by adding a constant
+            # Create array of the same shape as diagonal with the shift value
+            jitter_array = jnp.full(uh.obs_man.cov_man.dim, self.lat_jitter)
+
+            # Create a natural point with the jitter
+            jitter_point = uh.obs_man.cov_man.natural_point(jitter_array)
+
+            # Add the jitter to the precision parameters
+            loc_params, prs_params = uh.obs_man.split_location_precision(lat_obs_params)
+            jitter_prs_params = prs_params + jitter_point
+            jitter_lat_obs_params = uh.obs_man.join_location_precision(
+                loc_params, jitter_prs_params
+            )
+
+            jitter_lat_params = uh.join_params(
+                jitter_lat_obs_params, lat_int_params, lat_cat_params
+            )
+
+        return model.join_params(obs_params, int_params, jitter_lat_params)
+
     def bound_means(self, model: HMoG, means: Point[Mean, HMoG]) -> Point[Mean, HMoG]:
         """Apply bounds to posterior statistics for numerical stability."""
         # Split posterior statistics
@@ -109,7 +138,7 @@ class GradientTrainer:
             bounded_comp_meanss = uh.cmp_man.man_map(whiten_and_bound, comp_meanss)
 
             probs = uh.lat_man.to_probs(prob_means)
-            bounded_probs0 = jnp.clip(probs, self.min_prob, 1.0 - self.min_prob)
+            bounded_probs0 = jnp.clip(probs, self.min_prob, 1.0)
             bounded_probs = bounded_probs0 / jnp.sum(bounded_probs0)
             bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
 
@@ -126,17 +155,80 @@ class GradientTrainer:
         # Rejoin all parameters
         return model.join_params(bounded_obs_means, int_means, bounded_lat_means)
 
-    def make_loss_fn(
-        self, model: HMoG, batch: Array
-    ) -> Callable[[Point[Natural, HMoG]], Array]:
+    def ensure_positive_definite_components(
+        self,
+        model: HMoG,
+        params: Point[Natural, HMoG],
+        min_eigenvalue: float,
+    ) -> Point[Natural, HMoG]:
+        """
+        Ensure the precision matrices of the latent components are positive definite.
+        """
+        obs_params, int_params, mix_params = model.split_params(params)
+        lkl_params = model.lwr_hrm.lkl_man.join_params(obs_params, int_params)
+        rho = model.lwr_hrm.conjugation_parameters(lkl_params)
+        cmp_params, prob_params = model.upr_hrm.split_natural_mixture(mix_params)
+
+        def ensure_positive_definite(
+            dia_params: Point[Natural, DiagonalNormal],
+        ) -> Point[Natural, DiagonalNormal]:
+            with model.con_upr_hrm as cuh:
+                con_cmp_params = cuh.obs_emb.translate(rho, dia_params)
+
+                prs_params = cuh.obs_man.split_location_precision(con_cmp_params)[1]
+                prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
+                eigenvalues, eigenvectors = jnp.linalg.eigh(prs_dense)
+
+            min_eig = jnp.min(eigenvalues)
+
+            # Only proceed if not positive definite
+            def fix_diagonal(
+                dia_params: Point[Natural, DiagonalNormal],
+            ) -> Point[Natural, DiagonalNormal]:
+                with model.upr_hrm as uh:
+                    # Compute how much to add to diagonal (shifting strategy)
+                    # This only modifies diagonal elements by adding a constant
+                    diag_shift = min_eigenvalue - min_eig
+                    # Create array of the same shape as diagonal with the shift value
+                    shift_array = jnp.full(uh.obs_man.cov_man.dim, diag_shift)
+
+                    # Create a natural point with the shift
+                    shift_point = uh.obs_man.cov_man.natural_point(shift_array)
+
+                    # Add the shift to the precision parameters
+                    loc_params, prs_params = uh.obs_man.split_location_precision(
+                        dia_params
+                    )
+                    shifted_dia_params = prs_params + shift_point
+
+                    # Join back with location parameters
+                    return uh.obs_man.join_location_precision(
+                        loc_params, shifted_dia_params
+                    )
+
+            # Conditional application
+            return jax.lax.cond(
+                min_eig < min_eigenvalue,
+                lambda dia: fix_diagonal(dia),
+                lambda dia: dia,
+                dia_params,
+            )
+
+        # Apply the function to all components
+        pd_cmp_params = model.upr_hrm.cmp_man.man_map(
+            ensure_positive_definite, cmp_params
+        )
+        pd_mix_params = model.upr_hrm.join_natural_mixture(pd_cmp_params, prob_params)
+        return model.join_params(obs_params, int_params, pd_mix_params)
+
+    def make_regularizer(self, model: HMoG) -> Callable[[Point[Natural, HMoG]], Array]:
         """Create a universal loss function for any HMoG model."""
 
         def loss_fn(params: Point[Natural, HMoG]) -> Array:
             # Core negative log-likelihood
-            ce_loss = -model.average_log_observable_density(params, batch)
 
             # Extract components for regularization
-            obs_params, int_params, _ = model.split_params(params)
+            _, int_params, _ = model.split_params(params)
 
             # L1 regularization on interaction matrix
             l1_loss = self.l1_reg * jnp.sum(jnp.abs(int_params.array))
@@ -144,16 +236,7 @@ class GradientTrainer:
             # L2 regularization on all parameters
             l2_loss = self.l2_reg * jnp.sum(jnp.square(params.array))
 
-            # Relative entropy regularization
-            # lkl_params = model.lkl_man.join_params(obs_params, int_params)
-            # re_loss = (
-            #     self.re_reg
-            #     * relative_entropy_regularization_full(
-            #         model.lwr_hrm, batch, lkl_params
-            #     )[1]
-            # )
-
-            return ce_loss + l1_loss + l2_loss  # + re_loss
+            return l1_loss + l2_loss
 
         return loss_fn
 
@@ -239,6 +322,9 @@ class GradientTrainer:
                 # Compute gradient as difference between posterior and current prior
                 prior_stats = model.to_mean(current_params)
                 grad = prior_stats - bounded_posterior_stats
+                reg_fn = self.make_regularizer(model)
+                reg_grad = jax.grad(reg_fn)(current_params)
+                grad = grad + reg_grad
 
                 # Apply gradient mask
                 masked_grad = mask_gradient(grad)
@@ -256,9 +342,9 @@ class GradientTrainer:
                         "batch": batch,
                         "posterior_stats": posterior_stats.array,
                         "bounded_posterior_stats": bounded_posterior_stats.array,
-                        "prior_stats": prior_stats.array,
-                        "grad": grad.array,
-                        "masked_grad": masked_grad.array,
+                        # "prior_stats": prior_stats.array,
+                        # "grad": grad.array,
+                        # "masked_grad": masked_grad.array,
                     },
                     handler,
                     context=f"{self.mask_type}",
@@ -331,6 +417,9 @@ class GradientTrainer:
 
             # Split key for shuffling
             shuffle_key, next_key = jax.random.split(epoch_key)
+
+            # Apply jitter to precision parameters
+            params = self.precision_jitter(model, params)
 
             # Create minibatch step with the appropriate mask
             batch_step = self.make_batch_step(handler, model, logger, optimizer)
