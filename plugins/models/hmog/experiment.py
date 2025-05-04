@@ -8,6 +8,7 @@ from typing import override
 
 import jax
 import jax.numpy as jnp
+import optax
 from goal.geometry import (
     Diagonal,
     Natural,
@@ -49,6 +50,8 @@ class HMoGExperiment(ClusteringModel, ABC):
     mix: GradientTrainer
     full: GradientTrainer
 
+    lr_init: float
+    lr_final: float
     num_cycles: int
 
     analysis: AnalysisArgs
@@ -62,6 +65,8 @@ class HMoGExperiment(ClusteringModel, ABC):
         mix: GradientTrainer,
         full: GradientTrainer,
         analysis: AnalysisArgs,
+        lr_init: float,
+        lr_final: float,
         num_cycles: int,
     ) -> None:
         super().__init__()
@@ -82,6 +87,8 @@ class HMoGExperiment(ClusteringModel, ABC):
         log.info(f"Initialized HMoG model with dimension {self.model.dim}.")
 
         self.num_cycles = num_cycles
+        self.lr_init = lr_init
+        self.lr_final = lr_final
 
     # Properties
 
@@ -197,7 +204,7 @@ class HMoGExperiment(ClusteringModel, ABC):
     ) -> None:
         """Train HMoG model using alternating optimization."""
         # Split PRNG key for different training phases
-        init_key, pre_key, *cycle_keys = jax.random.split(key, self.num_cycles + 2)
+        init_key, *cycle_keys = jax.random.split(key, self.num_cycles + 1)
 
         # Initialize model
         params = self.model.natural_point(
@@ -206,10 +213,20 @@ class HMoGExperiment(ClusteringModel, ABC):
 
         # Track total epochs
         epoch = 0
+        alpha = self.lr_init / self.lr_final
+        # cosine lr schedule
+        lr_schedule = optax.cosine_decay_schedule(
+            init_value=self.lr_init,
+            decay_steps=self.num_cycles,
+            alpha=alpha,
+        )
 
         # Cycle between Mixture and LGM training
         for cycle in range(self.num_cycles):
+            current_lr = float(lr_schedule(epoch))
             key_lgm, key_mix, key_full = jax.random.split(cycle_keys[cycle], 3)
+            log.info("Starting training cycle %d", cycle + 1)
+            log.info(f"Learning rate: {current_lr}")
 
             # Train LGM (mixture params fixed)
             if self.lgm.n_epochs > 0:
@@ -222,6 +239,7 @@ class HMoGExperiment(ClusteringModel, ABC):
                     dataset,
                     self.model,
                     logger,
+                    current_lr,
                     epoch,
                     params,
                 )
@@ -232,14 +250,28 @@ class HMoGExperiment(ClusteringModel, ABC):
                     f"Cycle {cycle + 1}/{self.num_cycles}: Training mixture parameters"
                 )
                 params = self.mix.train(
-                    key_mix, handler, dataset, self.model, logger, epoch, params
+                    key_mix,
+                    handler,
+                    dataset,
+                    self.model,
+                    logger,
+                    current_lr,
+                    epoch,
+                    params,
                 )
                 epoch += self.mix.n_epochs
 
             if self.full.n_epochs > 0:
                 log.info(f"Cycle {cycle + 1}/{self.num_cycles}: Training full model")
                 params = self.full.train(
-                    key_full, handler, dataset, self.model, logger, epoch, params
+                    key_full,
+                    handler,
+                    dataset,
+                    self.model,
+                    logger,
+                    current_lr,
+                    epoch,
+                    params,
                 )
                 epoch += self.full.n_epochs
 

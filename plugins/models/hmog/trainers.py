@@ -51,9 +51,6 @@ class MaskingStrategy(Enum):
 log = logging.getLogger(__name__)
 
 
-### Helpers ###
-
-
 ### Symmetric Gradient Trainer ###
 
 
@@ -63,8 +60,6 @@ class GradientTrainer:
 
     # Training hyperparameters
     n_epochs: int
-    lr_init: float
-    lr_final_ratio: float
     batch_size: None | int
     batch_steps: int
     grad_clip: float
@@ -334,6 +329,7 @@ class GradientTrainer:
         dataset: ClusteringDataset,
         model: HMoG,
         logger: JaxLogger,
+        learning_rate: float,
         epoch_offset: int,
         params0: Point[Natural, HMoG],
     ) -> Point[Natural, HMoG]:
@@ -348,18 +344,8 @@ class GradientTrainer:
             n_batches = train_data.shape[0] // self.batch_size
             batch_size = self.batch_size
 
-        # Configure learning rate
-        if self.lr_final_ratio < 1.0:
-            lr_schedule = optax.cosine_decay_schedule(
-                init_value=self.lr_init,
-                decay_steps=n_epochs,
-                alpha=self.lr_final_ratio,
-            )
-        else:
-            lr_schedule = self.lr_init
-
         # Create optimizer
-        optim = optax.adamw(learning_rate=lr_schedule)
+        optim = optax.adamw(learning_rate=learning_rate)
         optimizer: Optimizer[Natural, HMoG] = Optimizer(optim, model)
 
         if self.grad_clip > 0.0:

@@ -19,8 +19,6 @@ class GradientTrainerConfig:
 
     _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
     n_epochs: int = 200
-    lr_init: float = 3e-4
-    lr_final_ratio: float = 1.0
     batch_size: int | None = None
     batch_steps: int = 1000
     l1_reg: float = 0
@@ -99,6 +97,8 @@ class DifferentiableHMoGConfig(HMoGConfig):
 
     _target_: str = "plugins.models.hmog.experiment.HMoGExperiment"
     num_cycles: int = 10
+    lr_init: float = 3e-4
+    lr_final: float = 3e-5
     defaults: list[Any] = field(default_factory=lambda: cycle_defaults)
 
 

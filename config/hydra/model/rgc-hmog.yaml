@@ -6,6 +6,8 @@ defaults:
 latent_dim: 40
 n_clusters: 60
 
+lr_init: 3e-5
+lr_final: 3e-6
 num_cycles: 20
 
 lgm:
@@ -17,7 +19,6 @@ mix:
 full:
   n_epochs: 200
   batch_steps: 2000
-  lr_init: 3e-5
   grad_clip: 10
   min_prob: 1e-4
   obs_min_var: 1e-4
