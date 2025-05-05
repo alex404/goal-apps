@@ -27,4 +27,4 @@ full:
   lat_jitter_var: 0
   eigen_floor_prs: 1e-3
   l1_reg: 0
-  l2_reg: 0
+  l2_reg: 1e-4
