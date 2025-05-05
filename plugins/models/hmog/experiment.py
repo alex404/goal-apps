@@ -223,7 +223,7 @@ class HMoGExperiment(ClusteringModel, ABC):
 
         # Cycle between Mixture and LGM training
         for cycle in range(self.num_cycles):
-            current_lr = float(lr_schedule(epoch))
+            current_lr = float(lr_schedule(cycle))
             key_lgm, key_mix, key_full = jax.random.split(cycle_keys[cycle], 3)
             log.info("Starting training cycle %d", cycle + 1)
             log.info(f"Learning rate: {current_lr}")
