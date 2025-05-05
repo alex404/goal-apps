@@ -346,7 +346,7 @@ class GradientTrainer:
             batch_size = self.batch_size
 
         # Create optimizer
-        optim = optax.adamw(learning_rate=learning_rate)
+        optim = optax.lamb(learning_rate=learning_rate)
         optimizer: Optimizer[Natural, HMoG] = Optimizer(optim, model)
 
         if self.grad_clip > 0.0:
@@ -389,9 +389,10 @@ class GradientTrainer:
             batch_man = Replicated(model, grads_array.shape[0])
             batch_grads = batch_man.point(grads_array)
 
-            new_params = self.ensure_positive_definite_components(
-                model, new_params, eigen_floor_prs=self.eigen_floor_prs
-            )
+            if self.eigen_floor_prs > 0.0:
+                new_params = self.ensure_positive_definite_components(
+                    model, new_params, eigen_floor_prs=self.eigen_floor_prs
+                )
 
             # Log metrics
             log_epoch_metrics(

@@ -1,0 +1,29 @@
+# Neural traces experiment configuration
+defaults:
+  - hmog_diff
+  - _self_
+
+latent_dim: 40
+n_clusters: 20
+
+lr_init: 1e-6
+lr_final: 1e-6
+num_cycles: 10
+
+lgm:
+  n_epochs: 0
+
+mix:
+  n_epochs: 0
+
+full:
+  n_epochs: 1000
+  batch_steps: 1000
+  batch_size: Null
+  grad_clip: 1
+  min_prob: 1e-4
+  obs_min_var: 1e-2
+  lat_min_var: 1e-2
+  eigen_floor_prs: 1e-2
+  l1_reg: 0
+  l2_reg: 0

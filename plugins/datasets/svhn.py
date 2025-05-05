@@ -12,7 +12,6 @@ from hydra.core.config_store import ConfigStore
 from jax import Array
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from numpy.typing import NDArray
 from torchvision import datasets, transforms
 
 from apps.configs import ClusteringDatasetConfig
@@ -33,9 +32,9 @@ class SVHNConfig(ClusteringDatasetConfig):
         crop_margin: Pixels to crop from each side to focus on the digit
     """
 
-    _target_: str = "plugins.datasets.svhn.SVHNDataset"
-    convert_to_gray: bool = True  # Option to convert to grayscale
-    crop_margin: int = 4  # Crop pixels from each side to focus on digit
+    _target_: str = "plugins.datasets.svhn.SVHNDataset.load"
+    convert_to_gray: bool = False  # Option to convert to grayscale
+    crop_margin: int = 0  # Crop pixels from each side to focus on digit
 
 
 # Register config
@@ -43,19 +42,22 @@ cs = ConfigStore.instance()
 cs.store(group="dataset", name="svhn", node=SVHNConfig)
 
 
+@dataclass(frozen=True)
 class SVHNDataset(ClusteringDataset):
     """SVHN (Street View House Numbers) dataset."""
 
+    cache_dir: Path
+    convert_to_gray: bool
+    crop_margin: int
     _train_images: Array
     _train_labels: Array
     _test_images: Array
     _test_labels: Array
-    convert_to_gray: bool
-    crop_margin: int
 
-    def __init__(
-        self, cache_dir: Path, convert_to_gray: bool = True, crop_margin: int = 4
-    ) -> None:
+    @classmethod
+    def load(
+        cls, cache_dir: Path, convert_to_gray: bool = True, crop_margin: int = 4
+    ) -> "SVHNDataset":
         """Load SVHN dataset.
 
         Args:
@@ -66,32 +68,33 @@ class SVHNDataset(ClusteringDataset):
         Returns:
             Loaded SVHN dataset
         """
-        self.cache_dir: Path = cache_dir
-        self.convert_to_gray = convert_to_gray
-        self.crop_margin = crop_margin
 
-        def transform_tensor(x: NDArray[np.uint8]) -> NDArray[np.float32]:
+        def transform_tensor(img):
+            # Convert PyTorch tensor to numpy
+            x = img.numpy()
+
             # Crop the image to focus on the digit
-            if self.crop_margin > 0:
-                m = self.crop_margin
+            if crop_margin > 0:
+                m = crop_margin
                 height, width = N_ROWS, N_COLS
                 x = x[:, m : height - m, m : width - m]
 
             # Convert to grayscale if requested
-            if self.convert_to_gray:
+            if convert_to_gray:
                 # Use standard RGB to grayscale conversion weights
                 x = np.expand_dims(
-                    np.mean(x, axis=0) * 0.299
-                    + np.mean(x, axis=1) * 0.587
-                    + np.mean(x, axis=2) * 0.114,
+                    x[0] * 0.299 + x[1] * 0.587 + x[2] * 0.114,
                     axis=0,
                 )
 
             # Flatten and normalize to [0, 1]
-            return x.reshape(-1).astype(np.float32) / 255.0
+            return x.reshape(-1).astype(np.float32)
 
         transform = transforms.Compose(
-            [transforms.ToTensor(), transforms.Lambda(transform_tensor)]
+            [
+                transforms.ToTensor(),  # Already normalizes to [0, 1]
+                transforms.Lambda(transform_tensor),
+            ]
         )
 
         try:
@@ -120,40 +123,29 @@ Original error: {e!s}"""
             ) from e
 
         # Calculate flattened dimension based on whether grayscale conversion is applied
-        flat_dim = (N_ROWS - 2 * self.crop_margin) * (N_COLS - 2 * self.crop_margin)
-        if not self.convert_to_gray:
+        flat_dim = (N_ROWS - 2 * crop_margin) * (N_COLS - 2 * crop_margin)
+        if not convert_to_gray:
             flat_dim *= N_CHANNELS
 
         # Convert to JAX arrays
-        train_images = jnp.array(np.stack([x for x, _ in train_dataset])).reshape(
-            -1, flat_dim
-        )
-
+        train_data = [x for x, _ in train_dataset]
+        train_images = jnp.array(np.stack(train_data))
         train_labels = jnp.array(np.array([y for _, y in train_dataset]))
 
-        test_images = jnp.array(np.stack([x for x, _ in test_dataset])).reshape(
-            -1, flat_dim
-        )
-
+        test_data = [x for x, _ in test_dataset]
+        test_images = jnp.array(np.stack(test_data))
         test_labels = jnp.array(np.array([y for _, y in test_dataset]))
 
-        self._train_images = train_images
-        self._train_labels = train_labels
-        self._test_images = test_images
-        self._test_labels = test_labels
-
-    @property
-    @override
-    def observable_shape(self) -> tuple[int, int]:
-        height = N_ROWS - 2 * self.crop_margin
-        width = N_COLS - 2 * self.crop_margin
-        return (height, width)
-
-    @property
-    @override
-    def cluster_shape(self) -> tuple[int, int]:
-        height, width = self.observable_shape
-        return (height, math.ceil(width * 1.5))
+        # Create and return the immutable instance
+        return cls(
+            cache_dir=cache_dir,
+            convert_to_gray=convert_to_gray,
+            crop_margin=crop_margin,
+            _train_images=train_images,
+            _train_labels=train_labels,
+            _test_images=test_images,
+            _test_labels=test_labels,
+        )
 
     @property
     @override
@@ -164,6 +156,11 @@ Original error: {e!s}"""
     @override
     def test_data(self) -> Array:
         return self._test_images
+
+    @property
+    @override
+    def has_labels(self) -> bool:
+        return True
 
     @property
     def train_labels(self) -> Array:
@@ -181,6 +178,20 @@ Original error: {e!s}"""
         return height * width * channels
 
     @property
+    @override
+    def observable_shape(self) -> tuple[int, int]:
+        height = N_ROWS - 2 * self.crop_margin
+        width = N_COLS - 2 * self.crop_margin
+        return (height, width)
+
+    @property
+    @override
+    def cluster_shape(self) -> tuple[int, int]:
+        height, width = self.observable_shape
+        return (height, math.ceil(width * 1.5))
+
+    @property
+    @override
     def n_classes(self) -> int:
         return 10  # Digits 0-9
 
@@ -202,7 +213,9 @@ Original error: {e!s}"""
         """Visualize an SVHN digit prototype and selected members.
 
         Args:
-            prototype_artifact: Artifact containing prototype and member digits
+            cluster_id: The cluster index
+            prototype: The prototype for the cluster
+            members: The members of the cluster
             axes: Matplotlib axes to draw on
         """
         from matplotlib.gridspec import GridSpecFromSubplotSpec
