@@ -28,11 +28,11 @@ from apps.plugins import (
 from apps.runtime.handler import Artifact, RunHandler
 from apps.runtime.logger import JaxLogger
 
-from .base import (
-    HMoG,
+from .analysis import (
     cluster_assignments,
     symmetric_kl_matrix,
 )
+from .base import HMoG
 
 ### Analysis Args ###
 

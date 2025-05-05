@@ -6,8 +6,8 @@ defaults:
 latent_dim: 40
 n_clusters: 60
 
-lr_init: 3e-5
-lr_final: 5e-6
+lr_init: 1e-5
+lr_final: 1e-6
 num_cycles: 10
 
 lgm:

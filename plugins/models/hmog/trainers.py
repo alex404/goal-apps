@@ -34,7 +34,8 @@ from apps.plugins import (
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
-from .base import HMoG, fori, log_epoch_metrics
+from .analysis import log_epoch_metrics
+from .base import HMoG, fori
 
 ### Constants ###
 
