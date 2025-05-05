@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from goal.geometry import (
     AffineMap,
     Manifold,
@@ -25,6 +25,7 @@ from goal.models import (
     Normal,
 )
 from jax import Array
+from numpy.typing import NDArray
 
 from apps.configs import STATS_LEVEL
 from apps.plugins import (
@@ -42,8 +43,83 @@ log = logging.getLogger(__name__)
 ### Helpers ###
 
 
-def fori[X](lower: int, upper: int, body_fun: Callable[[Array, X], X], init: X) -> X:
-    return jax.lax.fori_loop(lower, upper, body_fun, init)  # pyright: ignore[reportUnknownVariableType]
+# Add to analysis.py
+
+
+def hierarchy_to_mapping(
+    linkage_matrix: NDArray[np.float64],
+    n_clusters: int,
+    n_classes: int,
+) -> NDArray[np.int32]:
+    """Convert hierarchical clustering to mapping matrix.
+
+    Args:
+        linkage_matrix: Hierarchical clustering linkage matrix
+        n_clusters: Number of original clusters
+        n_classes: Number of target classes
+
+    Returns:
+        Binary mapping matrix of shape (n_clusters, n_classes)
+    """
+    import scipy.cluster.hierarchy
+
+    # Cut the tree to get n_classes
+    cluster_ids = scipy.cluster.hierarchy.fcluster(
+        linkage_matrix, n_classes, criterion="maxclust"
+    )
+
+    # Convert cluster IDs to one-hot mapping
+    mapping = np.zeros((n_clusters, n_classes), dtype=np.int32)
+    for i in range(n_clusters):
+        # Cluster IDs from fcluster are 1-indexed
+        class_id = cluster_ids[i] - 1
+        mapping[i, class_id] = 1
+
+    return mapping
+
+
+def compute_optimal_mapping(
+    cluster_probs: Array,
+    true_labels: Array,
+    n_classes: int,
+) -> NDArray[np.int32]:
+    """Compute optimal mapping from clusters to classes using Hungarian algorithm.
+
+    Args:
+        cluster_probs: Cluster assignment probabilities (n_samples, n_clusters)
+        true_labels: True class labels (n_samples,)
+        n_classes: Number of classes
+
+    Returns:
+        Binary mapping matrix (n_clusters, n_classes)
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    # Get hard assignments
+    cluster_assignments = jnp.argmax(cluster_probs, axis=1)
+
+    # Number of clusters
+    n_clusters = cluster_probs.shape[1]
+
+    # Create contingency matrix
+    contingency = np.zeros((n_clusters, n_classes))
+
+    # Fill contingency matrix
+    for i in range(len(true_labels)):
+        label = int(true_labels[i])
+        cluster = int(cluster_assignments[i])
+        contingency[cluster, label] += 1
+
+    # Use Hungarian algorithm for optimal assignment
+    # Negate contingency matrix for maximization
+    row_ind, col_ind = linear_sum_assignment(-contingency)
+
+    # Create mapping matrix
+    mapping = np.zeros((n_clusters, n_classes), dtype=np.int32)
+    for i, j in zip(row_ind, col_ind):
+        mapping[i, j] = 1
+
+    return mapping
 
 
 def cluster_probabilities(model: HMoG, params: Array, data: Array) -> Array:
@@ -106,6 +182,81 @@ def symmetric_kl_matrix[
 
     kl_matrix = jax.lax.map(kl_div_from_one_to_all, idxs)
     return (kl_matrix + kl_matrix.T) / 2
+
+
+def get_component_prototypes[
+    M: HMoG,
+](
+    model: M,
+    params: Point[Natural, M],
+) -> list[Array]:
+    # Split into likelihood and mixture parameters
+    lkl_params, mix_params = model.split_conjugated(params)
+
+    # Extract components from mixture
+    comp_lats, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
+
+    # For each component, compute the observable distribution and get its mean
+    prototypes: list[Array] = []
+
+    ana_lgm = AnalyticLinearGaussianModel(
+        obs_dim=model.lwr_hrm.obs_dim,  # Original latent becomes observable
+        obs_rep=model.lwr_hrm.obs_rep,
+        lat_dim=model.lwr_hrm.lat_dim,  # Original observable becomes latent
+    )
+
+    for i in range(comp_lats.shape[0]):
+        # Get latent mean for this component
+        comp_lat_params = model.con_upr_hrm.cmp_man.get_replicate(
+            comp_lats, jnp.asarray(i)
+        )
+        lwr_hrm_params = ana_lgm.join_conjugated(lkl_params, comp_lat_params)
+        lwr_hrm_means = ana_lgm.to_mean(lwr_hrm_params)
+        lwr_hrm_obs = ana_lgm.split_params(lwr_hrm_means)[0]
+        obs_means = ana_lgm.obs_man.split_mean_second_moment(lwr_hrm_obs)[0].array
+
+        prototypes.append(obs_means)
+
+    return prototypes
+
+
+def posterior_co_assignment_matrix[M: HMoG](
+    model: M,
+    params: Point[Natural, M],
+    data: Array,
+) -> Array:
+    """Compute posterior co-assignment matrix between components.
+
+    This computes how often two clusters are assigned to the same data points,
+    based on their posterior probabilities.
+
+    Args:
+        model: HMoG model
+        params: Model parameters
+        data: Data points for calculating empirical similarities
+
+    Returns:
+        Co-assignment similarity matrix (higher values = more similar)
+    """
+    # Get cluster probabilities for each data point
+    probs = cluster_probabilities(model, params.array, data)
+
+    # Compute co-assignment matrix efficiently through matrix multiplication
+    # co_assignment[i,j] = sum_x p(x,i) * p(x,j)
+    co_assignment = probs.T @ probs
+
+    # Normalize to get correlation-like measure
+    diag_sqrt = jnp.sqrt(jnp.diag(co_assignment))
+    # Build outer product of sqrt-diag entries, add small epsilon for stability
+    denom = diag_sqrt[:, None] * diag_sqrt[None, :] + 1e-12
+    normalized_co_assignment = co_assignment / denom
+
+    # Ensure perfect symmetry by averaging with transpose
+    normalized_co_assignment = 0.5 * (
+        normalized_co_assignment + normalized_co_assignment.T
+    )
+
+    return normalized_co_assignment
 
 
 def clustering_nmi(

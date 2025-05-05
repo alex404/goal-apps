@@ -13,9 +13,6 @@ from goal.geometry import (
     Natural,
     Point,
 )
-from goal.models import (
-    AnalyticLinearGaussianModel,
-)
 from h5py import File, Group
 from jax import Array
 from matplotlib.figure import Figure
@@ -29,7 +26,13 @@ from apps.runtime.handler import Artifact, RunHandler
 from apps.runtime.logger import JaxLogger
 
 from .analysis import (
+    cluster_accuracy,
     cluster_assignments,
+    cluster_probabilities,
+    compute_optimal_mapping,
+    get_component_prototypes,
+    hierarchy_to_mapping,
+    posterior_co_assignment_matrix,
     symmetric_kl_matrix,
 )
 from .base import HMoG
@@ -43,88 +46,6 @@ class AnalysisArgs:
 
     from_scratch: bool
     epoch: int | None
-
-
-### Helpers ###
-
-
-def get_component_prototypes[
-    M: HMoG,
-](
-    model: M,
-    params: Point[Natural, M],
-) -> list[Array]:
-    # Split into likelihood and mixture parameters
-    lkl_params, mix_params = model.split_conjugated(params)
-
-    # Extract components from mixture
-    comp_lats, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
-
-    # For each component, compute the observable distribution and get its mean
-    prototypes: list[Array] = []
-
-    ana_lgm = AnalyticLinearGaussianModel(
-        obs_dim=model.lwr_hrm.obs_dim,  # Original latent becomes observable
-        obs_rep=model.lwr_hrm.obs_rep,
-        lat_dim=model.lwr_hrm.lat_dim,  # Original observable becomes latent
-    )
-
-    for i in range(comp_lats.shape[0]):
-        # Get latent mean for this component
-        comp_lat_params = model.con_upr_hrm.cmp_man.get_replicate(
-            comp_lats, jnp.asarray(i)
-        )
-        lwr_hrm_params = ana_lgm.join_conjugated(lkl_params, comp_lat_params)
-        lwr_hrm_means = ana_lgm.to_mean(lwr_hrm_params)
-        lwr_hrm_obs = ana_lgm.split_params(lwr_hrm_means)[0]
-        obs_means = ana_lgm.obs_man.split_mean_second_moment(lwr_hrm_obs)[0].array
-
-        prototypes.append(obs_means)
-
-    return prototypes
-
-
-def compute_component_divergences[
-    M: HMoG,
-](
-    model: M,
-    params: Point[Natural, M],
-) -> tuple[Array, NDArray[np.float64]]:
-    """Compute divergence statistics between mixture components.
-
-    Returns:
-        Tuple of (kl_matrix, symmetric_kl, linkage_matrix)
-    """
-    symmetric_kl = symmetric_kl_matrix(model, params)
-
-    # Convert to numpy and handle distances
-    dist_matrix = np.array(symmetric_kl, dtype=np.float64)
-
-    # Ensure non-negative distances and exact zero diagonal
-    min_off_diag = np.min(dist_matrix[~np.eye(dist_matrix.shape[0], dtype=bool)])
-    if min_off_diag < 0:
-        dist_matrix = dist_matrix - min_off_diag
-
-    # Ensure perfect symmetry
-    dist_matrix = (dist_matrix + dist_matrix.T) / 2
-
-    # Force diagonal to exactly zero
-    np.fill_diagonal(dist_matrix, 0.0)
-
-    # Import scipy here for clarity
-    import scipy.cluster.hierarchy
-    import scipy.spatial.distance
-
-    # Convert to condensed form
-    dist_vector = scipy.spatial.distance.squareform(dist_matrix)
-
-    # Compute linkage matrix using average linkage
-    linkage_matrix = scipy.cluster.hierarchy.linkage(
-        dist_vector,
-        method="average",  # Using UPGMA clustering
-    )
-
-    return symmetric_kl, linkage_matrix  # pyright: ignore[reportReturnType]
 
 
 ### ClusterCollection ###
@@ -240,15 +161,16 @@ def cluster_statistics_plotter(
     return plot_cluster_statistics
 
 
-### Cluster Hierarchy ###
+### Cluster Hierarchies ###
 
 
 @dataclass(frozen=True)
 class ClusterHierarchy(Artifact):
-    """Artifact containing clustering hierarchy analysis results."""
+    """Base artifact for clustering hierarchy analysis."""
 
     prototypes: list[Array]
     linkage_matrix: NDArray[np.float64]
+    similarity_matrix: NDArray[np.float64]
 
     @override
     def save_to_hdf5(self, file: File) -> None:
@@ -258,8 +180,9 @@ class ClusterHierarchy(Artifact):
         for i, proto in enumerate(self.prototypes):
             proto_group.create_dataset(f"{i}", data=np.array(proto))
 
-        # Save linkage matrix
+        # Save linkage matrix and similarity matrix
         file.create_dataset("linkage_matrix", data=self.linkage_matrix)
+        file.create_dataset("similarity_matrix", data=np.array(self.similarity_matrix))
 
     @classmethod
     @override
@@ -269,25 +192,95 @@ class ClusterHierarchy(Artifact):
         proto_group = file["prototypes"]
         assert isinstance(proto_group, Group)
         n_protos = len(proto_group)
-        assert isinstance(proto_group, Group)
         prototypes = [jnp.array(proto_group[f"{i}"]) for i in range(n_protos)]
 
-        # Load linkage matrix
+        # Load matrices
         linkage_matrix = np.array(file["linkage_matrix"][()])  # pyright: ignore[reportIndexIssue]
+        similarity_matrix = jnp.array(file["similarity_matrix"][()])  # pyright: ignore[reportIndexIssue]
 
-        return cls(prototypes=prototypes, linkage_matrix=linkage_matrix)
+        return cls(
+            prototypes=prototypes,
+            linkage_matrix=linkage_matrix,
+            similarity_matrix=similarity_matrix,
+        )
 
 
-def get_cluster_hierarchy[
-    M: HMoG,
-](
+@dataclass(frozen=True)
+class KLClusterHierarchy(ClusterHierarchy):
+    """KL divergence-based clustering hierarchy."""
+
+
+@dataclass(frozen=True)
+class CoAssignmentClusterHierarchy(ClusterHierarchy):
+    """Co-assignment probability-based clustering hierarchy."""
+
+
+def get_cluster_hierarchy[M: HMoG, C: ClusterHierarchy](
     model: M,
     params: Point[Natural, M],
-) -> ClusterHierarchy:
-    """Generate clustering hierarchy analysis."""
+    hierarchy_type: type[C],
+    data: Array,
+) -> C:
+    """Generate clustering hierarchy analysis with specified similarity metric.
+
+    Args:
+        model: HMoG model
+        params: Model parameters
+        hierarchy_type: Type of cluster hierarchy to create
+        data: Data points for calculating empirical similarities (only needed for co-assignment)
+
+    Returns:
+        Specified type of cluster hierarchy
+    """
     prototypes = get_component_prototypes(model, params)
-    _, linkage_matrix = compute_component_divergences(model, params)
-    return ClusterHierarchy(prototypes=prototypes, linkage_matrix=linkage_matrix)
+
+    # Calculate the similarity matrix based on the hierarchy type
+    if hierarchy_type == KLClusterHierarchy:
+        similarity_matrix = symmetric_kl_matrix(model, params)
+    elif hierarchy_type == CoAssignmentClusterHierarchy:
+        similarity_matrix = posterior_co_assignment_matrix(model, params, data)
+    else:
+        raise TypeError(f"Unsupported hierarchy type: {hierarchy_type}")
+
+    # Convert to numpy and prepare for hierarchical clustering
+    if hierarchy_type == CoAssignmentClusterHierarchy:
+        # Co-assignment is a similarity matrix (higher = more similar)
+        # Convert to distance (lower = more similar)
+        dist_matrix = np.array(1.0 - similarity_matrix, dtype=np.float64)
+    else:
+        # KL divergence is already a distance (lower = more similar)
+        dist_matrix = np.array(similarity_matrix, dtype=np.float64)
+
+    # Ensure non-negative distances
+    min_off_diag = np.min(dist_matrix[~np.eye(dist_matrix.shape[0], dtype=bool)])
+    if min_off_diag < 0:
+        dist_matrix = dist_matrix - min_off_diag
+
+    # Ensure perfect symmetry
+    dist_matrix = (dist_matrix + dist_matrix.T) / 2
+
+    # Force diagonal to exactly zero
+    np.fill_diagonal(dist_matrix, 0.0)
+
+    # Import scipy here for clarity
+    import scipy.cluster.hierarchy
+    import scipy.spatial.distance
+
+    # Convert to condensed form
+    dist_vector = scipy.spatial.distance.squareform(dist_matrix)
+
+    # Compute linkage matrix using average linkage
+    linkage_matrix = scipy.cluster.hierarchy.linkage(
+        dist_vector,
+        method="average",  # Using UPGMA clustering
+    )
+
+    # Create the hierarchy object of the requested type
+    return hierarchy_type(
+        prototypes=prototypes,
+        linkage_matrix=linkage_matrix,
+        similarity_matrix=similarity_matrix,
+    )
 
 
 def hierarchy_plotter(
@@ -297,11 +290,9 @@ def hierarchy_plotter(
 
     def plot_cluster_hierarchy(hierarchy: ClusterHierarchy) -> Figure:
         n_clusters = len(hierarchy.prototypes)
-
         prototype_shape = dataset.observable_shape
 
         # Compute figure dimensions
-
         dendrogram_width = 6  # Fixed width for dendrogram
         height, width = prototype_shape
         prototype_width = (
@@ -319,6 +310,31 @@ def hierarchy_plotter(
         # Create figure with grid
         fig = plt.figure(figsize=(fig_width, fig_height))
 
+        # Set title and metric label based on hierarchy type
+        if isinstance(hierarchy, KLClusterHierarchy):
+            fig.suptitle("Hierarchical Clustering using KL Divergence", fontsize=12)
+            metric_label = "KL Divergence"
+            linkage_matrix = hierarchy.linkage_matrix
+        elif isinstance(hierarchy, CoAssignmentClusterHierarchy):
+            fig.suptitle("Hierarchical Clustering using Co-assignment", fontsize=12)
+
+            # For co-assignment, use log-scale for better visualization
+            # Check if most distances are near 0
+            linkage_matrix = hierarchy.linkage_matrix.copy()
+            distances = linkage_matrix[:, 2]
+            if np.percentile(distances, 75) < 0.1:
+                # Transform distances to better visualize when most are near 0
+                linkage_matrix[:, 2] = -np.log(
+                    1 - np.minimum(0.999, linkage_matrix[:, 2])
+                )
+                metric_label = "-log(Co-assignment)"
+            else:
+                metric_label = "1 - Co-assignment"
+        else:
+            fig.suptitle("Hierarchical Clustering", fontsize=12)
+            metric_label = "Distance"
+            linkage_matrix = hierarchy.linkage_matrix
+
         # Create gridspec with two columns
         gs = GridSpec(
             n_clusters,
@@ -332,16 +348,15 @@ def hierarchy_plotter(
         dendrogram_ax = fig.add_subplot(gs[:, 0])
         # Using scipy's dendrogram with modified orientation
         dendrogram_results = scipy.cluster.hierarchy.dendrogram(
-            hierarchy.linkage_matrix,
+            linkage_matrix,
             orientation="left",
             ax=dendrogram_ax,
             leaf_font_size=10,
             leaf_label_func=lambda x: f"Cluster {x}",
         )
-        dendrogram_ax.set_xlabel("Relative Entropy")
+        dendrogram_ax.set_xlabel(metric_label)
 
         leaf_order = dendrogram_results["leaves"]
-
         if leaf_order is None:
             raise ValueError("Failed to get leaf order from dendrogram.")
 
@@ -350,11 +365,241 @@ def hierarchy_plotter(
         for i, leaf_idx in enumerate(leaf_order):
             prototype_ax = fig.add_subplot(gs[i, 1])
             dataset.paint_observable(hierarchy.prototypes[leaf_idx], prototype_ax)
-            # prototype_ax.set_title(f"Cluster {leaf_idx}", fontsize=8, y=1.0, pad=8)
 
+        plt.tight_layout(rect=[0, 0, 1, 0.95])  # Make room for suptitle
         return fig
 
     return plot_cluster_hierarchy
+
+
+### Merge Results ###
+
+
+@dataclass(frozen=True)
+class MergeResults(Artifact):
+    """Base artifact containing merge results."""
+
+    prototypes: list[Array]  # Original prototypes
+    mapping: NDArray[np.int32]  # Mapping from clusters to classes
+    accuracy: float  # Accuracy after mapping
+    nmi_score: float  # Normalized mutual information score
+    similarity_type: (
+        str  # What similarity metric was used ("kl", "coassignment", or "optimal")
+    )
+
+    @override
+    def save_to_hdf5(self, file: File) -> None:
+        """Save merge results to HDF5 file."""
+        # Save prototypes
+        proto_group = file.create_group("prototypes")
+        for i, proto in enumerate(self.prototypes):
+            proto_group.create_dataset(f"{i}", data=np.array(proto))
+
+        # Save mapping
+        file.create_dataset("mapping", data=self.mapping)
+
+        # Save metadata
+        file.attrs["accuracy"] = self.accuracy
+        file.attrs["nmi_score"] = self.nmi_score
+        file.attrs["similarity_type"] = self.similarity_type
+
+    @classmethod
+    @override
+    def load_from_hdf5(cls, file: File) -> MergeResults:
+        """Load merge results from HDF5 file."""
+        # Load prototypes
+        proto_group = file["prototypes"]
+        assert isinstance(proto_group, Group)
+        n_protos = len(proto_group)
+        prototypes = [jnp.array(proto_group[f"{i}"]) for i in range(n_protos)]
+
+        # Load mapping
+        mapping = np.array(file["mapping"][()])
+
+        # Load metadata
+        accuracy = float(file.attrs["accuracy"])
+        nmi_score = float(file.attrs["nmi_score"])
+        similarity_type = str(file.attrs["similarity_type"])
+
+        return cls(
+            prototypes=prototypes,
+            mapping=mapping,
+            accuracy=accuracy,
+            nmi_score=nmi_score,
+            similarity_type=similarity_type,
+        )
+
+
+@dataclass(frozen=True)
+class KLMergeResults(MergeResults):
+    """KL divergence-based merge results."""
+
+
+@dataclass(frozen=True)
+class CoAssignmentMergeResults(MergeResults):
+    """Co-assignment-based merge results."""
+
+
+@dataclass(frozen=True)
+class OptimalMergeResults(MergeResults):
+    """Optimal assignment merge results."""
+
+
+def get_merge_results[M: HMoG, MR: MergeResults](
+    model: M,
+    params: Point[Natural, M],
+    dataset: ClusteringDataset,
+    merge_type: type[MR],
+) -> MR:
+    """Generate merge results using specified merge strategy.
+
+    Args:
+        model: HMoG model
+        params: Model parameters
+        dataset: Dataset with labels
+        merge_type: Type of merge results to create
+        data: Data points for calculating empirical similarities (only needed for co-assignment)
+
+    Returns:
+        Specified type of merge results
+    """
+    from sklearn.metrics import normalized_mutual_info_score
+
+    prototypes = get_component_prototypes(model, params)
+    train_probs = cluster_probabilities(model, params.array, dataset.train_data)
+
+    n_clusters = model.upr_hrm.n_categories
+    n_classes = dataset.n_classes
+
+    # Determine the similarity type and compute mapping
+    if merge_type == KLMergeResults:
+        # Use KL-based hierarchy
+        kl_hierarchy = get_cluster_hierarchy(
+            model, params, KLClusterHierarchy, dataset.train_data
+        )
+        mapping = hierarchy_to_mapping(
+            kl_hierarchy.linkage_matrix, n_clusters, n_classes
+        )
+        similarity_type = "kl"
+    elif merge_type == CoAssignmentMergeResults:
+        # Use co-assignment-based hierarchy
+        coassign_hierarchy = get_cluster_hierarchy(
+            model, params, CoAssignmentClusterHierarchy, dataset.train_data
+        )
+        mapping = hierarchy_to_mapping(
+            coassign_hierarchy.linkage_matrix, n_clusters, n_classes
+        )
+        similarity_type = "coassignment"
+    elif merge_type == OptimalMergeResults:
+        if not dataset.has_labels:
+            raise ValueError(
+                "Dataset must have labels for computing optimal merge results"
+            )
+
+        # Use Hungarian algorithm for optimal assignment
+        mapping = compute_optimal_mapping(train_probs, dataset.train_labels, n_classes)
+        similarity_type = "optimal"
+    else:
+        raise TypeError(f"Unsupported merge type: {merge_type}")
+
+    # Apply mapping to get merged cluster assignments
+    merged_probs = jnp.matmul(train_probs, mapping)
+    merged_assignments = jnp.argmax(merged_probs, axis=1)
+
+    # Compute metrics
+    accuracy = cluster_accuracy(dataset.train_labels, merged_assignments)
+    nmi = normalized_mutual_info_score(
+        np.array(dataset.train_labels), np.array(merged_assignments)
+    )
+
+    # Create the merge results object
+    return merge_type(
+        prototypes=prototypes,
+        mapping=mapping,
+        accuracy=float(accuracy),
+        nmi_score=float(nmi),
+        similarity_type=similarity_type,
+    )
+
+
+def merge_results_plotter(
+    dataset: ClusteringDataset,
+) -> Callable[[MergeResults], Figure]:
+    """Create a visualization of merge results."""
+
+    def plot_merge_results(results: MergeResults) -> Figure:
+        """Plot merge results showing clusters grouped by class."""
+        from matplotlib.gridspec import GridSpecFromSubplotSpec
+
+        n_classes = results.mapping.shape[1]
+        n_clusters = len(results.prototypes)
+
+        # Group clusters by class
+        cluster_by_class = [[] for _ in range(n_classes)]
+        for cluster_idx in range(n_clusters):
+            class_idx = np.argmax(results.mapping[cluster_idx])
+            cluster_by_class[class_idx].append(cluster_idx)
+
+        # Calculate the maximum number of clusters in any class
+        max_clusters_per_class = max(
+            1, max(len(clusters) for clusters in cluster_by_class)
+        )
+
+        # Create figure dimensions
+        height, width = dataset.observable_shape
+        ratio = height / width if height > 0 and width > 0 else 1
+
+        # Make figure width based on max_clusters_per_class
+        fig_width = min(20, max(10, max_clusters_per_class * 1.5))
+        # Height based on number of classes
+        fig_height = max(6, n_classes * 1.5 * ratio)
+
+        fig = plt.figure(figsize=(fig_width, fig_height))
+        gs = GridSpec(n_classes, 1, figure=fig, hspace=0.5)
+
+        # Plot each class row
+        for class_idx in range(n_classes):
+            class_clusters = cluster_by_class[class_idx]
+            n_class_clusters = len(class_clusters)
+
+            # Create row for this class
+            class_ax = fig.add_subplot(gs[class_idx])
+            class_ax.set_axis_off()
+
+            # Set title, larger and left-justified
+            class_ax.set_title(
+                f"Class {class_idx}: {n_class_clusters} clusters",
+                fontsize=14,
+                loc="left",
+            )
+
+            if n_class_clusters == 0:
+                # Skip creating subplots if no clusters
+                continue
+
+            # Create sub-grid for clusters in this class
+            class_gs = GridSpecFromSubplotSpec(
+                1, max_clusters_per_class, subplot_spec=gs[class_idx], wspace=0.1
+            )
+
+            # Plot each cluster in this class, left-justified
+            for i, cluster_idx in enumerate(class_clusters):
+                cluster_ax = fig.add_subplot(class_gs[0, i])
+                dataset.paint_observable(results.prototypes[cluster_idx], cluster_ax)
+                # cluster_ax.set_title(f"C{cluster_idx}", fontsize=10)
+
+        # Add overall title with metrics
+        title = f"Merge Strategy: {results.similarity_type.capitalize()}\n"
+        title += f"Accuracy: {results.accuracy:.3f}, NMI Score: {results.nmi_score:.3f}"
+        fig.suptitle(title, fontsize=14)
+
+        plt.tight_layout()
+        return fig
+
+    return plot_merge_results
+
+
+### Log Artifacts ###
 
 
 def log_artifacts[M: HMoG](
@@ -378,15 +623,36 @@ def log_artifacts[M: HMoG](
     # from_scratch if params is provided
     if params is not None:
         handler.save_params(epoch, params.array)
-        clusters = get_cluster_hierarchy(model, params)
         cluster_statistics = get_cluster_statistics(model, dataset, params)
+        kl_hierarchy = get_cluster_hierarchy(
+            model, params, KLClusterHierarchy, dataset.train_data
+        )
+        co_hierarchy = get_cluster_hierarchy(
+            model, params, CoAssignmentClusterHierarchy, dataset.train_data
+        )
+        kl_merge_results = get_merge_results(model, params, dataset, KLMergeResults)
+        co_merge_results = get_merge_results(
+            model, params, dataset, CoAssignmentMergeResults
+        )
+        op_merge_results = get_merge_results(
+            model, params, dataset, OptimalMergeResults
+        )
     else:
-        clusters = handler.load_artifact(epoch, ClusterHierarchy)
         cluster_statistics = handler.load_artifact(epoch, ClusterStatistics)
+        kl_hierarchy = handler.load_artifact(epoch, KLClusterHierarchy)
+        co_hierarchy = handler.load_artifact(epoch, CoAssignmentClusterHierarchy)
+        kl_merge_results = handler.load_artifact(epoch, KLMergeResults)
+        co_merge_results = handler.load_artifact(epoch, CoAssignmentMergeResults)
+        op_merge_results = handler.load_artifact(epoch, OptimalMergeResults)
 
     # Plot and save
+    plot_clusters_statistics = cluster_statistics_plotter(dataset)
     plot_hierarchy = hierarchy_plotter(dataset)
-    plot_clusters = cluster_statistics_plotter(dataset)
+    plot_merge_results = merge_results_plotter(dataset)
 
-    logger.log_artifact(handler, epoch, clusters, plot_hierarchy)
-    logger.log_artifact(handler, epoch, cluster_statistics, plot_clusters)
+    logger.log_artifact(handler, epoch, cluster_statistics, plot_clusters_statistics)
+    logger.log_artifact(handler, epoch, kl_hierarchy, plot_hierarchy)
+    logger.log_artifact(handler, epoch, co_hierarchy, plot_hierarchy)
+    logger.log_artifact(handler, epoch, kl_merge_results, plot_merge_results)
+    logger.log_artifact(handler, epoch, co_merge_results, plot_merge_results)
+    logger.log_artifact(handler, epoch, op_merge_results, plot_merge_results)
