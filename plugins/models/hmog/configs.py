@@ -14,6 +14,21 @@ from apps.configs import ClusteringModelConfig
 
 
 @dataclass
+class PreTrainerConfig:
+    """Base configuration for pre-trainers."""
+
+    _target_: str = "plugins.models.hmog.trainers.PreTrainer"
+    n_epochs: int = 1000
+    batch_size: int | None = None
+    batch_steps: int = 1000
+    l1_reg: float = 0
+    l2_reg: float = 0
+    grad_clip: float = 8.0
+    min_var: float = 1e-5
+    jitter_var: float = 0.0
+
+
+@dataclass
 class GradientTrainerConfig:
     """Base configuration for gradient-based trainers."""
 
@@ -71,6 +86,7 @@ class AnalysisConfig:
 ### Main Configuration ###
 
 cycle_defaults: list[Any] = [
+    {"pre": "gradient_pre"},
     {"lgm": "gradient_lgm"},
     {"mix": "gradient_mixture"},
     {"full": "gradient_full"},
@@ -85,6 +101,7 @@ class HMoGConfig(ClusteringModelConfig):
     n_clusters: int = 10
 
     # Training configuration
+    pre: PreTrainerConfig = field(default=MISSING)
     lgm: GradientTrainerConfig = field(default=MISSING)
     mix: GradientTrainerConfig = field(default=MISSING)
     full: GradientTrainerConfig = field(default=MISSING)
@@ -107,6 +124,7 @@ class DifferentiableHMoGConfig(HMoGConfig):
 cs = ConfigStore.instance()
 
 # Register base configs
+cs.store(group="model/pre", name="gradient_pre", node=PreTrainerConfig)
 cs.store(group="model/lgm", name="gradient_lgm", node=GradientLGMTrainerConfig)
 cs.store(group="model/mix", name="gradient_mixture", node=GradientMixtureTrainerConfig)
 cs.store(group="model/full", name="gradient_full", node=GradientFullModelTrainerConfig)

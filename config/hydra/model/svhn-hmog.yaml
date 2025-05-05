@@ -3,11 +3,11 @@ defaults:
   - hmog_diff
   - _self_
 
-latent_dim: 40
-n_clusters: 20
+latent_dim: 10
+n_clusters: 10
 
-lr_init: 1e-6
-lr_final: 1e-6
+lr_init: 1e-5
+lr_final: 1e-5
 num_cycles: 10
 
 lgm:

@@ -11,19 +11,15 @@ import jax
 import jax.numpy as jnp
 import optax
 from goal.geometry import (
-    AffineMap,
     Mean,
     Natural,
     Optimizer,
     OptState,
     Point,
-    PositiveDefinite,
-    Rectangular,
     Replicated,
 )
 from goal.models import (
     DiagonalNormal,
-    Euclidean,
     Normal,
 )
 from jax import Array
@@ -34,8 +30,8 @@ from apps.plugins import (
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
-from .analysis import log_epoch_metrics
-from .base import HMoG, fori
+from .analysis import log_epoch_metrics, pre_log_epoch_metrics
+from .base import LGM, HMoG, fori
 
 ### Constants ###
 
@@ -79,34 +75,6 @@ class GradientTrainer:
 
     # Strategy
     mask_type: MaskingStrategy
-
-    def precision_jitter(
-        self, model: HMoG, params: Point[Natural, HMoG]
-    ) -> Point[Natural, HMoG]:
-        obs_params, int_params, lat_params = model.split_params(params)
-
-        with model.upr_hrm as uh:
-            lat_obs_params, lat_int_params, lat_cat_params = uh.split_params(lat_params)
-            # Compute how much to add to diagonal (shifting strategy)
-            # This only modifies diagonal elements by adding a constant
-            # Create array of the same shape as diagonal with the shift value
-            jitter_array = jnp.full(uh.obs_man.cov_man.dim, self.lat_jitter_var)
-
-            # Create a natural point with the jitter
-            jitter_point = uh.obs_man.cov_man.natural_point(jitter_array)
-
-            # Add the jitter to the precision parameters
-            loc_params, prs_params = uh.obs_man.split_location_precision(lat_obs_params)
-            jitter_prs_params = prs_params + jitter_point
-            jitter_lat_obs_params = uh.obs_man.join_location_precision(
-                loc_params, jitter_prs_params
-            )
-
-            jitter_lat_params = uh.join_params(
-                jitter_lat_obs_params, lat_int_params, lat_cat_params
-            )
-
-        return model.join_params(obs_params, int_params, jitter_lat_params)
 
     def bound_means(self, model: HMoG, means: Point[Mean, HMoG]) -> Point[Mean, HMoG]:
         """Apply bounds to posterior statistics for numerical stability."""
@@ -413,6 +381,207 @@ class GradientTrainer:
         return params_final
 
 
-type LinearModel[ObsRep: PositiveDefinite] = AffineMap[
-    Rectangular, Euclidean, Euclidean, Normal[ObsRep]
-]
+@dataclass(frozen=True)
+class PreTrainer:
+    """Base trainer for gradient-based training of HMoG models."""
+
+    # Training hyperparameters
+    n_epochs: int
+    batch_size: None | int
+    batch_steps: int
+    grad_clip: float
+
+    # Regularization parameters
+    l1_reg: float
+    l2_reg: float
+
+    # Parameter bounds
+    min_var: float
+    jitter_var: float
+
+    def bound_means(self, model: LGM, means: Point[Mean, LGM]) -> Point[Mean, LGM]:
+        """Apply bounds to posterior statistics for numerical stability."""
+        # Split posterior statistics
+        obs_means, int_means, lat_means = model.split_params(means)
+
+        # For observable parameters, bound the variances
+        bounded_obs_means = model.obs_man.regularize_covariance(
+            obs_means, self.jitter_var, self.min_var
+        )
+        z = model.lat_man.standard_normal()
+
+        # Rejoin all parameters
+        return model.join_params(bounded_obs_means, int_means, z)
+
+    def make_regularizer(self, model: LGM) -> Callable[[Point[Natural, LGM]], Array]:
+        def loss_fn(params: Point[Natural, LGM]) -> Array:
+            # Core negative log-likelihood
+
+            # Extract components for regularization
+            _, int_params, _ = model.split_params(params)
+
+            # L1 regularization on interaction matrix
+            l1_loss = self.l1_reg * jnp.sum(jnp.abs(int_params.array))
+
+            # L2 regularization on all parameters
+            l2_loss = self.l2_reg * jnp.sum(jnp.square(params.array))
+
+            return l1_loss + l2_loss
+
+        return loss_fn
+
+    def make_batch_step(
+        self,
+        handler: RunHandler,
+        model: LGM,
+        logger: JaxLogger,
+        optimizer: Optimizer[Natural, LGM],
+    ) -> Callable[
+        [tuple[OptState, Point[Natural, LGM]], Array],
+        tuple[tuple[OptState, Point[Natural, LGM]], Array],
+    ]:
+        def batch_step(
+            carry: tuple[OptState, Point[Natural, LGM]],
+            batch: Array,
+        ) -> tuple[tuple[OptState, Point[Natural, LGM]], Array]:
+            opt_state, params = carry
+
+            # Compute posterior statistics once for this batch
+            posterior_stats = model.mean_posterior_statistics(params, batch)
+
+            # Apply bounds to posterior statistics
+            bounded_posterior_stats = self.bound_means(model, posterior_stats)
+            # debug_lat_obs_means(bounded_posterior, True)
+
+            # Define the inner step function for scan
+            def inner_step(
+                carry: tuple[OptState, Point[Natural, LGM]],
+                _: None,  # Dummy input since we don't need per-step inputs
+            ) -> tuple[tuple[OptState, Point[Natural, LGM]], Array]:
+                current_opt_state, current_params = carry
+
+                # Compute gradient as difference between posterior and current prior
+                prior_stats = model.to_mean(current_params)
+                grad = prior_stats - bounded_posterior_stats
+                reg_fn = self.make_regularizer(model)
+                reg_grad = jax.grad(reg_fn)(current_params)
+                grad = grad + reg_grad
+
+                # Update parameters
+                new_opt_state, new_params = optimizer.update(
+                    current_opt_state, grad, current_params
+                )
+
+                # Monitor parameters for debugging
+                logger.monitor_params(
+                    {
+                        "original_params": current_params.array,
+                        "updated_params": new_params.array,
+                        "batch": batch,
+                        "posterior_stats": posterior_stats.array,
+                        "bounded_posterior_stats": bounded_posterior_stats.array,
+                        # "prior_stats": prior_stats.array,
+                        # "grad": grad.array,
+                        # "masked_grad": masked_grad.array,
+                    },
+                    handler,
+                    context="PRE",
+                )
+
+                return (new_opt_state, new_params), grad.array
+
+            # Run inner steps using jax.lax.scan
+            (final_opt_state, final_params), all_grads = jax.lax.scan(
+                inner_step,
+                (opt_state, params),
+                None,  # No inputs needed
+                length=self.batch_steps,
+            )
+
+            return (final_opt_state, final_params), all_grads
+
+        return batch_step
+
+    def train(
+        self,
+        key: Array,
+        handler: RunHandler,
+        dataset: ClusteringDataset,
+        model: LGM,
+        logger: JaxLogger,
+        learning_rate: float,
+        epoch_offset: int,
+        params0: Point[Natural, LGM],
+    ) -> Point[Natural, LGM]:
+        """Train the model with the specified gradient masking strategy."""
+        n_epochs = self.n_epochs
+
+        train_data = dataset.train_data
+        if self.batch_size is None:
+            batch_size = train_data.shape[0]
+            n_batches = 1
+        else:
+            n_batches = train_data.shape[0] // self.batch_size
+            batch_size = self.batch_size
+
+        # Create optimizer
+        optim = optax.lamb(learning_rate=learning_rate)
+        optimizer: Optimizer[Natural, LGM] = Optimizer(optim, model)
+
+        if self.grad_clip > 0.0:
+            optimizer = optimizer.with_grad_clip(self.grad_clip)
+
+        # Initialize optimizer state
+        opt_state = optimizer.init(params0)
+
+        # Log training phase
+        log.info(f"Training PRE parameters for {n_epochs} epochs")
+
+        # Create epoch step function
+        def epoch_step(
+            epoch: Array,
+            carry: tuple[OptState, Point[Natural, LGM], Array],
+        ) -> tuple[OptState, Point[Natural, LGM], Array]:
+            opt_state, params, epoch_key = carry
+
+            # Split key for shuffling
+            shuffle_key, next_key = jax.random.split(epoch_key)
+
+            # Create minibatch step with the appropriate mask
+            batch_step = self.make_batch_step(handler, model, logger, optimizer)
+
+            # Shuffle and batch data
+            shuffled_indices = jax.random.permutation(shuffle_key, train_data.shape[0])
+            batched_indices = shuffled_indices[: n_batches * batch_size]
+            batched_data = train_data[batched_indices].reshape(
+                (n_batches, batch_size, -1)
+            )
+
+            # Process all batches
+            (opt_state, new_params), gradss_array = jax.lax.scan(
+                batch_step, (opt_state, params), batched_data
+            )
+            # gradss_array shape: (n_batches, n_steps, param_dim)
+            grads_array = gradss_array.reshape(-1, *gradss_array.shape[2:])
+
+            # Create batch gradients for logging
+            batch_man = Replicated(model, grads_array.shape[0])
+            batch_grads = batch_man.point(grads_array)
+
+            # Log metrics
+            pre_log_epoch_metrics(
+                dataset,
+                model,
+                logger,
+                new_params,
+                epoch + epoch_offset,
+                batch_grads,
+                log_freq=10,
+            )
+
+            return opt_state, new_params, next_key
+
+        # Run training loop
+        (_, params_final, _) = fori(0, n_epochs, epoch_step, (opt_state, params0, key))
+
+        return params_final

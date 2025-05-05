@@ -30,6 +30,7 @@ from apps.runtime.logger import JaxLogger
 from .artifacts import AnalysisArgs, log_artifacts
 from .trainers import (
     GradientTrainer,
+    PreTrainer,
 )
 
 ### Preamble ###
@@ -46,6 +47,7 @@ class HMoGExperiment(ClusteringModel, ABC):
 
     # Training configuration
     model: DifferentiableHMoG[Diagonal, Diagonal]
+    pre: PreTrainer
     lgm: GradientTrainer
     mix: GradientTrainer
     full: GradientTrainer
@@ -61,6 +63,7 @@ class HMoGExperiment(ClusteringModel, ABC):
         data_dim: int,
         latent_dim: int,
         n_clusters: int,
+        pre: PreTrainer,
         lgm: GradientTrainer,
         mix: GradientTrainer,
         full: GradientTrainer,
@@ -79,6 +82,7 @@ class HMoGExperiment(ClusteringModel, ABC):
             n_components=n_clusters,
         )
 
+        self.pre = pre
         self.lgm = lgm
         self.mix = mix
         self.full = full
@@ -125,7 +129,7 @@ class HMoGExperiment(ClusteringModel, ABC):
         obs_params = self.model.obs_man.to_natural(obs_means)
 
         with self.model.upr_hrm as uh:
-            upr_noise_scale = 0.02
+            upr_noise_scale = 0.0001
 
             cat_params = uh.lat_man.initialize(key_cat, shape=upr_noise_scale)
             key_comps = jax.random.split(key_comp, self.n_clusters)
@@ -141,7 +145,7 @@ class HMoGExperiment(ClusteringModel, ABC):
             )
         # mix_params = self.model.upr_hrm.initialize(key_comp, shape=noise_scale)
 
-        lwr_noise_scale = 0.001
+        lwr_noise_scale = 0.0001
 
         int_noise = lwr_noise_scale * jax.random.normal(
             key_int, self.model.int_man.shape
@@ -204,7 +208,7 @@ class HMoGExperiment(ClusteringModel, ABC):
     ) -> None:
         """Train HMoG model using alternating optimization."""
         # Split PRNG key for different training phases
-        init_key, *cycle_keys = jax.random.split(key, self.num_cycles + 1)
+        init_key, pre_key, *cycle_keys = jax.random.split(key, self.num_cycles + 2)
 
         # Initialize model
         params = self.model.natural_point(
@@ -213,6 +217,36 @@ class HMoGExperiment(ClusteringModel, ABC):
 
         # Track total epochs
         epoch = 0
+
+        if self.pre.n_epochs > 0:
+            obs_params, int_params, lat_params = self.model.split_params(params)
+            lat_obs_params, lat_int_params, cat_params = (
+                self.model.upr_hrm.split_params(lat_params)
+            )
+            lgm = self.model.lwr_hrm
+            lgm_params = lgm.join_params(obs_params, int_params, lat_obs_params)
+            log.info("Pretraining LGM parameters")
+            log.info(f"Learning rate: {self.lr_init:.2e}")
+            new_lgm_params = self.pre.train(
+                pre_key,
+                handler,
+                dataset,
+                lgm,
+                logger,
+                self.lr_init,
+                epoch,
+                lgm_params,
+            )
+            new_obs_params, new_int_params, new_lat_obs_params = lgm.split_params(
+                new_lgm_params
+            )
+            new_lat_params = self.model.upr_hrm.join_params(
+                new_lat_obs_params, lat_int_params, cat_params
+            )
+            params = self.model.join_params(
+                new_obs_params, new_int_params, new_lat_params
+            )
+
         alpha = self.lr_final / self.lr_init
         # cosine lr schedule
         lr_schedule = optax.cosine_decay_schedule(
@@ -277,4 +311,4 @@ class HMoGExperiment(ClusteringModel, ABC):
 
             log_artifacts(handler, dataset, logger, self.model, epoch, params)
 
-            log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")
+            log.info(f"Completed c2ycle {cycle + 1}/{self.num_cycles}")

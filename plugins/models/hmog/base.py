@@ -13,7 +13,9 @@ from goal.geometry import (
     Scale,
 )
 from goal.models import (
+    AnalyticMixture,
     DifferentiableHMoG,
+    DifferentiableLinearGaussianModel,
 )
 from jax import Array
 
@@ -33,6 +35,8 @@ class RepresentationType(Enum):
 ### HMoG Protocol ###
 
 type HMoG = DifferentiableHMoG[Any, Any]
+type LGM = DifferentiableLinearGaussianModel[Any, Any]
+type Mixture = AnalyticMixture[Any]
 
 
 ### Helpers ###
