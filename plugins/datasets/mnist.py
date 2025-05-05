@@ -31,7 +31,7 @@ class MNISTConfig(ClusteringDatasetConfig):
 
     """
 
-    _target_: str = "plugins.datasets.mnist.MNISTDataset"
+    _target_: str = "plugins.datasets.mnist.MNISTDataset.load"
 
 
 # Register config
@@ -39,15 +39,18 @@ cs = ConfigStore.instance()
 cs.store(group="dataset", name="mnist", node=MNISTConfig)
 
 
+@dataclass(frozen=True)
 class MNISTDataset(ClusteringDataset):
     """MNIST handwritten digits dataset."""
 
+    cache_dir: Path
     _train_images: Array
     _train_labels: Array
     _test_images: Array
     _test_labels: Array
 
-    def __init__(self, cache_dir: Path) -> None:
+    @classmethod
+    def load(cls, cache_dir: Path) -> "MNISTDataset":
         """Load MNIST dataset.
 
         Args:
@@ -56,8 +59,6 @@ class MNISTDataset(ClusteringDataset):
         Returns:
             Loaded MNIST dataset
         """
-
-        self.cache_dir: Path = cache_dir
 
         def transform_tensor(x: NDArray[np.uint8]) -> NDArray[np.float32]:
             return x.reshape(-1).astype(np.float32)
@@ -91,15 +92,20 @@ scp -r /path/to/local/MNIST username@hpc:{mnist_dir}
 
 Original error: {e!s}"""
             ) from e
+
         train_images = jnp.array(train_dataset.data.numpy()).reshape(-1, 784) / 255.0
         train_labels = jnp.array(train_dataset.targets.numpy())
         test_images = jnp.array(test_dataset.data.numpy()).reshape(-1, 784) / 255.0
         test_labels = jnp.array(test_dataset.targets.numpy())
 
-        self._train_images = train_images
-        self._train_labels = train_labels
-        self._test_images = test_images
-        self._test_labels = test_labels
+        # Create the immutable instance with all fields initialized
+        return cls(
+            cache_dir=cache_dir,
+            _train_images=train_images,
+            _train_labels=train_labels,
+            _test_images=test_images,
+            _test_labels=test_labels,
+        )
 
     @property
     @override

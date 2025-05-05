@@ -14,6 +14,7 @@ from .runtime.logger import JaxLogger
 ### Interfaces ###
 
 
+@dataclass(frozen=True)
 class Dataset(ABC):
     """Root class for all datasets."""
 
@@ -45,9 +46,6 @@ class Dataset(ABC):
             observable: A single observation from the dataset (data_dim,)
             axes: Matplotlib axes to draw on
         """
-
-
-dataclass(frozen=True)
 
 
 class Model[D: Dataset](ABC):
@@ -84,6 +82,7 @@ class Model[D: Dataset](ABC):
 # Datasets
 
 
+@dataclass(frozen=True)
 class ClusteringDataset(Dataset, ABC):
     """Abstract base class for datasets used in clustering applications."""
 
@@ -111,6 +110,10 @@ class ClusteringDataset(Dataset, ABC):
     @abstractmethod
     def has_labels(self) -> bool:
         """Return True if the dataset has labels."""
+
+    @property
+    def n_classes(self) -> int:
+        raise NotImplementedError("n_classes is not implemented for this dataset.")
 
     @property
     def train_labels(self) -> Array:

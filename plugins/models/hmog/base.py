@@ -62,6 +62,139 @@ def fori[X](lower: int, upper: int, body_fun: Callable[[Array, X], X], init: X) 
     return jax.lax.fori_loop(lower, upper, body_fun, init)  # pyright: ignore[reportUnknownVariableType]
 
 
+def cluster_probabilities(model: HMoG, params: Array, data: Array) -> Array:
+    """Get cluster probability distributions for each data point.
+
+    Args:
+        model: HMoG model
+        params: Model parameters
+        data: Data points to get probabilities for
+
+    Returns:
+        Array of shape (n_samples, n_clusters) with probability distributions
+    """
+
+    def data_point_probs(x: Array) -> Array:
+        cat_pst = model.upr_hrm.prior(
+            model.posterior_at(model.natural_point(params), x)
+        )
+        with model.upr_hrm.lat_man as lm:
+            probs = lm.to_probs(lm.to_mean(cat_pst))
+        return probs
+
+    return jax.lax.map(data_point_probs, data, batch_size=2048)
+
+
+def cluster_merge_mapping[M: HMoG](
+    model: M, params: Point[Natural, M], n_classes: Array
+) -> Array:
+    """Compute a mapping matrix from original clusters to merged clusters.
+
+    Args:
+        model: HMoG model
+        params: Model parameters
+        n_target_clusters: Target number of clusters after merging
+
+    Returns:
+        Binary mapping matrix of shape (n_original_clusters, n_target_clusters)
+        where M[i,j] = 1 if original cluster i maps to merged cluster j
+    """
+    # Get symmetrized KL divergence matrix
+    sym_kl = symmetric_kl_matrix(model, params)
+
+    # Number of original clusters
+    n_original_clusters = sym_kl.shape[0]
+
+    # Start with each cluster in its own group
+    # cluster_group[i] = j means cluster i is in group j
+    cluster_group = jnp.arange(n_original_clusters)
+
+    # Iteratively merge the most similar clusters
+    def merge_step(groups: Array, _):
+        # Create a mask for pairs in different groups
+        # Create indices for all pairs
+        row_idx = jnp.arange(n_original_clusters)[:, None]
+        col_idx = jnp.arange(n_original_clusters)[None, :]
+
+        # Check if pairs belong to different groups (and aren't the same cluster)
+        groups_i = groups[row_idx]
+        groups_j = groups[col_idx]
+        diff_groups = (groups_i != groups_j) & (row_idx != col_idx)
+
+        # Mask KL matrix
+        masked_kl = jnp.where(diff_groups, sym_kl, jnp.inf)
+
+        # Find indices of minimum KL
+        flat_idx = jnp.argmin(masked_kl.ravel())
+        i, j = jnp.unravel_index(flat_idx, sym_kl.shape)
+
+        # Get the groups to merge
+        group_i = groups[i]
+        group_j = groups[j]
+
+        # Use the smaller group index as target
+        target_group = jnp.minimum(group_i, group_j)
+        source_group = jnp.maximum(group_i, group_j)
+
+        # Update all clusters in source_group to target_group
+        new_groups = jnp.where(groups == source_group, target_group, groups)
+
+        # Relabel groups to be consecutive
+        # Create a mapping from old group IDs to new consecutive IDs
+        # unique_groups, indices = jnp.unique(new_groups, return_inverse=True)
+        # relabeled_groups = indices
+
+        return new_groups, None
+
+    # Calculate number of merges needed
+    n_merges = n_original_clusters - n_classes
+
+    # Apply merging steps
+    final_groups, _ = jax.lax.scan(merge_step, cluster_group, jnp.arange(n_merges))
+
+    return jax.nn.one_hot(final_groups, n_classes, dtype=jnp.int32)
+
+
+def cluster_assignments[M: HMoG](model: M, params: Array, data: Array) -> Array:
+    """Assign data points to clusters using the model.
+
+    Args:
+        model: HMoG model
+        params: Model parameters
+        data: Data points to assign
+
+    Returns:
+        Array of cluster assignments
+    """
+    probs = cluster_probabilities(model, params, data)
+    return jnp.argmax(probs, axis=-1)
+
+
+def symmetric_kl_matrix[
+    M: HMoG,
+](
+    model: M,
+    params: Point[Natural, M],
+) -> Array:
+    mix_params = model.prior(params)
+    with model.con_upr_hrm as ch:
+        comp_lats, _ = ch.split_natural_mixture(mix_params)
+
+        def kl_div_between_components(i: Array, j: Array) -> Array:
+            comp_i = ch.cmp_man.get_replicate(comp_lats, i)
+            comp_i_mean = ch.obs_man.to_mean(comp_i)
+            comp_j = ch.cmp_man.get_replicate(comp_lats, j)
+            return ch.obs_man.relative_entropy(comp_i_mean, comp_j)
+
+        idxs = jnp.arange(ch.n_categories)
+
+    def kl_div_from_one_to_all(i: Array) -> Array:
+        return jax.vmap(kl_div_between_components, in_axes=(None, 0))(i, idxs)
+
+    kl_matrix = jax.lax.map(kl_div_from_one_to_all, idxs)
+    return (kl_matrix + kl_matrix.T) / 2
+
+
 def relative_entropy_regularization[
     ObsRep: PositiveDefinite,
     PostRep: PositiveDefinite,
@@ -106,6 +239,53 @@ def relative_entropy_regularization_full[
     return ana_lgm, re_loss, lgm_lat_means
 
 
+def compute_cluster_accuracy(
+    true_labels: Array, cluster_probs: Array, mapping: Array
+) -> Array:
+    """Compute clustering accuracy with optimal label assignment.
+
+    Args:
+        true_labels: Ground truth labels with shape (n_samples,)
+        cluster_probs: Cluster assignment probabilities with shape (n_samples, n_clusters)
+        mapping: Optional mapping matrix from original to merged clusters
+
+    Returns:
+        Clustering accuracy after optimal label assignment
+    """
+    # Apply mapping if provided
+    if mapping is not None:
+        cluster_probs = jnp.matmul(cluster_probs, mapping)
+
+    # Get hard assignments
+    cluster_assignments = jnp.argmax(cluster_probs, axis=1)
+
+    # Number of clusters and classes
+    n_clusters = mapping.shape[1]
+    n_classes = mapping.shape[0]
+
+    # Assuming n_clusters >= n_classes, create an appropriately sized contingency matrix
+    contingency = jnp.zeros((n_clusters, n_classes))
+
+    # Update contingency matrix - no need for clipping since dimensions are appropriate
+    def update_contingency(i, cont):
+        label = true_labels[i]
+        cluster = cluster_assignments[i]
+        return cont.at[cluster, label].add(1)
+
+    contingency = jax.lax.fori_loop(
+        0, true_labels.shape[0], update_contingency, contingency
+    )
+
+    # Find optimal assignment (max value in each row)
+    cluster_to_label = jnp.argmax(contingency, axis=1)
+
+    # Map each prediction to its optimal class - all clusters should have valid mappings
+    mapped_predictions = cluster_to_label[cluster_assignments]
+
+    # Compute accuracy
+    return jnp.mean(mapped_predictions == true_labels)
+
+
 ### Logging ###
 
 
@@ -148,6 +328,29 @@ def log_epoch_metrics[H: HMoG](
                 epoch_scaled_bic,
             ),
         }
+
+        # Clustering metrics if dataset has labels
+        if dataset.has_labels:
+            # Get cluster assignments using the existing function
+            train_probs = cluster_probabilities(hmog_model, params.array, train_data)
+            test_probs = cluster_probabilities(hmog_model, params.array, test_data)
+
+            n_classes = dataset.n_classes
+            merge_mapping = cluster_merge_mapping(hmog_model, params, n_classes)
+            merged_train_acc = compute_cluster_accuracy(
+                dataset.train_labels, train_probs, merge_mapping
+            )
+            merged_test_acc = compute_cluster_accuracy(
+                dataset.test_labels, test_probs, merge_mapping
+            )
+
+            # Add to metrics dictionary
+            metrics.update(
+                {
+                    "Clustering/Train Accuracy": (info, merged_train_acc),
+                    "Clustering/Test Accuracy": (info, merged_test_acc),
+                }
+            )
 
         # Raw Parameter Statistics
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, override
 
-import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
@@ -31,6 +30,8 @@ from apps.runtime.logger import JaxLogger
 
 from .base import (
     HMoG,
+    cluster_assignments,
+    symmetric_kl_matrix,
 )
 
 ### Analysis Args ###
@@ -45,20 +46,6 @@ class AnalysisArgs:
 
 
 ### Helpers ###
-
-
-def cluster_assignments[
-    M: HMoG,
-](model: M, params: Array, data: Array) -> Array:
-    def data_point_cluster(x: Array) -> Array:
-        cat_pst = model.upr_hrm.prior(
-            model.posterior_at(model.natural_point(params), x)
-        )
-        with model.upr_hrm.lat_man as lm:
-            probs = lm.to_probs(lm.to_mean(cat_pst))
-        return jnp.argmax(probs, axis=-1)
-
-    return jax.lax.map(data_point_cluster, data, batch_size=2048)
 
 
 def get_component_prototypes[
@@ -102,30 +89,13 @@ def compute_component_divergences[
 ](
     model: M,
     params: Point[Natural, M],
-) -> tuple[Array, Array, NDArray[np.float64]]:
+) -> tuple[Array, NDArray[np.float64]]:
     """Compute divergence statistics between mixture components.
 
     Returns:
         Tuple of (kl_matrix, symmetric_kl, linkage_matrix)
     """
-    # Get raw KL divergences
-    mix_params = model.prior(params)
-    with model.con_upr_hrm as ch:
-        comp_lats, _ = ch.split_natural_mixture(mix_params)
-
-        def kl_div_between_components(i: Array, j: Array) -> Array:
-            comp_i = ch.cmp_man.get_replicate(comp_lats, i)
-            comp_i_mean = ch.obs_man.to_mean(comp_i)
-            comp_j = ch.cmp_man.get_replicate(comp_lats, j)
-            return ch.obs_man.relative_entropy(comp_i_mean, comp_j)
-
-        idxs = jnp.arange(ch.n_categories)
-
-    def kl_div_from_one_to_all(i: Array) -> Array:
-        return jax.vmap(kl_div_between_components, in_axes=(None, 0))(i, idxs)
-
-    kl_matrix = jax.lax.map(kl_div_from_one_to_all, idxs)
-    symmetric_kl = (kl_matrix + kl_matrix.T) / 2
+    symmetric_kl = symmetric_kl_matrix(model, params)
 
     # Convert to numpy and handle distances
     dist_matrix = np.array(symmetric_kl, dtype=np.float64)
@@ -154,7 +124,7 @@ def compute_component_divergences[
         method="average",  # Using UPGMA clustering
     )
 
-    return kl_matrix, symmetric_kl, linkage_matrix  # pyright: ignore[reportReturnType]
+    return symmetric_kl, linkage_matrix  # pyright: ignore[reportReturnType]
 
 
 ### ClusterCollection ###
@@ -316,7 +286,7 @@ def get_cluster_hierarchy[
 ) -> ClusterHierarchy:
     """Generate clustering hierarchy analysis."""
     prototypes = get_component_prototypes(model, params)
-    _, _, linkage_matrix = compute_component_divergences(model, params)
+    _, linkage_matrix = compute_component_divergences(model, params)
     return ClusterHierarchy(prototypes=prototypes, linkage_matrix=linkage_matrix)
 
 

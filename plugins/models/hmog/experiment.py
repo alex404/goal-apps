@@ -213,7 +213,7 @@ class HMoGExperiment(ClusteringModel, ABC):
 
         # Track total epochs
         epoch = 0
-        alpha = self.lr_init / self.lr_final
+        alpha = self.lr_final / self.lr_init
         # cosine lr schedule
         lr_schedule = optax.cosine_decay_schedule(
             init_value=self.lr_init,

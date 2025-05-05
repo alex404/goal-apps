@@ -32,7 +32,7 @@ class NeuralTracesConfig(ClusteringDatasetConfig):
     """
 
     _target_: str = field(
-        default="plugins.datasets.neural_traces.NeuralTracesDataset", init=False
+        default="plugins.datasets.neural_traces.NeuralTracesDataset.load", init=False
     )
     dataset_name: str
     use_8hz_chirp: bool
@@ -48,14 +48,21 @@ cs = ConfigStore.instance()
 cs.store(group="dataset", name="neural_traces", node=NeuralTracesConfig)
 
 
+@dataclass(frozen=True)
 class NeuralTracesDataset(ClusteringDataset):
     """Neural traces dataset for clustering analysis."""
 
+    dataset_name: str
+    use_8hz_chirp: bool
+    chirp_len: int
+    bar_len: int
+    feature_len: int
     _train_data: Array
     _test_data: Array
 
-    def __init__(
-        self,
+    @classmethod
+    def load(
+        cls,
         cache_dir: Path,
         dataset_name: str,
         use_8hz_chirp: bool,
@@ -64,12 +71,13 @@ class NeuralTracesDataset(ClusteringDataset):
         feature_len: int,
         train_split: float,
         random_seed: int,
-    ) -> None:
+    ) -> "NeuralTracesDataset":
         """Load neural traces dataset.
 
         Args:
             cache_dir: Directory for caching data
             dataset_name: Name of the preprocessed dataset to load
+            use_8hz_chirp: Whether to use the 8Hz chirp
             chirp_len: Length of chirp response trace
             bar_len: Length of bar response trace
             feature_len: Number of additional features
@@ -79,13 +87,6 @@ class NeuralTracesDataset(ClusteringDataset):
         Returns:
             Loaded neural traces dataset
         """
-        self.cache_dir: Path = cache_dir
-        self.dataset_name: str = dataset_name
-        self.use_8hz_chirp: bool = use_8hz_chirp
-        self.chirp_len: int = chirp_len
-        self.bar_len: int = bar_len
-        self.feature_len: int = feature_len
-
         # Create cache directories
         dataset_dir = cache_dir / "neural-traces"
         raw_dir = dataset_dir / "raw"
@@ -139,8 +140,20 @@ class NeuralTracesDataset(ClusteringDataset):
             np.save(test_cache, test_data)
 
         # Convert to JAX arrays
-        self._train_data = jnp.array(train_data)
-        self._test_data = jnp.array(test_data)
+        jax_train_data = jnp.array(train_data)
+        jax_test_data = jnp.array(test_data)
+
+        # Create and return the immutable instance
+        return cls(
+            cache_dir=cache_dir,
+            dataset_name=dataset_name,
+            use_8hz_chirp=use_8hz_chirp,
+            chirp_len=chirp_len,
+            bar_len=bar_len,
+            feature_len=feature_len,
+            _train_data=jax_train_data,
+            _test_data=jax_test_data,
+        )
 
     @property
     @override
