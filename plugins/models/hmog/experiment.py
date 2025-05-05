@@ -125,7 +125,7 @@ class HMoGExperiment(ClusteringModel, ABC):
         obs_params = self.model.obs_man.to_natural(obs_means)
 
         with self.model.upr_hrm as uh:
-            upr_noise_scale = 0.1
+            upr_noise_scale = 0.02
 
             cat_params = uh.lat_man.initialize(key_cat, shape=upr_noise_scale)
             key_comps = jax.random.split(key_comp, self.n_clusters)
