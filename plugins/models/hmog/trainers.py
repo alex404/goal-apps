@@ -314,7 +314,7 @@ class GradientTrainer:
             batch_size = self.batch_size
 
         # Create optimizer
-        optim = optax.lamb(learning_rate=learning_rate)
+        optim = optax.adamw(learning_rate=learning_rate)
         optimizer: Optimizer[Natural, HMoG] = Optimizer(optim, model)
 
         if self.grad_clip > 0.0:
@@ -524,7 +524,7 @@ class PreTrainer:
             batch_size = self.batch_size
 
         # Create optimizer
-        optim = optax.lamb(learning_rate=learning_rate)
+        optim = optax.adamw(learning_rate=learning_rate)
         optimizer: Optimizer[Natural, LGM] = Optimizer(optim, model)
 
         if self.grad_clip > 0.0:

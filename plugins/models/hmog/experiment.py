@@ -311,4 +311,4 @@ class HMoGExperiment(ClusteringModel, ABC):
 
             log_artifacts(handler, dataset, logger, self.model, epoch, params)
 
-            log.info(f"Completed c2ycle {cycle + 1}/{self.num_cycles}")
+            log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")

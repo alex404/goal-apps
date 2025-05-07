@@ -12,8 +12,7 @@ num_cycles: 10
 
 pre:
   n_epochs: 1000
-  batch_steps: 1
-  batch_size: 64
+  batch_steps: 1000
   l1_reg: 0
   l2_reg: 0
   grad_clip: 8
@@ -35,6 +34,6 @@ full:
   min_prob: 1e-4
   obs_min_var: 1e-5
   lat_min_var: 1e-6
-  eigen_floor_prs: 1e-6
+  eigen_floor_prs: 0
   l1_reg: 0
   l2_reg: 0
