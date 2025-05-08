@@ -11,14 +11,14 @@ from omegaconf import MISSING
 # Basic Configs
 
 # Define a custom level
-STATS_LEVEL = 15  # Between INFO (20) and DEBUG (10)
-logging.addLevelName(STATS_LEVEL, "STATS")
+STATS_NUM = 15  # Between INFO (20) and DEBUG (10)
+logging.addLevelName(STATS_NUM, "STATS")
 
 
 class LogLevel(Enum):
     DEBUG = logging.DEBUG
     INFO = logging.INFO
-    STATS = STATS_LEVEL
+    STATS = STATS_NUM
     WARNING = logging.WARNING
     ERROR = logging.ERROR
     CRITICAL = logging.CRITICAL
