@@ -74,7 +74,6 @@ class GradientTrainer:
     obs_jitter_var: float
     lat_jitter_var: float
     lat_prs_reg: float
-    # eigen_floor_prs: float
 
     # Strategy
     mask_type: MaskingStrategy
