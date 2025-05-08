@@ -392,6 +392,56 @@ def cluster_accuracy(true_labels: Array, pred_clusters: Array) -> Array:
 
 ### Logging ###
 
+STATS_LEVEL_ARRAY = jnp.array(STATS_LEVEL)
+
+
+def update_stats[M: Manifold](
+    group: str, name: str, stats: Array, metrics: MetricDict
+) -> MetricDict:
+    metrics.update(
+        {
+            f"{group}/{name} Min": (
+                STATS_LEVEL_ARRAY,
+                jnp.min(stats),
+            ),
+            f"{group}/{name} Median": (
+                STATS_LEVEL_ARRAY,
+                jnp.median(stats),
+            ),
+            f"{group}/{name} Max": (
+                STATS_LEVEL_ARRAY,
+                jnp.max(stats),
+            ),
+        }
+    )
+    return metrics
+
+
+def analyze_component(
+    nor_man: FullNormal, nrm_params: Point[Natural, FullNormal]
+) -> Array:
+    nrm_means = nor_man.to_mean(nrm_params)
+    loc, prs = nor_man.split_location_precision(nrm_params)
+    mean, cov = nor_man.split_mean_covariance(nrm_means)
+    dns_prs = nor_man.cov_man.to_dense(prs)
+    dns_cov = nor_man.cov_man.to_dense(cov)
+    loc_nrm = jnp.linalg.norm(loc.array)
+    mean_nrm = jnp.linalg.norm(mean.array)
+    prs_cond = jnp.linalg.cond(dns_prs)
+    cov_cond = jnp.linalg.cond(dns_cov)
+    prs_ldet = jnp.linalg.slogdet(dns_prs)[1]
+    cov_ldet = jnp.linalg.slogdet(dns_cov)[1]
+    return jnp.asarray(
+        [
+            loc_nrm,
+            mean_nrm,
+            prs_cond,
+            cov_cond,
+            prs_ldet,
+            cov_ldet,
+        ]
+    )
+
 
 def pre_log_epoch_metrics[H: LGM](
     dataset: ClusteringDataset,
@@ -433,141 +483,59 @@ def pre_log_epoch_metrics[H: LGM](
             ),
         }
 
-        stats = jnp.array(STATS_LEVEL)
-
-        def update_parameter_stats[M: Manifold](
-            name: str, params: Point[Natural, M]
-        ) -> None:
-            array = params.array
-            metrics.update(
-                {
-                    f"Params/{name} Min": (
-                        stats,
-                        jnp.min(array),
-                    ),
-                    f"Params/{name} Median": (
-                        stats,
-                        jnp.median(array),
-                    ),
-                    f"Params/{name} Max": (
-                        stats,
-                        jnp.max(array),
-                    ),
-                }
-            )
-
-        obs_params, lwr_int_params, lat_params = model.split_params(params)
+        obs_params, int_params, lat_params = model.split_params(params)
         obs_loc_params, obs_prs_params = model.obs_man.split_params(obs_params)
         lat_loc_params, lat_prs_params = model.lat_man.split_params(lat_params)
 
-        update_parameter_stats("Obs Location", obs_loc_params)
-        update_parameter_stats("Obs Precision", obs_prs_params)
-        update_parameter_stats("Obs Interaction", lwr_int_params)
-        update_parameter_stats("Lat Location", lat_loc_params)
-        update_parameter_stats("Lat Precision", lat_prs_params)
+        metrics = update_stats("Params", "Obs Location", obs_loc_params.array, metrics)
+        metrics = update_stats("Params", "Obs Precision", obs_prs_params.array, metrics)
+        metrics = update_stats("Params", "Obs Interaction", int_params.array, metrics)
+        metrics = update_stats("Params", "Lat Location", lat_loc_params.array, metrics)
+        metrics = update_stats("Params", "Lat Precision", lat_prs_params.array, metrics)
 
         # Regularization Metrics
-
-        # Compute latent distribution statistics
-        # Get latent distribution in mean coordinates for analysis
-        lkl_params = model.lkl_man.join_params(obs_params, lwr_int_params)
-        ana_lgm, re_loss, lgm_lat_means = relative_entropy_regularization_full(
-            model, train_data, lkl_params
-        )
-        lat_mean, lat_cov = ana_lgm.lat_man.split_mean_covariance(lgm_lat_means)
-        lat_mean_array = lat_mean.array
-        lat_cov_array = ana_lgm.lat_man.cov_man.to_dense(lat_cov)
 
         # Add latent distribution metrics
         metrics.update(
             {
                 "Regularization/Loading Sparsity": (
-                    stats,
-                    jnp.mean(jnp.abs(lwr_int_params.array) < 1e-6),
-                ),
-                "Regularization/Latent KL to Z": (
-                    stats,
-                    re_loss,
-                ),
-                # Mean vector summary
-                "Regularization/Latent Mean Norm": (
-                    stats,
-                    jnp.linalg.norm(lat_mean_array),
-                ),
-                "Regularization/Latent Mean Min": (
-                    stats,
-                    jnp.min(lat_mean_array),
-                ),
-                "Regularization/Latent Mean Max": (
-                    stats,
-                    jnp.max(lat_mean_array),
-                ),
-                # Variance summary
-                "Regularization/Latent Var Min": (
-                    stats,
-                    jnp.min(jnp.diag(lat_cov_array)),
-                ),
-                "Regularization/Latent Var Max": (
-                    stats,
-                    jnp.max(jnp.diag(lat_cov_array)),
-                ),
-                "Regularization/Latent Var Mean": (
-                    stats,
-                    jnp.mean(jnp.diag(lat_cov_array)),
-                ),
-                # Eigenvalue analysis
-                "Regularization/Latent Eigenvalue Min": (
-                    stats,
-                    jnp.min(jnp.linalg.eigvalsh(lat_cov_array)),
-                ),
-                # Eigenvalue analysis
-                "Regularization/Latent Eigenvalue Median": (
-                    stats,
-                    jnp.median(jnp.linalg.eigvalsh(lat_cov_array)),
-                ),
-                "Regularization/Latent Eigenvalue Max": (
-                    stats,
-                    jnp.max(jnp.linalg.eigvalsh(lat_cov_array)),
-                ),
-                # Structure summary
-                "Regularization/Latent Off-Diag Magnitude": (
-                    stats,
-                    jnp.linalg.norm(
-                        lat_cov_array - jnp.diag(jnp.diag(lat_cov_array)), "fro"
-                    ),
-                ),
-                "Regularization/Latent Condition Number": (
-                    stats,
-                    jnp.linalg.cond(
-                        lat_cov_array + jnp.eye(lat_cov_array.shape[0])
-                    ),  # Small epsilon for stability
-                ),
-                "Regularization/Latent Effective Rank": (
-                    stats,
-                    jnp.sum(jnp.linalg.eigvalsh(lat_cov_array) > 1e-6),
+                    STATS_LEVEL_ARRAY,
+                    jnp.mean(jnp.abs(int_params.array) < 1e-6),
                 ),
             }
         )
 
-        ### Grad Norms ###
+        # Prior statistics
+        means = model.to_mean(params)
 
-        def update_grad_stats[M: Manifold](name: str, grad_norms: Array) -> None:
-            metrics.update(
-                {
-                    f"Grad Norms/{name} Min": (
-                        stats,
-                        jnp.min(grad_norms),
-                    ),
-                    f"Grad Norms/{name} Median": (
-                        stats,
-                        jnp.median(grad_norms),
-                    ),
-                    f"Grad Norms/{name} Max": (
-                        stats,
-                        jnp.max(grad_norms),
-                    ),
-                }
-            )
+        obs_means, lwr_int_means, lat_means = model.split_params(means)
+        obs_mean, obs_cov = model.obs_man.split_mean_covariance(obs_means)
+        lat_mean, lat_cov = model.lat_man.split_mean_covariance(lat_means)
+
+        metrics = update_stats("Means", "Obs Mean", obs_mean.array, metrics)
+        metrics = update_stats("Means", "Obs Cov", obs_cov.array, metrics)
+        metrics = update_stats("Means", "Obs Interaction", lwr_int_means.array, metrics)
+        metrics = update_stats("Means", "Lat Mean", lat_mean.array, metrics)
+        metrics = update_stats("Means", "Lat Cov", lat_cov.array, metrics)
+
+        ### Conjugation Stats ###
+
+        lkl_params = model.lkl_man.join_params(obs_params, int_params)
+        rho = model.conjugation_parameters(lkl_params)
+
+        rho_stats = analyze_component(model.con_lat_man, rho)
+        metrics.update(
+            {
+                "Conjugation/Location Norm": (info, rho_stats[0]),
+                "Conjugation/Mean Norm": (info, rho_stats[1]),
+                "Conjugation/Precision Cond": (info, rho_stats[2]),
+                "Conjugation/Covariance Cond": (info, rho_stats[3]),
+                "Conjugation/Precision LogDet": (info, rho_stats[4]),
+                "Conjugation/Covariance LogDet": (info, rho_stats[5]),
+            }
+        )
+
+        ### Grad Norms ###
 
         def norm_grads(grad: Point[Mean, H]) -> Array:
             obs_grad, lwr_int_grad, lat_grad = model.split_params(grad)
@@ -590,11 +558,17 @@ def pre_log_epoch_metrics[H: LGM](
             batch_man: Replicated[H] = Replicated(model, batch_grads.shape[0])
             grad_norms = batch_man.map(norm_grads, batch_grads).T
 
-            update_grad_stats("Obs Location", grad_norms[0])
-            update_grad_stats("Obs Precision", grad_norms[1])
-            update_grad_stats("Obs Interaction", grad_norms[2])
-            update_grad_stats("Lat Location", grad_norms[3])
-            update_grad_stats("Lat Precision", grad_norms[4])
+            metrics = update_stats("Grad Norms", "Obs Location", grad_norms[0], metrics)
+            metrics = update_stats(
+                "Grad Norms", "Obs Precision", grad_norms[1], metrics
+            )
+            metrics = update_stats(
+                "Grad Norms", "Obs Interaction", grad_norms[2], metrics
+            )
+            metrics = update_stats("Grad Norms", "Lat Location", grad_norms[3], metrics)
+            metrics = update_stats(
+                "Grad Norms", "Lat Precision", grad_norms[4], metrics
+            )
 
         logger.log_metrics(metrics, epoch + 1)
 
@@ -677,163 +651,118 @@ def log_epoch_metrics[H: HMoG](
 
         # Raw Parameter Statistics
 
-        stats = jnp.array(STATS_LEVEL)
-
-        def update_parameter_stats[M: Manifold](
-            name: str, params: Point[Natural, M]
-        ) -> None:
-            array = params.array
-            metrics.update(
-                {
-                    f"Params/{name} Min": (
-                        stats,
-                        jnp.min(array),
-                    ),
-                    f"Params/{name} Median": (
-                        stats,
-                        jnp.median(array),
-                    ),
-                    f"Params/{name} Max": (
-                        stats,
-                        jnp.max(array),
-                    ),
-                }
-            )
-
         obs_params, lwr_int_params, upr_params = model.split_params(params)
         obs_loc_params, obs_prs_params = model.obs_man.split_params(obs_params)
         lat_params, upr_int_params, cat_params = model.upr_hrm.split_params(upr_params)
         lat_loc_params, lat_prs_params = model.upr_hrm.obs_man.split_params(lat_params)
 
-        update_parameter_stats("Obs Location", obs_loc_params)
-        update_parameter_stats("Obs Precision", obs_prs_params)
-        update_parameter_stats("Obs Interaction", lwr_int_params)
-        update_parameter_stats("Lat Location", lat_loc_params)
-        update_parameter_stats("Lat Precision", lat_prs_params)
-        update_parameter_stats("Lat Interaction", upr_int_params)
-        update_parameter_stats("Categorical", cat_params)
-
-        # Regularization Metrics
-
-        # Compute latent distribution statistics
-        # Get latent distribution in mean coordinates for analysis
-        lgm = model.lwr_hrm
-        lkl_params = lgm.lkl_man.join_params(obs_params, lwr_int_params)
-        ana_lgm, re_loss, lgm_lat_means = relative_entropy_regularization_full(
-            lgm, train_data, lkl_params
+        metrics = update_stats("Params", "Obs Location", obs_loc_params.array, metrics)
+        metrics = update_stats("Params", "Obs Precision", obs_prs_params.array, metrics)
+        metrics = update_stats(
+            "Params", "Obs Interaction", lwr_int_params.array, metrics
         )
-        lat_mean, lat_cov = ana_lgm.lat_man.split_mean_covariance(lgm_lat_means)
-        lat_mean_array = lat_mean.array
-        lat_cov_array = ana_lgm.lat_man.cov_man.to_dense(lat_cov)
+        metrics = update_stats("Params", "Lat Location", lat_loc_params.array, metrics)
+        metrics = update_stats("Params", "Lat Precision", lat_prs_params.array, metrics)
+        metrics = update_stats(
+            "Params", "Lat Interaction", upr_int_params.array, metrics
+        )
+        metrics = update_stats("Params", "Categorical", cat_params.array, metrics)
 
         # Add latent distribution metrics
         metrics.update(
             {
                 "Regularization/Loading Sparsity": (
-                    stats,
+                    STATS_LEVEL_ARRAY,
                     jnp.mean(jnp.abs(lwr_int_params.array) < 1e-6),
-                ),
-                "Regularization/Latent KL to Z": (
-                    stats,
-                    re_loss,
-                ),
-                # Mean vector summary
-                "Regularization/Latent Mean Norm": (
-                    stats,
-                    jnp.linalg.norm(lat_mean_array),
-                ),
-                "Regularization/Latent Mean Min": (
-                    stats,
-                    jnp.min(lat_mean_array),
-                ),
-                "Regularization/Latent Mean Max": (
-                    stats,
-                    jnp.max(lat_mean_array),
-                ),
-                # Variance summary
-                "Regularization/Latent Var Min": (
-                    stats,
-                    jnp.min(jnp.diag(lat_cov_array)),
-                ),
-                "Regularization/Latent Var Max": (
-                    stats,
-                    jnp.max(jnp.diag(lat_cov_array)),
-                ),
-                "Regularization/Latent Var Mean": (
-                    stats,
-                    jnp.mean(jnp.diag(lat_cov_array)),
-                ),
-                # Structure summary
-                "Regularization/Latent Off-Diag Magnitude": (
-                    stats,
-                    jnp.linalg.norm(
-                        lat_cov_array - jnp.diag(jnp.diag(lat_cov_array)), "fro"
-                    ),
-                ),
-                "Regularization/Latent Condition Number": (
-                    stats,
-                    jnp.linalg.cond(
-                        lat_cov_array + jnp.eye(lat_cov_array.shape[0])
-                    ),  # Small epsilon for stability
-                ),
-                "Regularization/Latent Effective Rank": (
-                    stats,
-                    jnp.sum(jnp.linalg.eigvalsh(lat_cov_array) > 1e-6),
                 ),
             }
         )
 
-        ### Grad Norms ###
+        ### Lower Harmonium Prior statistics ###
 
-        def update_grad_stats[M: Manifold](name: str, grad_norms: Array) -> None:
-            metrics.update(
-                {
-                    f"Grad Norms/{name} Min": (
-                        stats,
-                        jnp.min(grad_norms),
-                    ),
-                    f"Grad Norms/{name} Median": (
-                        stats,
-                        jnp.median(grad_norms),
-                    ),
-                    f"Grad Norms/{name} Max": (
-                        stats,
-                        jnp.max(grad_norms),
-                    ),
-                }
-            )
+        means = model.to_mean(params)
+
+        obs_means, lwr_int_means, lat_means = model.split_params(means)
+        obs_mean, obs_cov = model.obs_man.split_mean_covariance(obs_means)
+        lat_obs_means, lat_int_means, lat_lat_means = model.lat_man.split_params(
+            lat_means
+        )
+        lat_mean, lat_cov = model.lat_man.obs_man.split_mean_covariance(lat_obs_means)
+
+        metrics = update_stats("Means", "Obs Mean", obs_mean.array, metrics)
+        metrics = update_stats("Means", "Obs Cov", obs_cov.array, metrics)
+        metrics = update_stats("Means", "Obs Interaction", lwr_int_means.array, metrics)
+        metrics = update_stats("Means", "Lat Mean", lat_mean.array, metrics)
+        metrics = update_stats("Means", "Lat Cov", lat_cov.array, metrics)
+        metrics = update_stats("Means", "Lat Interaction", lat_int_means.array, metrics)
+        metrics = update_stats("Means", "Categorical", lat_lat_means.array, metrics)
+
+        ### Conjugation and Latent Mixture statistics ###
+
+        lkl_params, mix_params = model.split_conjugated(params)
+        rho = model.lwr_hrm.conjugation_parameters(lkl_params)
+        cmp_params, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
+
+        rho_stats = analyze_component(model.con_upr_hrm.obs_man, rho)
+        metrics.update(
+            {
+                "Conjugation/Location Norm": (info, rho_stats[0]),
+                "Conjugation/Mean Norm": (info, rho_stats[1]),
+                "Conjugation/Precision Cond": (info, rho_stats[2]),
+                "Conjugation/Covariance Cond": (info, rho_stats[3]),
+                "Conjugation/Precision LogDet": (info, rho_stats[4]),
+                "Conjugation/Covariance LogDet": (info, rho_stats[5]),
+            }
+        )
+
+        cmp_stats = model.con_upr_hrm.cmp_man.map(
+            lambda cmp: analyze_component(model.con_upr_hrm.obs_man, cmp), cmp_params
+        ).T
+
+        metrics = update_stats("Components", "Location Norm", cmp_stats[0], metrics)
+        metrics = update_stats("Components", "Mean Norm", cmp_stats[1], metrics)
+        metrics = update_stats("Components", "Precision Cond", cmp_stats[2], metrics)
+        metrics = update_stats("Components", "Covariance Cond", cmp_stats[3], metrics)
+        metrics = update_stats("Components", "Precision LogDet", cmp_stats[4], metrics)
+        metrics = update_stats("Components", "Covariance LogDet", cmp_stats[5], metrics)
+
+        ### Grad Norms ###
 
         def norm_grads(grad: Point[Mean, H]) -> Array:
             obs_grad, lwr_int_grad, upr_grad = model.split_params(grad)
             obs_loc_grad, obs_prs_grad = model.obs_man.split_params(obs_grad)
             lat_grad, upr_int_grad, cat_grad = model.upr_hrm.split_params(upr_grad)
             lat_loc_grad, lat_prs_grad = model.upr_hrm.obs_man.split_params(lat_grad)
-            return jnp.asarray(
-                [
-                    jnp.linalg.norm(grad.array)
-                    for grad in [
-                        obs_loc_grad,
-                        obs_prs_grad,
-                        lwr_int_grad,
-                        lat_loc_grad,
-                        lat_prs_grad,
-                        upr_int_grad,
-                        cat_grad,
-                    ]
-                ]
-            )
+            grads = [
+                obs_loc_grad,
+                obs_prs_grad,
+                lwr_int_grad,
+                lat_loc_grad,
+                lat_prs_grad,
+                upr_int_grad,
+                cat_grad,
+            ]
+            return jnp.asarray([jnp.linalg.norm(grad.array) for grad in grads])
 
         if batch_grads is not None:
             batch_man: Replicated[H] = Replicated(model, batch_grads.shape[0])
             grad_norms = batch_man.map(norm_grads, batch_grads).T
 
-            update_grad_stats("Obs Location", grad_norms[0])
-            update_grad_stats("Obs Precision", grad_norms[1])
-            update_grad_stats("Obs Interaction", grad_norms[2])
-            update_grad_stats("Lat Location", grad_norms[3])
-            update_grad_stats("Lat Precision", grad_norms[4])
-            update_grad_stats("Lat Interaction", grad_norms[5])
-            update_grad_stats("Categorical", grad_norms[6])
+            metrics = update_stats("Grad Norms", "Obs Location", grad_norms[0], metrics)
+            metrics = update_stats(
+                "Grad Norms", "Obs Precision", grad_norms[1], metrics
+            )
+            metrics = update_stats(
+                "Grad Norms", "Obs Interaction", grad_norms[2], metrics
+            )
+            metrics = update_stats("Grad Norms", "Lat Location", grad_norms[3], metrics)
+            metrics = update_stats(
+                "Grad Norms", "Lat Precision", grad_norms[4], metrics
+            )
+            metrics = update_stats(
+                "Grad Norms", "Lat Interaction", grad_norms[5], metrics
+            )
+            metrics = update_stats("Grad Norms", "Categorical", grad_norms[6], metrics)
 
         logger.log_metrics(metrics, epoch + 1)
 

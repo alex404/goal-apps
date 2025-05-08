@@ -3,11 +3,11 @@ defaults:
   - hmog_diff
   - _self_
 
-latent_dim: 100
-n_clusters: 50
+latent_dim: 20
+n_clusters: 20
 
-lr_init: 1e-4
-lr_final: 1e-5
+lr_init: 3e-4
+lr_final: 1e-4
 num_cycles: 10
 
 pre:
@@ -15,7 +15,7 @@ pre:
   batch_steps: 1000
   l1_reg: 0
   l2_reg: 0
-  grad_clip: 8
+  grad_clip: 1
   min_var: 1e-5
   jitter_var: 0
 
@@ -30,7 +30,7 @@ mix:
 full:
   n_epochs: 100
   batch_steps: 1000
-  grad_clip: 10
+  grad_clip: 1
   min_prob: 1e-4
   obs_min_var: 1e-5
   lat_min_var: 1e-6
