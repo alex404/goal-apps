@@ -56,6 +56,7 @@ class GradientTrainer:
     """Base trainer for gradient-based training of HMoG models."""
 
     # Training hyperparameters
+    lr: float
     n_epochs: int
     batch_size: None | int
     batch_steps: int
@@ -298,7 +299,7 @@ class GradientTrainer:
         dataset: ClusteringDataset,
         model: HMoG,
         logger: JaxLogger,
-        learning_rate: float,
+        learning_rate_scale: float,
         epoch_offset: int,
         params0: Point[Natural, HMoG],
     ) -> Point[Natural, HMoG]:
@@ -314,7 +315,7 @@ class GradientTrainer:
             batch_size = self.batch_size
 
         # Create optimizer
-        optim = optax.adamw(learning_rate=learning_rate)
+        optim = optax.adamw(learning_rate=self.lr * learning_rate_scale)
         optimizer: Optimizer[Natural, HMoG] = Optimizer(optim, model)
 
         if self.grad_clip > 0.0:
@@ -386,6 +387,7 @@ class PreTrainer:
     """Base trainer for gradient-based training of HMoG models."""
 
     # Training hyperparameters
+    lr: float
     n_epochs: int
     batch_size: None | int
     batch_steps: int
@@ -508,7 +510,6 @@ class PreTrainer:
         dataset: ClusteringDataset,
         model: LGM,
         logger: JaxLogger,
-        learning_rate: float,
         epoch_offset: int,
         params0: Point[Natural, LGM],
     ) -> Point[Natural, LGM]:
@@ -524,7 +525,7 @@ class PreTrainer:
             batch_size = self.batch_size
 
         # Create optimizer
-        optim = optax.adamw(learning_rate=learning_rate)
+        optim = optax.adamw(learning_rate=self.lr)
         optimizer: Optimizer[Natural, LGM] = Optimizer(optim, model)
 
         if self.grad_clip > 0.0:

@@ -18,6 +18,7 @@ class PreTrainerConfig:
     """Base configuration for pre-trainers."""
 
     _target_: str = "plugins.models.hmog.trainers.PreTrainer"
+    lr: float = 1e-3
     n_epochs: int = 1000
     batch_size: int | None = None
     batch_steps: int = 1000
@@ -33,6 +34,7 @@ class GradientTrainerConfig:
     """Base configuration for gradient-based trainers."""
 
     _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
+    lr: float = 1e-4
     n_epochs: int = 200
     batch_size: int | None = None
     batch_steps: int = 1000
@@ -99,6 +101,8 @@ class HMoGConfig(ClusteringModelConfig):
     data_dim: int = MISSING
     latent_dim: int = 10
     n_clusters: int = 10
+    lgm_noise_scale: float = 0.01
+    mix_noise_scale: float = 0.01
 
     # Training configuration
     pre: PreTrainerConfig = field(default=MISSING)
@@ -114,8 +118,8 @@ class DifferentiableHMoGConfig(HMoGConfig):
 
     _target_: str = "plugins.models.hmog.experiment.HMoGExperiment"
     num_cycles: int = 10
-    lr_init: float = 3e-4
-    lr_final: float = 3e-5
+    lr_scale_init: float = 0.1
+    lr_scale_final: float = 0.1
     defaults: list[Any] = field(default_factory=lambda: cycle_defaults)
 
 

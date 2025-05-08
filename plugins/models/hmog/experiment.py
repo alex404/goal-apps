@@ -52,9 +52,12 @@ class HMoGExperiment(ClusteringModel, ABC):
     mix: GradientTrainer
     full: GradientTrainer
 
-    lr_init: float
-    lr_final: float
+    lr_scale_init: float
+    lr_scale_final: float
     num_cycles: int
+
+    lgm_noise_scale: float
+    mix_noise_scale: float
 
     analysis: AnalysisArgs
 
@@ -68,9 +71,11 @@ class HMoGExperiment(ClusteringModel, ABC):
         mix: GradientTrainer,
         full: GradientTrainer,
         analysis: AnalysisArgs,
-        lr_init: float,
-        lr_final: float,
+        lr_scale_init: float,
+        lr_scale_final: float,
         num_cycles: int,
+        lgm_noise_scale: float,
+        mix_noise_scale: float,
     ) -> None:
         super().__init__()
 
@@ -91,8 +96,11 @@ class HMoGExperiment(ClusteringModel, ABC):
         log.info(f"Initialized HMoG model with dimension {self.model.dim}.")
 
         self.num_cycles = num_cycles
-        self.lr_init = lr_init
-        self.lr_final = lr_final
+        self.lr_scale_init = lr_scale_init
+        self.lr_scale_final = lr_scale_final
+
+        self.lgm_noise_scale = lgm_noise_scale
+        self.mix_noise_scale = mix_noise_scale
 
     # Properties
 
@@ -129,14 +137,14 @@ class HMoGExperiment(ClusteringModel, ABC):
         obs_params = self.model.obs_man.to_natural(obs_means)
 
         with self.model.upr_hrm as uh:
-            upr_noise_scale = 0.01
-
-            cat_params = uh.lat_man.initialize(key_cat, shape=upr_noise_scale)
+            cat_params = uh.lat_man.initialize(key_cat, shape=self.mix_noise_scale)
             key_comps = jax.random.split(key_comp, self.n_clusters)
-            anchor = uh.obs_man.initialize(key_comps[0], shape=upr_noise_scale)
+            anchor = uh.obs_man.initialize(key_comps[0], shape=self.mix_noise_scale)
 
             component_list = [
-                uh.obs_emb.sub_man.initialize(key_compi, shape=upr_noise_scale).array
+                uh.obs_emb.sub_man.initialize(
+                    key_compi, shape=self.mix_noise_scale
+                ).array
                 for key_compi in key_comps[1:]
             ]
             components = jnp.stack(component_list)
@@ -145,9 +153,7 @@ class HMoGExperiment(ClusteringModel, ABC):
             )
         # mix_params = self.model.upr_hrm.initialize(key_comp, shape=noise_scale)
 
-        lwr_noise_scale = 0.01
-
-        int_noise = lwr_noise_scale * jax.random.normal(
+        int_noise = self.lgm_noise_scale * jax.random.normal(
             key_int, self.model.int_man.shape
         )
         int_params = self.model.int_man.point(
@@ -226,14 +232,13 @@ class HMoGExperiment(ClusteringModel, ABC):
             lgm = self.model.lwr_hrm
             lgm_params = lgm.join_params(obs_params, int_params, lat_obs_params)
             log.info("Pretraining LGM parameters")
-            log.info(f"Learning rate: {self.lr_init:.2e}")
+            log.info(f"Learning rate: {self.pre.lr:.2e}")
             new_lgm_params = self.pre.train(
                 pre_key,
                 handler,
                 dataset,
                 lgm,
                 logger,
-                self.lr_init,
                 epoch,
                 lgm_params,
             )
@@ -248,20 +253,21 @@ class HMoGExperiment(ClusteringModel, ABC):
             )
             epoch += self.pre.n_epochs
 
-        alpha = self.lr_final / self.lr_init
         # cosine lr schedule
-        lr_schedule = optax.cosine_decay_schedule(
-            init_value=self.lr_init,
-            decay_steps=self.num_cycles,
-            alpha=alpha,
+        multiplier_schedule = optax.cosine_onecycle_schedule(
+            transition_steps=self.num_cycles,
+            peak_value=1.0,  # Maximum multiplier value
+            pct_start=0.2,  # 30% of steps for warmup
+            div_factor=1 / self.lr_scale_init,
+            final_div_factor=1 / self.lr_scale_final,
         )
 
         # Cycle between Mixture and LGM training
         for cycle in range(self.num_cycles):
-            current_lr = float(lr_schedule(cycle))
+            current_lr_scale = float(multiplier_schedule(cycle))
             key_lgm, key_mix, key_full = jax.random.split(cycle_keys[cycle], 3)
             log.info("Starting training cycle %d", cycle + 1)
-            log.info(f"Learning rate: {current_lr:.2e}")
+            log.info(f"Learning rate scale: {current_lr_scale:.2e}")
 
             # Train LGM (mixture params fixed)
             if self.lgm.n_epochs > 0:
@@ -274,7 +280,7 @@ class HMoGExperiment(ClusteringModel, ABC):
                     dataset,
                     self.model,
                     logger,
-                    current_lr,
+                    current_lr_scale,
                     epoch,
                     params,
                 )
@@ -282,7 +288,7 @@ class HMoGExperiment(ClusteringModel, ABC):
 
             if self.mix.n_epochs > 0:
                 log.info(
-                    f"Cycle {cycle + 1}/{self.num_cycles}: Training mixture parameters"
+                    f"Cycle {cycle + 1}/{self.num_cycles}: Training MoG parameters"
                 )
                 params = self.mix.train(
                     key_mix,
@@ -290,7 +296,7 @@ class HMoGExperiment(ClusteringModel, ABC):
                     dataset,
                     self.model,
                     logger,
-                    current_lr,
+                    current_lr_scale,
                     epoch,
                     params,
                 )
@@ -304,7 +310,7 @@ class HMoGExperiment(ClusteringModel, ABC):
                     dataset,
                     self.model,
                     logger,
-                    current_lr,
+                    current_lr_scale,
                     epoch,
                     params,
                 )
