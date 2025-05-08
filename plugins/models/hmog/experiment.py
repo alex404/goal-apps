@@ -129,7 +129,7 @@ class HMoGExperiment(ClusteringModel, ABC):
         obs_params = self.model.obs_man.to_natural(obs_means)
 
         with self.model.upr_hrm as uh:
-            upr_noise_scale = 0.0001
+            upr_noise_scale = 0.01
 
             cat_params = uh.lat_man.initialize(key_cat, shape=upr_noise_scale)
             key_comps = jax.random.split(key_comp, self.n_clusters)
@@ -145,7 +145,7 @@ class HMoGExperiment(ClusteringModel, ABC):
             )
         # mix_params = self.model.upr_hrm.initialize(key_comp, shape=noise_scale)
 
-        lwr_noise_scale = 0.0001
+        lwr_noise_scale = 0.01
 
         int_noise = lwr_noise_scale * jax.random.normal(
             key_int, self.model.int_man.shape
@@ -246,6 +246,7 @@ class HMoGExperiment(ClusteringModel, ABC):
             params = self.model.join_params(
                 new_obs_params, new_int_params, new_lat_params
             )
+            epoch += self.pre.n_epochs
 
         alpha = self.lr_final / self.lr_init
         # cosine lr schedule

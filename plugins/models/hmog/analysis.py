@@ -419,15 +419,15 @@ def pre_log_epoch_metrics[H: LGM](
         info = jnp.array(logging.INFO)
 
         metrics: MetricDict = {
-            "Performance/Train Log-Likelihood": (
+            "Log-Likelihood/Train": (
                 info,
                 epoch_train_ll,
             ),
-            "Performance/Test Log-Likelihood": (
+            "Log-Likelihood/Test": (
                 info,
                 epoch_test_ll,
             ),
-            "Performance/Scaled BIC": (
+            "Log-Likelihood/Scaled BIC": (
                 info,
                 epoch_scaled_bic,
             ),
@@ -630,15 +630,15 @@ def log_epoch_metrics[H: HMoG](
         info = jnp.array(logging.INFO)
 
         metrics: MetricDict = {
-            "Performance/Train Log-Likelihood": (
+            "Log-Likelihood/Train": (
                 info,
                 epoch_train_ll,
             ),
-            "Performance/Test Log-Likelihood": (
+            "Log-Likelihood/Test": (
                 info,
                 epoch_test_ll,
             ),
-            "Performance/Scaled BIC": (
+            "Log-Likelihood/Scaled BIC": (
                 info,
                 epoch_scaled_bic,
             ),
@@ -762,20 +762,6 @@ def log_epoch_metrics[H: HMoG](
                 "Regularization/Latent Var Mean": (
                     stats,
                     jnp.mean(jnp.diag(lat_cov_array)),
-                ),
-                # Eigenvalue analysis
-                "Regularization/Latent Eigenvalue Min": (
-                    stats,
-                    jnp.min(jnp.linalg.eigvalsh(lat_cov_array)),
-                ),
-                # Eigenvalue analysis
-                "Regularization/Latent Eigenvalue Median": (
-                    stats,
-                    jnp.median(jnp.linalg.eigvalsh(lat_cov_array)),
-                ),
-                "Regularization/Latent Eigenvalue Max": (
-                    stats,
-                    jnp.max(jnp.linalg.eigvalsh(lat_cov_array)),
                 ),
                 # Structure summary
                 "Regularization/Latent Off-Diag Magnitude": (
