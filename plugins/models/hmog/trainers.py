@@ -20,6 +20,7 @@ from goal.geometry import (
 )
 from goal.models import (
     DiagonalNormal,
+    FullNormal,
     Normal,
 )
 from jax import Array
@@ -72,7 +73,8 @@ class GradientTrainer:
     lat_min_var: float
     obs_jitter_var: float
     lat_jitter_var: float
-    eigen_floor_prs: float
+    lat_prs_reg: float
+    # eigen_floor_prs: float
 
     # Strategy
     mask_type: MaskingStrategy
@@ -165,6 +167,46 @@ class GradientTrainer:
         pd_mix_params = model.upr_hrm.join_natural_mixture(pd_cmp_params, prob_params)
         return model.join_params(obs_params, int_params, pd_mix_params)
 
+    def component_precision_regularizer(
+        self, model: HMoG, params: Point[Natural, HMoG]
+    ) -> Array:
+        """Compute regularization based on log-determinant of precision matrices.
+
+        This regularization encourages components to have well-conditioned
+        precision matrices by penalizing small determinants. This improves
+        numerical stability and can prevent degenerate solutions.
+
+        Args:
+            model: HMoG model
+            params: Model parameters
+
+        Returns:
+            Regularization term (negative sum of log-determinants)
+        """
+        # Split parameters to get component parameters
+        _, mix_params = model.split_conjugated(params)
+        cmp_params, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
+
+        # Function to compute log-det of precision matrix for a component
+        def compute_logdet(
+            nor_params: Point[Natural, FullNormal],
+        ) -> Array:
+            with model.con_upr_hrm as cuh:
+                # Translate to conjugated representation
+                # Extract precision matrix and compute log-determinant
+                prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
+                prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
+                logdet = jnp.linalg.slogdet(prs_dense)[1]
+
+            return logdet
+
+        # Apply function to all components and sum the results
+        logdets = model.con_upr_hrm.cmp_man.map(compute_logdet, cmp_params)
+
+        # Return negative-scaled sum since we want to maximize log-determinants
+        # (which corresponds to well-conditioned precision matrices)
+        return self.lat_prs_reg * jnp.sum(logdets)
+
     def make_regularizer(self, model: HMoG) -> Callable[[Point[Natural, HMoG]], Array]:
         """Create a universal loss function for any HMoG model."""
 
@@ -180,7 +222,10 @@ class GradientTrainer:
             # L2 regularization on all parameters
             l2_loss = self.l2_reg * jnp.sum(jnp.square(params.array))
 
-            return l1_loss + l2_loss
+            # Component precision regularization
+            det_loss = self.component_precision_regularizer(model, params)
+
+            return l1_loss + l2_loss + det_loss
 
         return loss_fn
 
@@ -358,10 +403,10 @@ class GradientTrainer:
             batch_man = Replicated(model, grads_array.shape[0])
             batch_grads = batch_man.point(grads_array)
 
-            if self.eigen_floor_prs > 0.0:
-                new_params = self.ensure_positive_definite_components(
-                    model, new_params, eigen_floor_prs=self.eigen_floor_prs
-                )
+            # if self.eigen_floor_prs > 0.0:
+            #     new_params = self.ensure_positive_definite_components(
+            #         model, new_params, eigen_floor_prs=self.eigen_floor_prs
+            #     )
 
             # Log metrics
             log_epoch_metrics(
