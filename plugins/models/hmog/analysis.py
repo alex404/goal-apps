@@ -27,7 +27,7 @@ from goal.models import (
 from jax import Array
 from numpy.typing import NDArray
 
-from apps.configs import STATS_LEVEL
+from apps.configs import STATS_NUM
 from apps.plugins import (
     ClusteringDataset,
 )
@@ -392,7 +392,8 @@ def cluster_accuracy(true_labels: Array, pred_clusters: Array) -> Array:
 
 ### Logging ###
 
-STATS_LEVEL_ARRAY = jnp.array(STATS_LEVEL)
+STATS_LEVEL = jnp.array(STATS_NUM)
+INFO_LEVEL = jnp.array(logging.INFO)
 
 
 def update_stats[M: Manifold](
@@ -401,15 +402,15 @@ def update_stats[M: Manifold](
     metrics.update(
         {
             f"{group}/{name} Min": (
-                STATS_LEVEL_ARRAY,
+                STATS_LEVEL,
                 jnp.min(stats),
             ),
             f"{group}/{name} Median": (
-                STATS_LEVEL_ARRAY,
+                STATS_LEVEL,
                 jnp.median(stats),
             ),
             f"{group}/{name} Max": (
-                STATS_LEVEL_ARRAY,
+                STATS_LEVEL,
                 jnp.max(stats),
             ),
         }
@@ -466,19 +467,18 @@ def pre_log_epoch_metrics[H: LGM](
         epoch_scaled_bic = (
             -(model.dim * jnp.log(n_samps) / n_samps - 2 * epoch_train_ll) / 2
         )
-        info = jnp.array(logging.INFO)
 
         metrics: MetricDict = {
             "Log-Likelihood/Train": (
-                info,
+                INFO_LEVEL,
                 epoch_train_ll,
             ),
             "Log-Likelihood/Test": (
-                info,
+                INFO_LEVEL,
                 epoch_test_ll,
             ),
             "Log-Likelihood/Scaled BIC": (
-                info,
+                INFO_LEVEL,
                 epoch_scaled_bic,
             ),
         }
@@ -499,7 +499,7 @@ def pre_log_epoch_metrics[H: LGM](
         metrics.update(
             {
                 "Regularization/Loading Sparsity": (
-                    STATS_LEVEL_ARRAY,
+                    STATS_LEVEL,
                     jnp.mean(jnp.abs(int_params.array) < 1e-6),
                 ),
             }
@@ -526,12 +526,12 @@ def pre_log_epoch_metrics[H: LGM](
         rho_stats = analyze_component(model.con_lat_man, rho)
         metrics.update(
             {
-                "Conjugation/Location Norm": (info, rho_stats[0]),
-                "Conjugation/Mean Norm": (info, rho_stats[1]),
-                "Conjugation/Precision Cond": (info, rho_stats[2]),
-                "Conjugation/Covariance Cond": (info, rho_stats[3]),
-                "Conjugation/Precision LogDet": (info, rho_stats[4]),
-                "Conjugation/Covariance LogDet": (info, rho_stats[5]),
+                "Conjugation/Location Norm": (STATS_LEVEL, rho_stats[0]),
+                "Conjugation/Mean Norm": (STATS_LEVEL, rho_stats[1]),
+                "Conjugation/Precision Cond": (STATS_LEVEL, rho_stats[2]),
+                "Conjugation/Covariance Cond": (STATS_LEVEL, rho_stats[3]),
+                "Conjugation/Precision LogDet": (STATS_LEVEL, rho_stats[4]),
+                "Conjugation/Covariance LogDet": (STATS_LEVEL, rho_stats[5]),
             }
         )
 
@@ -601,19 +601,17 @@ def log_epoch_metrics[H: HMoG](
         epoch_scaled_bic = (
             -(model.dim * jnp.log(n_samps) / n_samps - 2 * epoch_train_ll) / 2
         )
-        info = jnp.array(logging.INFO)
-
         metrics: MetricDict = {
             "Log-Likelihood/Train": (
-                info,
+                INFO_LEVEL,
                 epoch_train_ll,
             ),
             "Log-Likelihood/Test": (
-                info,
+                INFO_LEVEL,
                 epoch_test_ll,
             ),
             "Log-Likelihood/Scaled BIC": (
-                info,
+                INFO_LEVEL,
                 epoch_scaled_bic,
             ),
         }
@@ -642,10 +640,10 @@ def log_epoch_metrics[H: HMoG](
             # Add to metrics dictionary
             metrics.update(
                 {
-                    "Clustering/Train Accuracy": (info, train_acc),
-                    "Clustering/Test Accuracy": (info, test_acc),
-                    "Clustering/Train NMI": (info, train_nmi),
-                    "Clustering/Test NMI": (info, test_nmi),
+                    "Clustering/Train Accuracy": (INFO_LEVEL, train_acc),
+                    "Clustering/Test Accuracy": (INFO_LEVEL, test_acc),
+                    "Clustering/Train NMI": (INFO_LEVEL, train_nmi),
+                    "Clustering/Test NMI": (INFO_LEVEL, test_nmi),
                 }
             )
 
@@ -672,7 +670,7 @@ def log_epoch_metrics[H: HMoG](
         metrics.update(
             {
                 "Regularization/Loading Sparsity": (
-                    STATS_LEVEL_ARRAY,
+                    STATS_LEVEL,
                     jnp.mean(jnp.abs(lwr_int_params.array) < 1e-6),
                 ),
             }
@@ -706,12 +704,12 @@ def log_epoch_metrics[H: HMoG](
         rho_stats = analyze_component(model.con_upr_hrm.obs_man, rho)
         metrics.update(
             {
-                "Conjugation/Location Norm": (info, rho_stats[0]),
-                "Conjugation/Mean Norm": (info, rho_stats[1]),
-                "Conjugation/Precision Cond": (info, rho_stats[2]),
-                "Conjugation/Covariance Cond": (info, rho_stats[3]),
-                "Conjugation/Precision LogDet": (info, rho_stats[4]),
-                "Conjugation/Covariance LogDet": (info, rho_stats[5]),
+                "Conjugation/Location Norm": (STATS_LEVEL, rho_stats[0]),
+                "Conjugation/Mean Norm": (STATS_LEVEL, rho_stats[1]),
+                "Conjugation/Precision Cond": (STATS_LEVEL, rho_stats[2]),
+                "Conjugation/Covariance Cond": (STATS_LEVEL, rho_stats[3]),
+                "Conjugation/Precision LogDet": (STATS_LEVEL, rho_stats[4]),
+                "Conjugation/Covariance LogDet": (STATS_LEVEL, rho_stats[5]),
             }
         )
 
