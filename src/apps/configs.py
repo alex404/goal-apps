@@ -32,6 +32,7 @@ class RunConfig:
     device: str
     jit: bool
     use_local: bool
+    repeat: int
     use_wandb: bool
     log_level: LogLevel
     project: str
