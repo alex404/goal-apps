@@ -1,0 +1,42 @@
+# Neural traces experiment configuration
+defaults:
+  - hmog_diff
+  - _self_
+
+latent_dim: 20
+n_clusters: 20
+
+lr_scale_init: 1
+lr_scale_final: 1
+num_cycles: 1
+
+pre:
+  lr: 1e-4
+  n_epochs: 2000
+  batch_steps: 1000
+  l1_reg: 0
+  l2_reg: 0
+  grad_clip: 1
+  min_var: 1e-5
+  jitter_var: 0
+
+
+
+lgm:
+  n_epochs: 0
+
+mix:
+  lr: 1e-4
+  n_epochs: 400
+  batch_steps: 1000
+  grad_clip: 1
+  min_prob: 1e-4
+  obs_min_var: 1e-5
+  lat_min_var: 1e-6
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 1e-3
+  l1_reg: 0
+  l2_reg: 0
+
+full:
+  n_epochs: 0
