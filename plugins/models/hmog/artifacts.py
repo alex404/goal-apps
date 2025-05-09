@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, override
 
+import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
@@ -46,6 +47,89 @@ class AnalysisArgs:
 
     from_scratch: bool
     epoch: int | None
+
+
+### Generative Examples ###
+
+
+@dataclass(frozen=True)
+class GenerativeExamples(Artifact):
+    """Collection of generated samples from the model."""
+
+    samples: Array  # Array of shape (n_samples, data_dim)
+
+    @override
+    def save_to_hdf5(self, file: File) -> None:
+        """Save generated samples to HDF5 file."""
+        file.create_dataset("samples", data=np.array(self.samples))
+
+    @classmethod
+    @override
+    def load_from_hdf5(cls, file: File) -> GenerativeExamples:
+        """Load generated samples from HDF5 file."""
+        samples = jnp.array(file["samples"][()])
+        return cls(samples=samples)
+
+
+def generate_examples[M: HMoG](
+    model: M,
+    params: Point[Natural, M],
+    n_samples: int,
+    key: Array,
+) -> GenerativeExamples:
+    """Generate sample examples from the model.
+
+    Args:
+        model: HMoG model
+        params: Model parameters
+        n_samples: Number of samples to generate
+        key: Random key for sampling
+
+    Returns:
+        Collection of generated samples
+    """
+    samples = model.observable_sample(key, params, n_samples)
+    return GenerativeExamples(samples=samples)
+
+
+def generative_examples_plotter(
+    dataset: ClusteringDataset,
+) -> Callable[[GenerativeExamples], Figure]:
+    """Create a grid of generated samples visualizations."""
+
+    def plot_generative_examples(examples: GenerativeExamples) -> Figure:
+        n_samples = min(
+            36, examples.samples.shape[0]
+        )  # Limit to 36 samples for display
+
+        # Calculate grid dimensions (approximate square grid)
+        grid_size = int(np.ceil(np.sqrt(n_samples)))
+        height, width = dataset.observable_shape
+
+        # Scale figure size based on observable shape
+        fig_width = 2 * grid_size * (width / max(height, width))
+        fig_height = 2 * grid_size * (height / max(height, width))
+
+        # Create figure with subplots
+        fig, axes = plt.subplots(
+            grid_size, grid_size, figsize=(fig_width, fig_height), squeeze=False
+        )
+
+        # Plot each sample
+        for i in range(grid_size):
+            for j in range(grid_size):
+                idx = i * grid_size + j
+                ax = axes[i, j]
+                if idx < n_samples:
+                    dataset.paint_observable(examples.samples[idx], ax)
+                else:
+                    ax.axis("off")  # Hide empty plots
+
+        plt.suptitle("Generated Samples from HMoG Model", fontsize=14)
+        plt.tight_layout()
+        return fig
+
+    return plot_generative_examples
 
 
 ### ClusterCollection ###
@@ -609,6 +693,7 @@ def log_artifacts[M: HMoG](
     model: M,
     epoch: int,
     params: Point[Natural, M] | None = None,
+    key: Array | None = None,
 ) -> None:
     """Generate and save plots from artifacts.
 
@@ -620,6 +705,10 @@ def log_artifacts[M: HMoG](
         params: If provided, generate new artifacts from these parameters
         epoch: Specific epoch to analyze, defaults to latest
     """
+
+    if key is None:
+        key = jax.random.PRNGKey(42)
+
     # from_scratch if params is provided
     if params is not None:
         handler.save_params(epoch, params.array)
@@ -637,6 +726,7 @@ def log_artifacts[M: HMoG](
         op_merge_results = get_merge_results(
             model, params, dataset, OptimalMergeResults
         )
+        gen_examples = generate_examples(model, params, 25, key)
     else:
         cluster_statistics = handler.load_artifact(epoch, ClusterStatistics)
         kl_hierarchy = handler.load_artifact(epoch, KLClusterHierarchy)
@@ -644,11 +734,13 @@ def log_artifacts[M: HMoG](
         kl_merge_results = handler.load_artifact(epoch, KLMergeResults)
         co_merge_results = handler.load_artifact(epoch, CoAssignmentMergeResults)
         op_merge_results = handler.load_artifact(epoch, OptimalMergeResults)
+        gen_examples = handler.load_artifact(epoch, GenerativeExamples)
 
     # Plot and save
     plot_clusters_statistics = cluster_statistics_plotter(dataset)
     plot_hierarchy = hierarchy_plotter(dataset)
     plot_merge_results = merge_results_plotter(dataset)
+    plot_examples = generative_examples_plotter(dataset)
 
     logger.log_artifact(handler, epoch, cluster_statistics, plot_clusters_statistics)
     logger.log_artifact(handler, epoch, kl_hierarchy, plot_hierarchy)
@@ -656,3 +748,4 @@ def log_artifacts[M: HMoG](
     logger.log_artifact(handler, epoch, kl_merge_results, plot_merge_results)
     logger.log_artifact(handler, epoch, co_merge_results, plot_merge_results)
     logger.log_artifact(handler, epoch, op_merge_results, plot_merge_results)
+    logger.log_artifact(handler, epoch, gen_examples, plot_examples)
