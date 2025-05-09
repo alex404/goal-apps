@@ -19,7 +19,6 @@ from goal.geometry import (
     Replicated,
 )
 from goal.models import (
-    DiagonalNormal,
     FullNormal,
     Normal,
 )
@@ -73,7 +72,8 @@ class GradientTrainer:
     lat_min_var: float
     obs_jitter_var: float
     lat_jitter_var: float
-    lat_prs_reg: float
+    upr_prs_reg: float
+    lwr_prs_reg: float
 
     # Strategy
     mask_type: MaskingStrategy
@@ -122,51 +122,7 @@ class GradientTrainer:
         # Rejoin all parameters
         return model.join_params(bounded_obs_means, int_means, bounded_lat_means)
 
-    def ensure_positive_definite_components(
-        self,
-        model: HMoG,
-        params: Point[Natural, HMoG],
-        eigen_floor_prs: float,
-    ) -> Point[Natural, HMoG]:
-        """
-        Ensure the precision matrices of the latent components are positive definite.
-        """
-        obs_params, int_params, mix_params = model.split_params(params)
-        lkl_params = model.lwr_hrm.lkl_man.join_params(obs_params, int_params)
-        rho = model.lwr_hrm.conjugation_parameters(lkl_params)
-        cmp_params, prob_params = model.upr_hrm.split_natural_mixture(mix_params)
-
-        def ensure_positive_definite(
-            dia_params: Point[Natural, DiagonalNormal],
-        ) -> Point[Natural, DiagonalNormal]:
-            with model.con_upr_hrm as cuh:
-                con_cmp_params = cuh.obs_emb.translate(rho, dia_params)
-
-                prs_params = cuh.obs_man.split_location_precision(con_cmp_params)[1]
-                prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
-                eigenvalues, eigenvectors = jnp.linalg.eigh(prs_dense)
-
-            min_eig = jnp.min(eigenvalues)
-
-            with model.upr_hrm as uh:
-                diag_shift = jnp.maximum(eigen_floor_prs - min_eig, 0)
-                shift_array = jnp.full(uh.obs_man.cov_man.dim, diag_shift)
-                shift_point = uh.obs_man.cov_man.natural_point(shift_array)
-
-                loc_params, prs_params = uh.obs_man.split_location_precision(dia_params)
-                shifted_dia_params = prs_params + shift_point
-                return uh.obs_man.join_location_precision(
-                    loc_params, shifted_dia_params
-                )
-
-        # Apply the function to all components
-        pd_cmp_params = model.upr_hrm.cmp_man.man_map(
-            ensure_positive_definite, cmp_params
-        )
-        pd_mix_params = model.upr_hrm.join_natural_mixture(pd_cmp_params, prob_params)
-        return model.join_params(obs_params, int_params, pd_mix_params)
-
-    def component_precision_regularizer(
+    def upper_precision_regularizer(
         self, model: HMoG, params: Point[Natural, HMoG]
     ) -> Array:
         """Compute regularization based on log-determinant of precision matrices.
@@ -195,16 +151,52 @@ class GradientTrainer:
                 # Extract precision matrix and compute log-determinant
                 prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
                 prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
-                logdet = jnp.linalg.slogdet(prs_dense)[1]
-
-            return logdet
+                return jnp.trace(prs_dense)
 
         # Apply function to all components and sum the results
         logdets = model.con_upr_hrm.cmp_man.map(compute_logdet, cmp_params)
 
         # Return negative-scaled sum since we want to maximize log-determinants
         # (which corresponds to well-conditioned precision matrices)
-        return self.lat_prs_reg * jnp.sum(logdets)
+        return self.upr_prs_reg * jnp.sum(logdets)
+
+    def lower_precision_regularizer(
+        self, model: HMoG, params: Point[Natural, HMoG]
+    ) -> Array:
+        """Compute regularization based on log-determinant of precision matrices.
+
+        This regularization encourages components to have well-conditioned
+        precision matrices by penalizing small determinants. This improves
+        numerical stability and can prevent degenerate solutions.
+
+        Args:
+            model: HMoG model
+            params: Model parameters
+
+        Returns:
+            Regularization term (negative sum of log-determinants)
+        """
+        # Split parameters to get component parameters
+        _, mix_params = model.split_conjugated(params)
+        cmp_params, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
+
+        # Function to compute log-det of precision matrix for a component
+        def compute_logdet(
+            nor_params: Point[Natural, FullNormal],
+        ) -> Array:
+            with model.con_upr_hrm as cuh:
+                # Translate to conjugated representation
+                # Extract precision matrix and compute log-determinant
+                prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
+                prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
+                return -jnp.linalg.slogdet(prs_dense)[1]
+
+        # Apply function to all components and sum the results
+        logdets = model.con_upr_hrm.cmp_man.map(compute_logdet, cmp_params)
+
+        # Return negative-scaled sum since we want to maximize log-determinants
+        # (which corresponds to well-conditioned precision matrices)
+        return self.lwr_prs_reg * jnp.sum(logdets)
 
     def make_regularizer(self, model: HMoG) -> Callable[[Point[Natural, HMoG]], Array]:
         """Create a universal loss function for any HMoG model."""
@@ -222,9 +214,10 @@ class GradientTrainer:
             l2_loss = self.l2_reg * jnp.sum(jnp.square(params.array))
 
             # Component precision regularization
-            det_loss = self.component_precision_regularizer(model, params)
+            lwr_loss = self.lower_precision_regularizer(model, params)
+            upr_loss = self.upper_precision_regularizer(model, params)
 
-            return l1_loss + l2_loss + det_loss
+            return l1_loss + l2_loss + lwr_loss + upr_loss
 
         return loss_fn
 
@@ -243,8 +236,8 @@ class GradientTrainer:
             # Only update mixture parameters (lat_params)
             def mask_fn(grad: Point[Mean, HMoG]) -> Point[Mean, HMoG]:
                 obs_grad, int_grad, lat_grad = model.split_params(grad)
-                zero_obs_grad = model.obs_man.point(jnp.zeros_like(obs_grad.array))
-                zero_int_grad = model.int_man.point(jnp.zeros_like(int_grad.array))
+                zero_obs_grad = model.obs_man.zeros()
+                zero_int_grad = model.int_man.zeros()
                 return model.join_params(zero_obs_grad, zero_int_grad, lat_grad)
 
         else:
@@ -305,6 +298,8 @@ class GradientTrainer:
                 new_opt_state, new_params = optimizer.update(
                     current_opt_state, masked_grad, current_params
                 )
+
+                # new_params = self.reset_non_pd(model, new_params)
 
                 # Monitor parameters for debugging
                 logger.monitor_params(
@@ -401,11 +396,6 @@ class GradientTrainer:
             # Create batch gradients for logging
             batch_man = Replicated(model, grads_array.shape[0])
             batch_grads = batch_man.point(grads_array)
-
-            # if self.eigen_floor_prs > 0.0:
-            #     new_params = self.ensure_positive_definite_components(
-            #         model, new_params, eigen_floor_prs=self.eigen_floor_prs
-            #     )
 
             # Log metrics
             log_epoch_metrics(
@@ -629,3 +619,125 @@ class PreTrainer:
         (_, params_final, _) = fori(0, n_epochs, epoch_step, (opt_state, params0, key))
 
         return params_final
+
+
+### Graveyard ###
+
+
+# def reset_latent_anchor(
+#     model: HMoG, params: Point[Natural, HMoG]
+# ) -> Point[Natural, HMoG]:
+#     """Compute regularization based on log-determinant of precision matrices.
+#
+#     This regularization encourages components to have well-conditioned
+#     precision matrices by penalizing small determinants. This improves
+#     numerical stability and can prevent degenerate solutions.
+#
+#     Args:
+#         model: HMoG model
+#         params: Model parameters
+#
+#     Returns:
+#         Regularization term (negative sum of log-determinants)
+#     """
+#     # Split parameters to get component parameters
+#     obs_params, int_params, lat_params = model.split_params(params)
+#     with model.upr_hrm as uh:
+#         lat_lat_params, lat_int_params, lat_cat_params = uh.split_params(lat_params)
+#         z = uh.obs_man.to_natural(uh.obs_man.standard_normal())
+#         diff = lat_lat_params - z
+#         lat_params = uh.join_params(2 * z - diff, lat_int_params, lat_cat_params)
+#         cmp_params, prob_params = uh.split_natural_mixture(lat_params)
+#         cmp_params = uh.cmp_man.man_map(lambda x: x + diff, cmp_params)
+#         lat_params = uh.join_natural_mixture(cmp_params, prob_params)
+#
+#     return model.join_params(obs_params, int_params, lat_params)
+
+
+# def ensure_positive_definite_components(
+#     self,
+#     model: HMoG,
+#     params: Point[Natural, HMoG],
+#     eigen_floor_prs: float,
+# ) -> Point[Natural, HMoG]:
+#     """
+#     Ensure the precision matrices of the latent components are positive definite.
+#     """
+#     obs_params, int_params, mix_params = model.split_params(params)
+#     lkl_params = model.lwr_hrm.lkl_man.join_params(obs_params, int_params)
+#     rho = model.lwr_hrm.conjugation_parameters(lkl_params)
+#     cmp_params, prob_params = model.upr_hrm.split_natural_mixture(mix_params)
+#
+#     def ensure_positive_definite(
+#         dia_params: Point[Natural, DiagonalNormal],
+#     ) -> Point[Natural, DiagonalNormal]:
+#         with model.con_upr_hrm as cuh:
+#             con_cmp_params = cuh.obs_emb.translate(rho, dia_params)
+#
+#             prs_params = cuh.obs_man.split_location_precision(con_cmp_params)[1]
+#             prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
+#             eigenvalues, eigenvectors = jnp.linalg.eigh(prs_dense)
+#
+#         min_eig = jnp.min(eigenvalues)
+#
+#         with model.upr_hrm as uh:
+#             diag_shift = jnp.maximum(eigen_floor_prs - min_eig, 0)
+#             shift_array = jnp.full(uh.obs_man.cov_man.dim, diag_shift)
+#             shift_point = uh.obs_man.cov_man.natural_point(shift_array)
+#
+#             loc_params, prs_params = uh.obs_man.split_location_precision(dia_params)
+#             shifted_dia_params = prs_params + shift_point
+#             return uh.obs_man.join_location_precision(
+#                 loc_params, shifted_dia_params
+#             )
+#
+#     # Apply the function to all components
+#     pd_cmp_params = model.upr_hrm.cmp_man.man_map(
+#         ensure_positive_definite, cmp_params
+#     )
+#     pd_mix_params = model.upr_hrm.join_natural_mixture(pd_cmp_params, prob_params)
+#     return model.join_params(obs_params, int_params, pd_mix_params)
+
+# def reset_non_pd(
+#     self, model: HMoG, params: Point[Natural, HMoG]
+# ) -> Point[Natural, HMoG]:
+#     # Split parameters to get component parameters
+#     obs_params, int_params, mix_params = model.split_params(params)
+#     lkl_params = model.lwr_hrm.lkl_man.join_params(obs_params, int_params)
+#     rho = model.lwr_hrm.conjugation_parameters(lkl_params)
+#     cmp_params, prob_params = model.upr_hrm.split_natural_mixture(mix_params)
+#
+#     # Function to check if a component's precision matrix is PD
+#     def is_component_pd(
+#         dia_params: Point[Natural, DiagonalNormal],
+#     ) -> Array:
+#         with model.con_upr_hrm as cuh:
+#             con_cmp_params = cuh.obs_emb.translate(rho, dia_params)
+#             prs_params = cuh.obs_man.split_location_precision(con_cmp_params)[1]
+#             dns_prs = cuh.obs_man.cov_man.to_dense(prs_params)
+#             cond_num = jnp.linalg.cond(dns_prs)
+#             return (
+#                 cuh.obs_man.cov_man.is_positive_definite(prs_params)
+#                 and cond_num < 1000
+#             )
+#
+#     # Function to reset component if needed
+#     def maybe_reset_component(
+#         dia_params: Point[Natural, DiagonalNormal],
+#     ) -> Point[Natural, DiagonalNormal]:
+#         # Create standard normal params
+#         with model.upr_hrm as uh:
+#             z = uh.obs_man.to_natural(uh.obs_man.standard_normal())
+#
+#         return jax.lax.cond(
+#             is_component_pd(dia_params), lambda _: dia_params, lambda _: z, None
+#         )
+#
+#     # Map the reset function over all components
+#     new_cmp_params = model.upr_hrm.cmp_man.man_map(
+#         maybe_reset_component, cmp_params
+#     )
+#
+#     # Create new parameters with the updated components
+#     new_mix_params = model.upr_hrm.join_natural_mixture(new_cmp_params, prob_params)
+#     return model.join_params(obs_params, int_params, new_mix_params)

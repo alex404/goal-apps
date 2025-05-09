@@ -7,7 +7,6 @@ from abc import ABC
 from typing import override
 
 import jax
-import jax.numpy as jnp
 import optax
 from goal.geometry import (
     Diagonal,
@@ -136,22 +135,22 @@ class HMoGExperiment(ClusteringModel, ABC):
         )
         obs_params = self.model.obs_man.to_natural(obs_means)
 
-        with self.model.upr_hrm as uh:
-            cat_params = uh.lat_man.initialize(key_cat, shape=self.mix_noise_scale)
-            key_comps = jax.random.split(key_comp, self.n_clusters)
-            anchor = uh.obs_man.initialize(key_comps[0], shape=self.mix_noise_scale)
-
-            component_list = [
-                uh.obs_emb.sub_man.initialize(
-                    key_compi, shape=self.mix_noise_scale
-                ).array
-                for key_compi in key_comps[1:]
-            ]
-            components = jnp.stack(component_list)
-            mix_params = uh.join_params(
-                anchor, uh.int_man.point(components), cat_params
-            )
-        # mix_params = self.model.upr_hrm.initialize(key_comp, shape=noise_scale)
+        # with self.model.upr_hrm as uh:
+        #     cat_params = uh.lat_man.initialize(key_cat, shape=self.mix_noise_scale)
+        #     key_comps = jax.random.split(key_comp, self.n_clusters)
+        #     anchor = uh.obs_man.initialize(key_comps[0], shape=self.mix_noise_scale)
+        #
+        #     component_list = [
+        #         uh.obs_emb.sub_man.initialize(
+        #             key_compi, shape=self.mix_noise_scale
+        #         ).array
+        #         for key_compi in key_comps[1:]
+        #     ]
+        #     components = jnp.stack(component_list)
+        #     mix_params = uh.join_params(
+        #         anchor, uh.int_man.point(components), cat_params
+        #     )
+        mix_params = self.model.upr_hrm.initialize(key_comp, shape=self.mix_noise_scale)
 
         int_noise = self.lgm_noise_scale * jax.random.normal(
             key_int, self.model.int_man.shape
