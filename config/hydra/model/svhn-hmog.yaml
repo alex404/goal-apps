@@ -3,8 +3,8 @@ defaults:
   - hmog_diff
   - _self_
 
-latent_dim: 20
-n_clusters: 20
+latent_dim: 40
+n_clusters: 40
 
 lr_scale_init: 1
 lr_scale_final: 1
