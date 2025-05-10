@@ -711,7 +711,7 @@ def log_artifacts[M: HMoG](
 
     # from_scratch if params is provided
     if params is not None:
-        handler.save_params(epoch, params.array)
+        handler.save_params(params.array, epoch)
         cluster_statistics = get_cluster_statistics(model, dataset, params)
         kl_hierarchy = get_cluster_hierarchy(
             model, params, KLClusterHierarchy, dataset.train_data

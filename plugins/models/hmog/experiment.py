@@ -58,6 +58,8 @@ class HMoGExperiment(ClusteringModel, ABC):
     lgm_noise_scale: float
     mix_noise_scale: float
 
+    pretrain: bool
+
     analysis: AnalysisArgs
 
     def __init__(
@@ -75,6 +77,7 @@ class HMoGExperiment(ClusteringModel, ABC):
         num_cycles: int,
         lgm_noise_scale: float,
         mix_noise_scale: float,
+        pretrain: bool,
     ) -> None:
         super().__init__()
 
@@ -100,6 +103,8 @@ class HMoGExperiment(ClusteringModel, ABC):
 
         self.lgm_noise_scale = lgm_noise_scale
         self.mix_noise_scale = mix_noise_scale
+
+        self.pretrain = pretrain
 
     # Properties
 
@@ -223,34 +228,38 @@ class HMoGExperiment(ClusteringModel, ABC):
         # Track total epochs
         epoch = 0
 
-        if self.pre.n_epochs > 0:
+        if self.pretrain or self.pre.n_epochs > 0:
             obs_params, int_params, lat_params = self.model.split_params(params)
             lat_obs_params, lat_int_params, cat_params = (
                 self.model.upr_hrm.split_params(lat_params)
             )
             lgm = self.model.lwr_hrm
             lgm_params = lgm.join_params(obs_params, int_params, lat_obs_params)
-            log.info("Pretraining LGM parameters")
-            log.info(f"Learning rate: {self.pre.lr:.2e}")
-            new_lgm_params = self.pre.train(
-                pre_key,
-                handler,
-                dataset,
-                lgm,
-                logger,
-                epoch,
-                lgm_params,
+            # Construct path to the pretrained file
+
+            if self.pretrain:
+                new_lgm_array = handler.load_params(name="pretrain")
+                lgm_params = lgm.natural_point(new_lgm_array)
+
+            elif self.pre.n_epochs > 0:
+                log.info("Pretraining LGM parameters")
+                log.info(f"Learning rate: {self.pre.lr:.2e}")
+                lgm_params = self.pre.train(
+                    pre_key,
+                    handler,
+                    dataset,
+                    lgm,
+                    logger,
+                    epoch,
+                    lgm_params,
+                )
+            obs_params, int_params, lat_obs_params = lgm.split_params(lgm_params)
+            lat_params = self.model.upr_hrm.join_params(
+                lat_obs_params, lat_int_params, cat_params
             )
-            new_obs_params, new_int_params, new_lat_obs_params = lgm.split_params(
-                new_lgm_params
-            )
-            new_lat_params = self.model.upr_hrm.join_params(
-                new_lat_obs_params, lat_int_params, cat_params
-            )
-            params = self.model.join_params(
-                new_obs_params, new_int_params, new_lat_params
-            )
+            params = self.model.join_params(obs_params, int_params, lat_params)
             epoch += self.pre.n_epochs
+            handler.save_params(lgm_params.array, name="pretrain")
 
         # cosine lr schedule
         multiplier_schedule = optax.cosine_onecycle_schedule(

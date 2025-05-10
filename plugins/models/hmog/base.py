@@ -16,6 +16,7 @@ from goal.models import (
     AnalyticMixture,
     DifferentiableHMoG,
     DifferentiableLinearGaussianModel,
+    Normal,
 )
 from jax import Array
 
@@ -36,7 +37,7 @@ class RepresentationType(Enum):
 
 type HMoG = DifferentiableHMoG[Any, Any]
 type LGM = DifferentiableLinearGaussianModel[Any, Any]
-type Mixture = AnalyticMixture[Any]
+type Mixture = AnalyticMixture[Normal[Any]]
 
 
 ### Helpers ###

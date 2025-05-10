@@ -99,16 +99,24 @@ class RunHandler:
         with h5py.File(path, "r") as f:
             return artifact_class.load_from_hdf5(f)
 
-    def save_params(self, epoch: int, params: Array) -> None:
+    def save_params(
+        self, params: Array, epoch: int | None = None, name: str = "params"
+    ) -> None:
         """Save parameters at a given epoch."""
-        path = self._get_epoch_dir(epoch) / "params.h5"
+        if epoch is None:
+            path = self.run_dir / f"{name}.h5"
+        else:
+            path = self._get_epoch_dir(epoch) / f"{name}.h5"
         with h5py.File(path, "w") as f:
             # Convert JAX array to numpy for storage
             f.create_dataset("params", data=np.array(params))
 
-    def load_params(self, epoch: int) -> Array:
+    def load_params(self, epoch: int | None = None, name: str = "params") -> Array:
         """Load parameters from a specific epoch."""
-        path = self._get_epoch_dir(epoch, create=False) / "params.h5"
+        if epoch is None:
+            path = self.run_dir / f"{name}.h5"
+        else:
+            path = self._get_epoch_dir(epoch, create=False) / f"{name}.h5"
         with h5py.File(path, "r") as f:
             # Use .get() method which is more likely to be recognized by the type checker
             dataset = f.get("params")
