@@ -26,7 +26,7 @@ lgm:
   n_epochs: 0
 
 mix:
-  n_epochs: 0
+  n_epochs: 200
 
 full:
   lr: 1e-4

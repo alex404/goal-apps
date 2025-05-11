@@ -28,6 +28,7 @@ from apps.runtime.logger import JaxLogger
 
 from .artifacts import AnalysisArgs, log_artifacts
 from .trainers import (
+    FixedObservableTrainer,
     GradientTrainer,
     PreTrainer,
 )
@@ -48,7 +49,7 @@ class HMoGExperiment(ClusteringModel, ABC):
     model: DifferentiableHMoG[Diagonal, Diagonal]
     pre: PreTrainer
     lgm: GradientTrainer
-    mix: GradientTrainer
+    mix: FixedObservableTrainer
     full: GradientTrainer
 
     lr_scale_init: float
@@ -69,7 +70,7 @@ class HMoGExperiment(ClusteringModel, ABC):
         n_clusters: int,
         pre: PreTrainer,
         lgm: GradientTrainer,
-        mix: GradientTrainer,
+        mix: FixedObservableTrainer,
         full: GradientTrainer,
         analysis: AnalysisArgs,
         lr_scale_init: float,

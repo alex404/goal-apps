@@ -58,12 +58,13 @@ class GradientLGMTrainerConfig(GradientTrainerConfig):
     mask_type: str = "LGM"
 
 
-@dataclass
-class GradientMixtureTrainerConfig(GradientTrainerConfig):
-    """Configuration for gradient-based mixture trainer."""
-
-    _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
-    mask_type: str = "MIXTURE"
+# @dataclass
+# class GradientMixtureTrainerConfig(GradientTrainerConfig):
+#     """Configuration for gradient-based mixture trainer."""
+#
+#     _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
+#     mask_type: str = "MIXTURE"
+#
 
 
 @dataclass
@@ -72,6 +73,37 @@ class GradientFullModelTrainerConfig(GradientTrainerConfig):
 
     _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
     mask_type: str = "FULL"
+
+
+@dataclass
+class FixedObservableTrainerConfig:
+    """Configuration for fixed observable trainer.
+
+    This trainer holds observable parameters fixed and only updates mixture parameters,
+    which is much more efficient for high-dimensional data.
+    """
+
+    _target_: str = "plugins.models.hmog.trainers.FixedObservableTrainer"
+
+    # Training hyperparameters
+    lr: float = 1e-4
+    n_epochs: int = 200
+    batch_size: int | None = None
+    batch_steps: int = 1000
+    grad_clip: float = 8.0
+
+    # Regularization parameters
+    l1_reg: float = 0
+    l2_reg: float = 0
+
+    # Parameter bounds for mixture components
+    min_prob: float = 1e-4
+    lat_min_var: float = 1e-6
+    lat_jitter_var: float = 0.0
+
+    # Precision matrix regularization
+    upr_prs_reg: float = 1e-3
+    lwr_prs_reg: float = 1e-3
 
 
 ### Analysis Config ###
@@ -91,7 +123,7 @@ class AnalysisConfig:
 cycle_defaults: list[Any] = [
     {"pre": "gradient_pre"},
     {"lgm": "gradient_lgm"},
-    {"mix": "gradient_mixture"},
+    {"mix": "fixed_observable"},
     {"full": "gradient_full"},
 ]
 
@@ -109,7 +141,7 @@ class HMoGConfig(ClusteringModelConfig):
     # Training configuration
     pre: PreTrainerConfig = field(default=MISSING)
     lgm: GradientTrainerConfig = field(default=MISSING)
-    mix: GradientTrainerConfig = field(default=MISSING)
+    mix: FixedObservableTrainerConfig = field(default=MISSING)
     full: GradientTrainerConfig = field(default=MISSING)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
 
@@ -169,7 +201,7 @@ cs = ConfigStore.instance()
 # Register base configs
 cs.store(group="model/pre", name="gradient_pre", node=PreTrainerConfig)
 cs.store(group="model/lgm", name="gradient_lgm", node=GradientLGMTrainerConfig)
-cs.store(group="model/mix", name="gradient_mixture", node=GradientMixtureTrainerConfig)
+cs.store(group="model/mix", name="fixed_observable", node=FixedObservableTrainerConfig)
 cs.store(group="model/full", name="gradient_full", node=GradientFullModelTrainerConfig)
 
 # Register model configs
@@ -178,3 +210,5 @@ cs.store(group="model", name="hmog_diff", node=DifferentiableHMoGConfig)
 # two stage
 cs = ConfigStore.instance()
 cs.store(group="model", name="hmog_proj", node=ProjectionHMoGConfig)
+
+cs = ConfigStore.instance()

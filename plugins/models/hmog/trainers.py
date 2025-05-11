@@ -18,6 +18,7 @@ from goal.geometry import (
     Point,
     Replicated,
 )
+from goal.geometry.manifold.util import batched_mean
 from goal.models import (
     FullNormal,
     Normal,
@@ -31,7 +32,7 @@ from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
 from .analysis import log_epoch_metrics, pre_log_epoch_metrics
-from .base import LGM, HMoG, fori
+from .base import LGM, HMoG, Mixture, fori
 
 ### Constants ###
 
@@ -46,6 +47,55 @@ class MaskingStrategy(Enum):
 
 # Start logger
 log = logging.getLogger(__name__)
+
+
+### Helpers ###
+
+
+def precision_regularizer(
+    model: HMoG,
+    rho: Point[Natural, Mixture],
+    mix_params: Point[Natural, Mixture],
+    upr_prs_reg: float,
+    lwr_prs_reg: float,
+) -> tuple[Array, Array]:
+    """Compute regularization based on log-determinant of precision matrices.
+
+    This regularization encourages components to have well-conditioned
+    precision matrices by penalizing small determinants. This improves
+    numerical stability and can prevent degenerate solutions.
+
+    Args:
+        model: HMoG model
+        params: Model parameters
+
+    Returns:
+        Regularization term (negative sum of log-determinants)
+    """
+    con_mix_params = model.pst_lat_emb.translate(rho, mix_params)
+    cmp_params, _ = model.con_upr_hrm.split_natural_mixture(con_mix_params)
+
+    def compute_trace(
+        nor_params: Point[Natural, FullNormal],
+    ) -> Array:
+        with model.con_upr_hrm as cuh:
+            prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
+            prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
+            return jnp.trace(prs_dense)
+
+    traces = model.con_upr_hrm.cmp_man.map(compute_trace, cmp_params)
+
+    def compute_logdet(
+        nor_params: Point[Natural, FullNormal],
+    ) -> Array:
+        with model.con_upr_hrm as cuh:
+            prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
+            prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
+            return -jnp.linalg.slogdet(prs_dense)[1]
+
+    logdets = model.con_upr_hrm.cmp_man.map(compute_logdet, cmp_params)
+
+    return upr_prs_reg * jnp.sum(traces), lwr_prs_reg * jnp.sum(logdets)
 
 
 ### Symmetric Gradient Trainer ###
@@ -143,7 +193,7 @@ class GradientTrainer:
         cmp_params, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
 
         # Function to compute log-det of precision matrix for a component
-        def compute_logdet(
+        def compute_trace(
             nor_params: Point[Natural, FullNormal],
         ) -> Array:
             with model.con_upr_hrm as cuh:
@@ -154,7 +204,7 @@ class GradientTrainer:
                 return jnp.trace(prs_dense)
 
         # Apply function to all components and sum the results
-        logdets = model.con_upr_hrm.cmp_man.map(compute_logdet, cmp_params)
+        logdets = model.con_upr_hrm.cmp_man.map(compute_trace, cmp_params)
 
         # Return negative-scaled sum since we want to maximize log-determinants
         # (which corresponds to well-conditioned precision matrices)
@@ -617,5 +667,303 @@ class PreTrainer:
 
         # Run training loop
         (_, params_final, _) = fori(0, n_epochs, epoch_step, (opt_state, params0, key))
+
+        return params_final
+
+
+@dataclass(frozen=True)
+class FixedObservableTrainer:
+    """Trainer that holds observable parameters fixed and only updates mixture parameters.
+
+    For high-dimensional data, this caches the mapping from observation to latent space,
+    avoiding repeated expensive computations.
+    """
+
+    # Training hyperparameters
+    lr: float
+    n_epochs: int
+    batch_size: None | int
+    batch_steps: int
+    grad_clip: float
+
+    # Regularization parameters
+    l1_reg: float
+    l2_reg: float
+
+    # Parameter bounds
+    min_prob: float
+    lat_min_var: float
+    lat_jitter_var: float
+    upr_prs_reg: float
+    lwr_prs_reg: float
+
+    def precompute_observable_mappings(
+        self, model: HMoG, params: Point[Natural, HMoG], data: Array
+    ) -> tuple[Array, Point[Natural, Mixture]]:
+        log.info("Precomputing latent statistics for fixed observable training")
+
+        # Get the posterior function (the affine map)
+        post_map = model.posterior_function(params)
+        obs_params, int_params, _ = model.split_params(params)
+        lkl_params = model.lkl_man.join_params(obs_params, int_params)
+        rho = model.conjugation_parameters(lkl_params)
+
+        def project_fn(x: Array) -> Array:
+            x_means = model.obs_man.loc_man.mean_point(x)
+            return model.int_man.transpose_apply(int_params, x_means).array
+
+        return jax.vmap(project_fn)(data), rho
+
+    def mean_posterior_statistics(
+        self,
+        model: HMoG,
+        mix_params: Point[Natural, Mixture],
+        latent_locations: Array,
+    ) -> Point[Mean, Mixture]:
+        # Get sufficient statistics of observation
+
+        def posterior_statistics(
+            latent_array: Array,
+        ) -> Array:
+            # Get posterior statistics for this observation
+            latent_location = model.upr_hrm.obs_man.loc_man.natural_point(latent_array)
+            mix_obs, mix_int, mix_lat = model.upr_hrm.split_params(mix_params)
+            posterior_params = model.int_lat_emb.translate(mix_params, latent_location)
+            posterior_means = model.upr_hrm.to_mean(posterior_params)
+            return posterior_means.array
+
+        return model.upr_hrm.mean_point(
+            batched_mean(posterior_statistics, latent_locations, 256)
+        )
+
+    def prior_statistics(
+        self,
+        model: HMoG,
+        mix_params: Point[Natural, Mixture],
+        rho: Point[Natural, Mixture],
+    ) -> Point[Mean, Mixture]:
+        # Get sufficient statistics of observation
+
+        def log_partition_function(
+            params: Point[Natural, Mixture],
+        ) -> Array:
+            # Split parameters
+            con_params = model.pst_lat_emb.translate(rho, params)
+            return model.con_upr_hrm.log_partition_function(con_params)
+
+        return model.upr_hrm.grad(log_partition_function, mix_params)
+
+    def bound_mixture_means(
+        self, model: HMoG, mix_means: Point[Mean, Mixture]
+    ) -> Point[Mean, Mixture]:
+        """Apply bounds to mixture components for numerical stability."""
+        with model.upr_hrm as uh:
+            # Bound component means
+            cmp_meanss, cat_means = uh.split_mean_mixture(mix_means)
+            lat_obs_means, _, _ = model.upr_hrm.split_params(mix_means)
+
+            def whiten_and_bound(
+                comp_means: Point[Mean, Normal[Any]],
+            ) -> Point[Mean, Normal[Any]]:
+                whitened_comp_means = uh.obs_man.whiten(comp_means, lat_obs_means)
+                return uh.obs_man.regularize_covariance(
+                    whitened_comp_means, self.lat_jitter_var, self.lat_min_var
+                )
+
+            bounded_cmp_meanss = uh.cmp_man.man_map(whiten_and_bound, cmp_meanss)
+
+            # Bound probabilities
+            probs = uh.lat_man.to_probs(cat_means)
+            bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
+            bounded_probs = bounded_probs / jnp.sum(bounded_probs)
+            bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
+
+            return uh.join_mean_mixture(bounded_cmp_meanss, bounded_prob_means)
+
+    def make_regularizer(
+        self, model: HMoG, rho: Point[Natural, Mixture]
+    ) -> Callable[[Point[Natural, Mixture]], Array]:
+        """Create a regularizer for mixture parameters."""
+
+        def loss_fn(params: Point[Natural, Mixture]) -> Array:
+            # L2 regularization
+            l2_loss = self.l2_reg * jnp.sum(jnp.square(params.array))
+            upr_loss, lwr_loss = precision_regularizer(
+                model, rho, params, self.upr_prs_reg, self.lwr_prs_reg
+            )
+            return l2_loss + upr_loss + lwr_loss
+
+        return loss_fn
+
+    def train(
+        self,
+        key: Array,
+        handler: RunHandler,
+        dataset: ClusteringDataset,
+        model: HMoG,
+        logger: JaxLogger,
+        learning_rate_scale: float,
+        epoch_offset: int,
+        params0: Point[Natural, HMoG],
+    ) -> Point[Natural, HMoG]:
+        """Train only the mixture parameters with fixed observable mapping.
+
+        Args:
+            key: Random key
+            handler: Run handler for saving artifacts
+            dataset: Dataset for training
+            model: HMoG model
+            logger: Logger
+            learning_rate_scale: Scale factor for learning rate
+            epoch_offset: Offset for epoch numbering
+            params0: Initial parameters
+
+        Returns:
+            Updated parameters
+        """
+        n_epochs = self.n_epochs
+        train_data = dataset.train_data
+
+        # Extract fixed observable parameters
+        obs_params0, int_params0, mix_params0 = model.split_params(params0)
+
+        # Precompute all latent statistics using the fixed observable mapping
+        latent_locations, rho = self.precompute_observable_mappings(
+            model, params0, train_data
+        )
+
+        # Setup optimizer for mixture parameters
+        optim = optax.adam(learning_rate=self.lr * learning_rate_scale)
+        optimizer = Optimizer(optim, model.upr_hrm)
+        if self.grad_clip > 0.0:
+            optimizer = optimizer.with_grad_clip(self.grad_clip)
+
+        # Initialize optimizer state
+        opt_state = optimizer.init(mix_params0)
+
+        # Determine batch sizes
+        if self.batch_size is None:
+            batch_size = latent_locations.shape[0]
+            n_batches = 1
+        else:
+            batch_size = self.batch_size
+            n_batches = latent_locations.shape[0] // batch_size
+
+        # Log training start
+        log.info(
+            f"Training mixture with fixed observable mapping for {n_epochs} epochs"
+        )
+
+        # Create regularizer
+        regularizer = self.make_regularizer(model, rho)
+
+        # Define batch step function
+        def batch_step(
+            carry: tuple[OptState, Point[Natural, Mixture]],
+            batch_locations: Array,
+        ) -> tuple[tuple[OptState, Point[Natural, Mixture]], Array]:
+            opt_state, params = carry
+
+            posterior_stats = self.mean_posterior_statistics(
+                model, params, batch_locations
+            )
+
+            bounded_posterior_stats = self.bound_mixture_means(model, posterior_stats)
+
+            # Define the inner step function
+            def inner_step(
+                carry: tuple[OptState, Point[Natural, Mixture]],
+                _: None,
+            ) -> tuple[tuple[OptState, Point[Natural, Mixture]], Array]:
+                current_opt_state, current_params = carry
+
+                # Current parameters as means
+                prior_stats = self.prior_statistics(model, current_params, rho)
+
+                # Compute gradient as difference between posterior and current prior
+                grad = prior_stats - bounded_posterior_stats
+
+                # Add regularization
+                reg_grad = jax.grad(regularizer)(current_params)
+                grad = grad + reg_grad
+
+                # Update parameters
+                new_opt_state, new_params = optimizer.update(
+                    current_opt_state, grad, current_params
+                )
+
+                # Monitor parameters for debugging
+                logger.monitor_params(
+                    {
+                        "original_params": current_params.array,
+                        "updated_params": new_params.array,
+                        "mixture_stats": posterior_stats.array,
+                        "bounded_mixture_stats": bounded_posterior_stats.array,
+                        "prior_stats": prior_stats.array,
+                        "grad": grad.array,
+                    },
+                    handler,
+                    context="FIXED_OBSERVABLE",
+                )
+
+                return (new_opt_state, new_params), grad.array
+
+            # Run inner steps
+            (final_opt_state, final_params), all_grads = jax.lax.scan(
+                inner_step,
+                (opt_state, params),
+                None,
+                length=self.batch_steps,
+            )
+
+            return (final_opt_state, final_params), all_grads
+
+        # Create epoch step function
+        def epoch_step(
+            epoch: Array,
+            carry: tuple[OptState, Point[Natural, Mixture], Array],
+        ) -> tuple[OptState, Point[Natural, Mixture], Array]:
+            opt_state, mix_params, epoch_key = carry
+
+            # Split key for shuffling
+            shuffle_key, next_key = jax.random.split(epoch_key)
+
+            # Shuffle and batch data
+            shuffled_indices = jax.random.permutation(
+                shuffle_key, latent_locations.shape[0]
+            )
+            batched_indices = shuffled_indices[: n_batches * batch_size]
+            batched_locations = latent_locations[batched_indices].reshape(
+                (n_batches, batch_size, -1)
+            )
+
+            # Process all batches
+            (opt_state, new_mix_params), _ = jax.lax.scan(
+                batch_step, (opt_state, mix_params), batched_locations
+            )
+
+            # Reconstruct full model parameters for evaluation
+            full_params = model.join_params(obs_params0, int_params0, new_mix_params)
+
+            # Log metrics
+            log_epoch_metrics(
+                dataset,
+                model,
+                logger,
+                full_params,
+                epoch + epoch_offset,
+                None,
+                log_freq=10,
+            )
+
+            return opt_state, new_mix_params, next_key
+
+        # Run training loop
+        (_, mix_params_final, _) = fori(
+            0, n_epochs, epoch_step, (opt_state, mix_params0, key)
+        )
+
+        # Reconstruct full parameters with updated mixture
+        params_final = model.join_params(obs_params0, int_params0, mix_params_final)
 
         return params_final
