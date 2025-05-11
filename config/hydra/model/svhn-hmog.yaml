@@ -9,9 +9,11 @@ n_clusters: 40
 lr_scale_init: 1
 lr_scale_final: 1
 num_cycles: 10
+lgm_noise_scale: 0.01
+mix_noise_scale: 0.1
 
 pre:
-  lr: 1e-5
+  lr: 3e-5
   n_epochs: 10000
   batch_steps: 1000
   l1_reg: 0
@@ -25,11 +27,23 @@ lgm:
   n_epochs: 0
 
 mix:
-  n_epochs: 0
+  n_epochs: 1000
+  lr: 3e-5
+  batch_steps: 2000
+  grad_clip: 1
+  l1_reg: 0
+  l2_reg: 0
+  min_prob: 1e-4
+  lat_min_var: 1e-6
+  lat_jitter_var: 0
+  upr_prs_reg: 3e-3
+  lwr_prs_reg: 3e-3
+
+
 
 full:
   lr: 1e-5
-  n_epochs: 10000
+  n_epochs: 1000
   batch_steps: 1000
   grad_clip: 1
   min_prob: 1e-4

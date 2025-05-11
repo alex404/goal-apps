@@ -719,33 +719,38 @@ def log_artifacts[M: HMoG](
         co_hierarchy = get_cluster_hierarchy(
             model, params, CoAssignmentClusterHierarchy, dataset.train_data
         )
-        kl_merge_results = get_merge_results(model, params, dataset, KLMergeResults)
-        co_merge_results = get_merge_results(
-            model, params, dataset, CoAssignmentMergeResults
-        )
-        op_merge_results = get_merge_results(
-            model, params, dataset, OptimalMergeResults
-        )
         gen_examples = generate_examples(model, params, 25, key)
+        if dataset.has_labels:
+            kl_merge_results = get_merge_results(model, params, dataset, KLMergeResults)
+            co_merge_results = get_merge_results(
+                model, params, dataset, CoAssignmentMergeResults
+            )
+            op_merge_results = get_merge_results(
+                model, params, dataset, OptimalMergeResults
+            )
     else:
         cluster_statistics = handler.load_artifact(epoch, ClusterStatistics)
         kl_hierarchy = handler.load_artifact(epoch, KLClusterHierarchy)
         co_hierarchy = handler.load_artifact(epoch, CoAssignmentClusterHierarchy)
-        kl_merge_results = handler.load_artifact(epoch, KLMergeResults)
-        co_merge_results = handler.load_artifact(epoch, CoAssignmentMergeResults)
-        op_merge_results = handler.load_artifact(epoch, OptimalMergeResults)
         gen_examples = handler.load_artifact(epoch, GenerativeExamples)
+
+        if dataset.has_labels:
+            kl_merge_results = handler.load_artifact(epoch, KLMergeResults)
+            co_merge_results = handler.load_artifact(epoch, CoAssignmentMergeResults)
+            op_merge_results = handler.load_artifact(epoch, OptimalMergeResults)
 
     # Plot and save
     plot_clusters_statistics = cluster_statistics_plotter(dataset)
     plot_hierarchy = hierarchy_plotter(dataset)
-    plot_merge_results = merge_results_plotter(dataset)
     plot_examples = generative_examples_plotter(dataset)
 
     logger.log_artifact(handler, epoch, cluster_statistics, plot_clusters_statistics)
     logger.log_artifact(handler, epoch, kl_hierarchy, plot_hierarchy)
     logger.log_artifact(handler, epoch, co_hierarchy, plot_hierarchy)
-    logger.log_artifact(handler, epoch, kl_merge_results, plot_merge_results)
-    logger.log_artifact(handler, epoch, co_merge_results, plot_merge_results)
-    logger.log_artifact(handler, epoch, op_merge_results, plot_merge_results)
     logger.log_artifact(handler, epoch, gen_examples, plot_examples)
+
+    if dataset.has_labels:
+        plot_merge_results = merge_results_plotter(dataset)
+        logger.log_artifact(handler, epoch, kl_merge_results, plot_merge_results)
+        logger.log_artifact(handler, epoch, co_merge_results, plot_merge_results)
+        logger.log_artifact(handler, epoch, op_merge_results, plot_merge_results)
