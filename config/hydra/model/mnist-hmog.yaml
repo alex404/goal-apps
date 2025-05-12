@@ -11,7 +11,7 @@ lr_scale_final: 1
 num_cycles: 10
 
 pre:
-  lr: 3e-4
+  lr: 1e-4
   n_epochs: 500
   batch_steps: 1000
   l1_reg: 1e-3
@@ -24,7 +24,7 @@ lgm:
   n_epochs: 0
 
 mix:
-  lr: 3e-4
+  lr: 1e-4
   n_epochs: 0
   batch_steps: 500
   grad_clip: 1
@@ -36,7 +36,7 @@ mix:
   l2_reg: ${model.pre.l2_reg}
 
 full:
-  lr: 3e-4
+  lr: 1e-4
   n_epochs: 400
   batch_steps: 500
   grad_clip: 1
