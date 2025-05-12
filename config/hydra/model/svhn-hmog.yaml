@@ -13,8 +13,8 @@ lgm_noise_scale: 0.01
 mix_noise_scale: 0.1
 
 pre:
-  lr: 3e-5
-  n_epochs: 10000
+  lr: 1e-5
+  n_epochs: 20000
   batch_steps: 1000
   l1_reg: 0
   l2_reg: 0
@@ -28,7 +28,7 @@ lgm:
 
 mix:
   n_epochs: 1000
-  lr: 3e-5
+  lr: 1e-5
   batch_steps: 2000
   grad_clip: 1
   l1_reg: 0
@@ -36,8 +36,8 @@ mix:
   min_prob: 1e-4
   lat_min_var: 1e-6
   lat_jitter_var: 0
-  upr_prs_reg: 3e-3
-  lwr_prs_reg: 3e-3
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 1e-3
 
 
 

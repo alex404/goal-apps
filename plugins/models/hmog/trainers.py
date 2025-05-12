@@ -703,7 +703,6 @@ class FixedObservableTrainer:
         log.info("Precomputing latent statistics for fixed observable training")
 
         # Get the posterior function (the affine map)
-        post_map = model.posterior_function(params)
         obs_params, int_params, _ = model.split_params(params)
         lkl_params = model.lkl_man.join_params(obs_params, int_params)
         rho = model.conjugation_parameters(lkl_params)
@@ -891,22 +890,31 @@ class FixedObservableTrainer:
                 new_opt_state, new_params = optimizer.update(
                     current_opt_state, grad, current_params
                 )
+                full_params = model.join_params(
+                    obs_params0, int_params0, current_params
+                )
+                new_full_params = model.join_params(
+                    obs_params0, int_params0, new_params
+                )
+                full_grad = model.join_params(
+                    model.lwr_hrm.obs_man.zeros(), model.lwr_hrm.int_man.zeros(), grad
+                )
 
                 # Monitor parameters for debugging
                 logger.monitor_params(
                     {
-                        "original_params": current_params.array,
-                        "updated_params": new_params.array,
+                        "original_params": full_params.array,
+                        "updated_params": new_full_params.array,
                         "mixture_stats": posterior_stats.array,
                         "bounded_mixture_stats": bounded_posterior_stats.array,
                         "prior_stats": prior_stats.array,
-                        "grad": grad.array,
+                        "grad": full_grad.array,
                     },
                     handler,
                     context="FIXED_OBSERVABLE",
                 )
 
-                return (new_opt_state, new_params), grad.array
+                return (new_opt_state, new_params), full_grad.array
 
             # Run inner steps
             (final_opt_state, final_params), all_grads = jax.lax.scan(
@@ -938,9 +946,15 @@ class FixedObservableTrainer:
             )
 
             # Process all batches
-            (opt_state, new_mix_params), _ = jax.lax.scan(
+            (opt_state, new_mix_params), gradss_array = jax.lax.scan(
                 batch_step, (opt_state, mix_params), batched_locations
             )
+            # gradss_array shape: (n_batches, n_steps, param_dim)
+            grads_array = gradss_array.reshape(-1, *gradss_array.shape[2:])
+
+            # Create batch gradients for logging
+            batch_man = Replicated(model, grads_array.shape[0])
+            batch_grads = batch_man.point(grads_array)
 
             # Reconstruct full model parameters for evaluation
             full_params = model.join_params(obs_params0, int_params0, new_mix_params)
@@ -952,7 +966,7 @@ class FixedObservableTrainer:
                 logger,
                 full_params,
                 epoch + epoch_offset,
-                None,
+                batch_grads,
                 log_freq=10,
             )
 

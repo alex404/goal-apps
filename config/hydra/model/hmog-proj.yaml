@@ -18,7 +18,7 @@ pre:
 
 pro:
   lr: 1e-3
-  n_epochs: 500
+  n_epochs: 1000
   batch_steps: 1000
   grad_clip: 1
   min_prob: 1e-4

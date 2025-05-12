@@ -29,7 +29,7 @@ from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
 from .analysis import log_epoch_metrics
-from .artifacts import AnalysisArgs
+from .artifacts import AnalysisArgs, log_artifacts
 from .base import HMoG, Mixture, fori
 from .trainers import PreTrainer
 
@@ -94,7 +94,7 @@ class ProjectionTrainer:
 
         # Extract the means of the latent variables
 
-        return jax.vmap(posterior_mean)(data)
+        return jax.lax.map(posterior_mean, data, batch_size=256)
 
     def bound_mixture_means(
         self, model: Mixture, means: Point[Mean, Mixture]
@@ -492,14 +492,21 @@ class ProjectionHMoGExperiment(ClusteringModel):
                 mix_params,
             )
 
-            # final_params = self.to_analytic(lgm_params, trained_mix_params)
-            #
-            # # Save final parameters
-            # final_epoch = epoch + self.projection.n_epochs
+            ana_hmog = analytic_hmog(
+                self.lgm.obs_dim,
+                self.lgm.obs_rep,
+                self.mixture.obs_man.data_dim,
+                self.mixture.n_categories,
+            )
+
+            final_params = to_analytic(
+                self.lgm, self.mixture, ana_hmog, lgm_params, trained_mix_params
+            )
+
+            # Save final parameters
+            final_epoch = epoch + self.projection.n_epochs
 
             # Generate artifacts
-            # log_artifacts(
-            #     handler, dataset, logger, self.model, final_epoch, final_params
-            # )
+            log_artifacts(handler, dataset, logger, ana_hmog, final_epoch, final_params)
 
         log.info("Training complete")

@@ -33,7 +33,7 @@ mix:
 full:
   lr: 1e-5
   n_epochs: 400
-  batch_steps: 1000
+  batch_steps: 5000
   grad_clip: 1
   min_prob: 1e-4
   obs_min_var: 1e-5
