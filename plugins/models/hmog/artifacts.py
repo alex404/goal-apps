@@ -20,10 +20,11 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from numpy.typing import NDArray
 
+from apps.configs import STATS_NUM
 from apps.plugins import (
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact, RunHandler
+from apps.runtime.handler import Artifact, MetricDict, RunHandler
 from apps.runtime.logger import JaxLogger
 
 from .analysis import (
@@ -39,6 +40,8 @@ from .analysis import (
 from .base import HMoG
 
 ### Analysis Args ###
+
+STATS_LEVEL = jnp.array(STATS_NUM)
 
 
 @dataclass(frozen=True)
@@ -720,24 +723,11 @@ def log_artifacts[M: HMoG](
             model, params, CoAssignmentClusterHierarchy, dataset.train_data
         )
         gen_examples = generate_examples(model, params, 25, key)
-        if dataset.has_labels:
-            kl_merge_results = get_merge_results(model, params, dataset, KLMergeResults)
-            co_merge_results = get_merge_results(
-                model, params, dataset, CoAssignmentMergeResults
-            )
-            op_merge_results = get_merge_results(
-                model, params, dataset, OptimalMergeResults
-            )
     else:
         cluster_statistics = handler.load_artifact(epoch, ClusterStatistics)
         kl_hierarchy = handler.load_artifact(epoch, KLClusterHierarchy)
         co_hierarchy = handler.load_artifact(epoch, CoAssignmentClusterHierarchy)
         gen_examples = handler.load_artifact(epoch, GenerativeExamples)
-
-        if dataset.has_labels:
-            kl_merge_results = handler.load_artifact(epoch, KLMergeResults)
-            co_merge_results = handler.load_artifact(epoch, CoAssignmentMergeResults)
-            op_merge_results = handler.load_artifact(epoch, OptimalMergeResults)
 
     # Plot and save
     plot_clusters_statistics = cluster_statistics_plotter(dataset)
@@ -750,7 +740,42 @@ def log_artifacts[M: HMoG](
     logger.log_artifact(handler, epoch, gen_examples, plot_examples)
 
     if dataset.has_labels:
+        if params is not None:
+            kl_merge_results = get_merge_results(model, params, dataset, KLMergeResults)
+            co_merge_results = get_merge_results(
+                model, params, dataset, CoAssignmentMergeResults
+            )
+            op_merge_results = get_merge_results(
+                model, params, dataset, OptimalMergeResults
+            )
+        else:
+            kl_merge_results = handler.load_artifact(epoch, KLMergeResults)
+            co_merge_results = handler.load_artifact(epoch, CoAssignmentMergeResults)
+            op_merge_results = handler.load_artifact(epoch, OptimalMergeResults)
+
         plot_merge_results = merge_results_plotter(dataset)
         logger.log_artifact(handler, epoch, kl_merge_results, plot_merge_results)
         logger.log_artifact(handler, epoch, co_merge_results, plot_merge_results)
         logger.log_artifact(handler, epoch, op_merge_results, plot_merge_results)
+        # Log merge metrics
+        metrics: MetricDict = {
+            "Clusters/KL Accuracy": (STATS_LEVEL, jnp.array(kl_merge_results.accuracy)),
+            "Clusters/KL NMI": (STATS_LEVEL, jnp.array(kl_merge_results.nmi_score)),
+            "Clusters/CoAssignment Accuracy": (
+                STATS_LEVEL,
+                jnp.array(co_merge_results.accuracy),
+            ),
+            "Clusters/CoAssignment NMI": (
+                STATS_LEVEL,
+                jnp.array(co_merge_results.nmi_score),
+            ),
+            "Clusters/Optimal Accuracy": (
+                STATS_LEVEL,
+                jnp.array(op_merge_results.accuracy),
+            ),
+            "Clusters/Optimal NMI": (
+                STATS_LEVEL,
+                jnp.array(op_merge_results.nmi_score),
+            ),
+        }
+        logger.log_metrics(metrics, jnp.array(epoch))

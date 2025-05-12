@@ -640,8 +640,8 @@ def log_epoch_metrics[H: HMoG](
             # Add to metrics dictionary
             metrics.update(
                 {
-                    "Clustering/Train Accuracy": (INFO_LEVEL, train_acc),
-                    "Clustering/Test Accuracy": (INFO_LEVEL, test_acc),
+                    "Clustering/Train Accuracy (Greedy)": (INFO_LEVEL, train_acc),
+                    "Clustering/Test Accuracy (Greedy)": (INFO_LEVEL, test_acc),
                     "Clustering/Train NMI": (INFO_LEVEL, train_nmi),
                     "Clustering/Test NMI": (INFO_LEVEL, test_nmi),
                 }
