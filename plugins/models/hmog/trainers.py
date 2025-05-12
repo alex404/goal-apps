@@ -25,10 +25,11 @@ from goal.models import (
 )
 from jax import Array
 
+from apps.configs import STATS_LEVEL
 from apps.plugins import (
     ClusteringDataset,
 )
-from apps.runtime.handler import RunHandler
+from apps.runtime.handler import MetricDict, RunHandler
 from apps.runtime.logger import JaxLogger
 
 from .analysis import log_epoch_metrics, pre_log_epoch_metrics
@@ -58,7 +59,7 @@ def precision_regularizer(
     mix_params: Point[Natural, Mixture],
     upr_prs_reg: float,
     lwr_prs_reg: float,
-) -> tuple[Array, Array]:
+) -> tuple[Array, MetricDict]:
     """Compute regularization based on log-determinant of precision matrices.
 
     This regularization encourages components to have well-conditioned
@@ -84,6 +85,8 @@ def precision_regularizer(
             return jnp.trace(prs_dense)
 
     traces = model.con_upr_hrm.cmp_man.map(compute_trace, cmp_params)
+    trace_sum = jnp.sum(traces)
+    trace_reg = upr_prs_reg * trace_sum
 
     def compute_logdet(
         nor_params: Point[Natural, FullNormal],
@@ -94,8 +97,18 @@ def precision_regularizer(
             return -jnp.linalg.slogdet(prs_dense)[1]
 
     logdets = model.con_upr_hrm.cmp_man.map(compute_logdet, cmp_params)
+    logdet_sum = jnp.sum(logdets)
+    logdet_reg = lwr_prs_reg * logdet_sum
 
-    return upr_prs_reg * jnp.sum(traces), lwr_prs_reg * jnp.sum(logdets)
+    # Create metrics dictionary
+    metrics: MetricDict = {
+        "Regularization/Precision Trace Sum": (STATS_LEVEL, trace_sum),
+        "Regularization/Precision LogDet Sum": (STATS_LEVEL, logdet_sum),
+        "Regularization/Trace Penalty": (STATS_LEVEL, trace_reg),
+        "Regularization/LogDet Penalty": (STATS_LEVEL, logdet_reg),
+    }
+
+    return trace_reg + logdet_reg, metrics
 
 
 ### Symmetric Gradient Trainer ###
@@ -172,104 +185,45 @@ class GradientTrainer:
         # Rejoin all parameters
         return model.join_params(bounded_obs_means, int_means, bounded_lat_means)
 
-    def upper_precision_regularizer(
-        self, model: HMoG, params: Point[Natural, HMoG]
-    ) -> Array:
-        """Compute regularization based on log-determinant of precision matrices.
+    def make_regularizer(
+        self, model: HMoG
+    ) -> Callable[[Point[Natural, HMoG]], tuple[Point[Mean, HMoG], MetricDict]]:
+        """Create a unified regularizer that returns loss, metrics, and gradient."""
 
-        This regularization encourages components to have well-conditioned
-        precision matrices by penalizing small determinants. This improves
-        numerical stability and can prevent degenerate solutions.
-
-        Args:
-            model: HMoG model
-            params: Model parameters
-
-        Returns:
-            Regularization term (negative sum of log-determinants)
-        """
-        # Split parameters to get component parameters
-        _, mix_params = model.split_conjugated(params)
-        cmp_params, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
-
-        # Function to compute log-det of precision matrix for a component
-        def compute_trace(
-            nor_params: Point[Natural, FullNormal],
-        ) -> Array:
-            with model.con_upr_hrm as cuh:
-                # Translate to conjugated representation
-                # Extract precision matrix and compute log-determinant
-                prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
-                prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
-                return jnp.trace(prs_dense)
-
-        # Apply function to all components and sum the results
-        logdets = model.con_upr_hrm.cmp_man.map(compute_trace, cmp_params)
-
-        # Return negative-scaled sum since we want to maximize log-determinants
-        # (which corresponds to well-conditioned precision matrices)
-        return self.upr_prs_reg * jnp.sum(logdets)
-
-    def lower_precision_regularizer(
-        self, model: HMoG, params: Point[Natural, HMoG]
-    ) -> Array:
-        """Compute regularization based on log-determinant of precision matrices.
-
-        This regularization encourages components to have well-conditioned
-        precision matrices by penalizing small determinants. This improves
-        numerical stability and can prevent degenerate solutions.
-
-        Args:
-            model: HMoG model
-            params: Model parameters
-
-        Returns:
-            Regularization term (negative sum of log-determinants)
-        """
-        # Split parameters to get component parameters
-        _, mix_params = model.split_conjugated(params)
-        cmp_params, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
-
-        # Function to compute log-det of precision matrix for a component
-        def compute_logdet(
-            nor_params: Point[Natural, FullNormal],
-        ) -> Array:
-            with model.con_upr_hrm as cuh:
-                # Translate to conjugated representation
-                # Extract precision matrix and compute log-determinant
-                prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
-                prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
-                return -jnp.linalg.slogdet(prs_dense)[1]
-
-        # Apply function to all components and sum the results
-        logdets = model.con_upr_hrm.cmp_man.map(compute_logdet, cmp_params)
-
-        # Return negative-scaled sum since we want to maximize log-determinants
-        # (which corresponds to well-conditioned precision matrices)
-        return self.lwr_prs_reg * jnp.sum(logdets)
-
-    def make_regularizer(self, model: HMoG) -> Callable[[Point[Natural, HMoG]], Array]:
-        """Create a universal loss function for any HMoG model."""
-
-        def loss_fn(params: Point[Natural, HMoG]) -> Array:
-            # Core negative log-likelihood
-
+        def loss_with_metrics(params: Point[Natural, HMoG]) -> tuple[Array, MetricDict]:
             # Extract components for regularization
-            _, int_params, _ = model.split_params(params)
+            obs_params, int_params, mix_params = model.split_params(params)
+            lkl_params = model.lkl_man.join_params(obs_params, int_params)
+            rho = model.conjugation_parameters(lkl_params)
 
-            # L1 regularization on interaction matrix
-            l1_loss = self.l1_reg * jnp.sum(jnp.abs(int_params.array))
+            # L1 regularization
+            l1_norm = jnp.sum(jnp.abs(int_params.array))
+            l1_loss = self.l1_reg * l1_norm
 
-            # L2 regularization on all parameters
-            l2_loss = self.l2_reg * jnp.sum(jnp.square(params.array))
+            # L2 regularization
+            l2_norm = jnp.sum(jnp.square(params.array))
+            l2_loss = self.l2_reg * l2_norm
 
             # Component precision regularization
-            lwr_loss = self.lower_precision_regularizer(model, params)
-            upr_loss = self.upper_precision_regularizer(model, params)
+            prs_loss, prs_metrics = precision_regularizer(
+                model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
+            )
 
-            return l1_loss + l2_loss + lwr_loss + upr_loss
+            # Combine into total loss and metrics
+            total_loss = l1_loss + l2_loss + prs_loss
 
-        return loss_fn
+            metrics = {
+                "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
+                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
+                "Regularization/L1 Penalty": (STATS_LEVEL, l1_loss),
+                "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
+            }
+            metrics.update(prs_metrics)
+
+            return total_loss, metrics
+
+        # Create a function that computes loss, metrics, and gradients in one pass
+        return jax.grad(loss_with_metrics, has_aux=True)
 
     def create_gradient_mask(
         self, model: HMoG
@@ -338,7 +292,7 @@ class GradientTrainer:
                 prior_stats = model.to_mean(current_params)
                 grad = prior_stats - bounded_posterior_stats
                 reg_fn = self.make_regularizer(model)
-                reg_grad = jax.grad(reg_fn)(current_params)
+                reg_grad = reg_fn(current_params)[0]
                 grad = grad + reg_grad
 
                 # Apply gradient mask
@@ -447,6 +401,9 @@ class GradientTrainer:
             batch_man = Replicated(model, grads_array.shape[0])
             batch_grads = batch_man.point(grads_array)
 
+            reg_fn = self.make_regularizer(model)
+            metrics = reg_fn(new_params)[1]
+
             # Log metrics
             log_epoch_metrics(
                 dataset,
@@ -454,6 +411,7 @@ class GradientTrainer:
                 logger,
                 new_params,
                 epoch + epoch_offset,
+                metrics,
                 batch_grads,
                 log_freq=10,
             )
@@ -499,22 +457,37 @@ class PreTrainer:
         # Rejoin all parameters
         return model.join_params(bounded_obs_means, int_means, z)
 
-    def make_regularizer(self, model: LGM) -> Callable[[Point[Natural, LGM]], Array]:
-        def loss_fn(params: Point[Natural, LGM]) -> Array:
-            # Core negative log-likelihood
+    def make_regularizer(
+        self, model: LGM
+    ) -> Callable[[Point[Natural, LGM]], tuple[Point[Mean, LGM], MetricDict]]:
+        """Create a unified regularizer that returns loss, metrics, and gradient."""
 
+        def loss_with_metrics(params: Point[Natural, LGM]) -> tuple[Array, MetricDict]:
             # Extract components for regularization
             _, int_params, _ = model.split_params(params)
 
-            # L1 regularization on interaction matrix
-            l1_loss = self.l1_reg * jnp.sum(jnp.abs(int_params.array))
+            # L1 regularization
+            l1_norm = jnp.sum(jnp.abs(int_params.array))
+            l1_loss = self.l1_reg * l1_norm
 
-            # L2 regularization on all parameters
-            l2_loss = self.l2_reg * jnp.sum(jnp.square(params.array))
+            # L2 regularization
+            l2_norm = jnp.sum(jnp.square(params.array))
+            l2_loss = self.l2_reg * l2_norm
 
-            return l1_loss + l2_loss
+            # Combine into total loss and metrics
+            total_loss = l1_loss + l2_loss
 
-        return loss_fn
+            metrics = {
+                "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
+                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
+                "Regularization/L1 Penalty": (STATS_LEVEL, l1_loss),
+                "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
+            }
+
+            return total_loss, metrics
+
+        # Create a function that computes loss, metrics, and gradients in one pass
+        return jax.grad(loss_with_metrics, has_aux=True)
 
     def make_batch_step(
         self,
@@ -550,7 +523,7 @@ class PreTrainer:
                 prior_stats = model.to_mean(current_params)
                 grad = prior_stats - bounded_posterior_stats
                 reg_fn = self.make_regularizer(model)
-                reg_grad = jax.grad(reg_fn)(current_params)
+                reg_grad = reg_fn(current_params)[0]
                 grad = grad + reg_grad
 
                 # Update parameters
@@ -652,6 +625,9 @@ class PreTrainer:
             batch_man = Replicated(model, grads_array.shape[0])
             batch_grads = batch_man.point(grads_array)
 
+            reg_fn = self.make_regularizer(model)
+            metrics = reg_fn(new_params)[1]
+
             # Log metrics
             pre_log_epoch_metrics(
                 dataset,
@@ -659,6 +635,7 @@ class PreTrainer:
                 logger,
                 new_params,
                 epoch + epoch_offset,
+                metrics,
                 batch_grads,
                 log_freq=10,
             )
@@ -781,18 +758,36 @@ class FixedObservableTrainer:
 
     def make_regularizer(
         self, model: HMoG, rho: Point[Natural, Mixture]
-    ) -> Callable[[Point[Natural, Mixture]], Array]:
-        """Create a regularizer for mixture parameters."""
+    ) -> Callable[[Point[Natural, Mixture]], tuple[Point[Mean, Mixture], MetricDict]]:
+        """Create a unified regularizer that returns loss, metrics, and gradient."""
 
-        def loss_fn(params: Point[Natural, Mixture]) -> Array:
+        def loss_with_metrics(
+            mix_params: Point[Natural, Mixture],
+        ) -> tuple[Array, MetricDict]:
+            # Extract components for regularization
+
             # L2 regularization
-            l2_loss = self.l2_reg * jnp.sum(jnp.square(params.array))
-            upr_loss, lwr_loss = precision_regularizer(
-                model, rho, params, self.upr_prs_reg, self.lwr_prs_reg
-            )
-            return l2_loss + upr_loss + lwr_loss
+            l2_norm = jnp.sum(jnp.square(mix_params.array))
+            l2_loss = self.l2_reg * l2_norm
 
-        return loss_fn
+            # Component precision regularization
+            prs_loss, prs_metrics = precision_regularizer(
+                model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
+            )
+
+            # Combine into total loss and metrics
+            total_loss = l2_loss + prs_loss
+
+            metrics = {
+                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
+                "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
+            }
+            metrics.update(prs_metrics)
+
+            return total_loss, metrics
+
+        # Create a function that computes loss, metrics, and gradients in one pass
+        return jax.grad(loss_with_metrics, has_aux=True)
 
     def train(
         self,
@@ -854,7 +849,7 @@ class FixedObservableTrainer:
         )
 
         # Create regularizer
-        regularizer = self.make_regularizer(model, rho)
+        reg_fn = self.make_regularizer(model, rho)
 
         # Define batch step function
         def batch_step(
@@ -883,7 +878,7 @@ class FixedObservableTrainer:
                 grad = prior_stats - bounded_posterior_stats
 
                 # Add regularization
-                reg_grad = jax.grad(regularizer)(current_params)
+                reg_grad = reg_fn(current_params)[0]
                 grad = grad + reg_grad
 
                 # Update parameters
@@ -959,6 +954,9 @@ class FixedObservableTrainer:
             # Reconstruct full model parameters for evaluation
             full_params = model.join_params(obs_params0, int_params0, new_mix_params)
 
+            reg_fn = self.make_regularizer(model, rho)
+            metrics = reg_fn(new_mix_params)[1]
+
             # Log metrics
             log_epoch_metrics(
                 dataset,
@@ -966,6 +964,7 @@ class FixedObservableTrainer:
                 logger,
                 full_params,
                 epoch + epoch_offset,
+                metrics,
                 batch_grads,
                 log_freq=10,
             )

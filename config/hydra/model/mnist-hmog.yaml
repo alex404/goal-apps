@@ -11,44 +11,39 @@ lr_scale_final: 1
 num_cycles: 10
 
 pre:
-  lr: 1e-4
-  n_epochs: 1000
+  lr: 3e-4
+  n_epochs: 500
   batch_steps: 1000
-  l1_reg: 0
+  l1_reg: 1e-3
   l2_reg: 0
   grad_clip: 1
   min_var: 1e-5
   jitter_var: 0
 
-
-
 lgm:
   n_epochs: 0
 
 mix:
+  lr: 3e-4
   n_epochs: 0
-  lr: 1e-4
-  # batch_size: 64
-  batch_steps: 1000
+  batch_steps: 500
   grad_clip: 1
-  l1_reg: 0
-  l2_reg: 0
   min_prob: 1e-4
   lat_min_var: 1e-6
-  lat_jitter_var: 0
   upr_prs_reg: 3e-4
   lwr_prs_reg: 3e-4
-
+  l1_reg: ${model.pre.l1_reg}
+  l2_reg: ${model.pre.l2_reg}
 
 full:
-  lr: 1e-4
+  lr: 3e-4
   n_epochs: 400
-  batch_steps: 1000
+  batch_steps: 500
   grad_clip: 1
-  min_prob: 1e-4
-  obs_min_var: 1e-5
-  lat_min_var: 1e-6
-  upr_prs_reg: 3e-4
-  lwr_prs_reg: 3e-4
-  l1_reg: 0
-  l2_reg: 0
+  min_prob: ${model.mix.min_prob}
+  obs_min_var: ${model.pre.min_var}
+  lat_min_var: ${model.mix.lat_min_var}
+  upr_prs_reg: ${model.mix.upr_prs_reg}
+  lwr_prs_reg: ${model.mix.lwr_prs_reg}
+  l1_reg: ${model.pre.l1_reg}
+  l2_reg: ${model.pre.l2_reg}

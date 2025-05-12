@@ -27,7 +27,7 @@ from goal.models import (
 from jax import Array
 from numpy.typing import NDArray
 
-from apps.configs import STATS_NUM
+from apps.configs import INFO_LEVEL, STATS_LEVEL
 from apps.plugins import (
     ClusteringDataset,
 )
@@ -392,9 +392,6 @@ def cluster_accuracy(true_labels: Array, pred_clusters: Array) -> Array:
 
 ### Logging ###
 
-STATS_LEVEL = jnp.array(STATS_NUM)
-INFO_LEVEL = jnp.array(logging.INFO)
-
 
 def update_stats[M: Manifold](
     group: str, name: str, stats: Array, metrics: MetricDict
@@ -450,6 +447,7 @@ def pre_log_epoch_metrics[H: LGM](
     logger: JaxLogger,
     params: Point[Natural, H],
     epoch: Array,
+    initial_metrics: MetricDict,
     batch_grads: None | Point[Mean, Replicated[H]] = None,
     log_freq: int = 1,
 ) -> None:
@@ -468,20 +466,17 @@ def pre_log_epoch_metrics[H: LGM](
             -(model.dim * jnp.log(n_samps) / n_samps - 2 * epoch_train_ll) / 2
         )
 
-        metrics: MetricDict = {
-            "Log-Likelihood/Train": (
-                INFO_LEVEL,
-                epoch_train_ll,
-            ),
-            "Log-Likelihood/Test": (
-                INFO_LEVEL,
-                epoch_test_ll,
-            ),
-            "Log-Likelihood/Scaled BIC": (
-                INFO_LEVEL,
-                epoch_scaled_bic,
-            ),
-        }
+        # Start with initial metrics if provided
+        metrics: MetricDict = dict(initial_metrics)
+
+        # Add core metrics
+        metrics.update(
+            {
+                "Log-Likelihood/Train": (INFO_LEVEL, epoch_train_ll),
+                "Log-Likelihood/Test": (INFO_LEVEL, epoch_test_ll),
+                "Log-Likelihood/Scaled BIC": (INFO_LEVEL, epoch_scaled_bic),
+            }
+        )
 
         obs_params, int_params, lat_params = model.split_params(params)
         obs_loc_params, obs_prs_params = model.obs_man.split_params(obs_params)
@@ -584,6 +579,7 @@ def log_epoch_metrics[H: HMoG](
     logger: JaxLogger,
     params: Point[Natural, H],
     epoch: Array,
+    initial_metrics: MetricDict,
     batch_grads: None | Point[Mean, Replicated[H]] = None,
     log_freq: int = 1,
 ) -> None:
@@ -601,20 +597,24 @@ def log_epoch_metrics[H: HMoG](
         epoch_scaled_bic = (
             -(model.dim * jnp.log(n_samps) / n_samps - 2 * epoch_train_ll) / 2
         )
-        metrics: MetricDict = {
-            "Log-Likelihood/Train": (
-                INFO_LEVEL,
-                epoch_train_ll,
-            ),
-            "Log-Likelihood/Test": (
-                INFO_LEVEL,
-                epoch_test_ll,
-            ),
-            "Log-Likelihood/Scaled BIC": (
-                INFO_LEVEL,
-                epoch_scaled_bic,
-            ),
-        }
+        metrics: MetricDict = dict(initial_metrics)
+
+        metrics.update(
+            {
+                "Log-Likelihood/Train": (
+                    INFO_LEVEL,
+                    epoch_train_ll,
+                ),
+                "Log-Likelihood/Test": (
+                    INFO_LEVEL,
+                    epoch_test_ll,
+                ),
+                "Log-Likelihood/Scaled BIC": (
+                    INFO_LEVEL,
+                    epoch_scaled_bic,
+                ),
+            }
+        )
 
         # Clustering metrics if dataset has labels
         if dataset.has_labels:
