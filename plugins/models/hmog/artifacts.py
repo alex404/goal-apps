@@ -862,21 +862,21 @@ def log_artifacts[M: HMoG](
         logger.log_artifact(handler, epoch, op_merge_results, plot_merge_results)
         # Log merge metrics
         metrics: MetricDict = {
-            "Merged/KL Accuracy": (STATS_LEVEL, jnp.array(kl_merge_results.accuracy)),
-            "Merged/KL NMI": (STATS_LEVEL, jnp.array(kl_merge_results.nmi_score)),
-            "Merged/CoAssignment Accuracy": (
+            "Clusters/KL Accuracy": (STATS_LEVEL, jnp.array(kl_merge_results.accuracy)),
+            "Clusters/KL NMI": (STATS_LEVEL, jnp.array(kl_merge_results.nmi_score)),
+            "Clusters/CoAssignment Accuracy": (
                 STATS_LEVEL,
                 jnp.array(co_merge_results.accuracy),
             ),
-            "Merged/CoAssignment NMI": (
+            "Clusters/CoAssignment NMI": (
                 STATS_LEVEL,
                 jnp.array(co_merge_results.nmi_score),
             ),
-            "Merged/Optimal Accuracy": (
+            "Clusters/Optimal Accuracy": (
                 STATS_LEVEL,
                 jnp.array(op_merge_results.accuracy),
             ),
-            "Merged/Optimal NMI": (
+            "Clusters/Optimal NMI": (
                 STATS_LEVEL,
                 jnp.array(op_merge_results.nmi_score),
             ),

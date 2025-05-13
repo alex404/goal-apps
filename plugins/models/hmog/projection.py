@@ -269,6 +269,7 @@ class ProjectionTrainer:
                 logger,
                 hmog_params,
                 epoch + epoch_offset,
+                {},
                 None,
                 log_freq=10,
             )
