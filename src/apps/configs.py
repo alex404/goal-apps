@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-import jax.numpy as jnp
 from omegaconf import MISSING
 
 ### Runtime Configs ###
@@ -14,9 +13,6 @@ from omegaconf import MISSING
 # Define a custom level
 STATS_NUM = 15  # Between INFO (20) and DEBUG (10)
 logging.addLevelName(STATS_NUM, "STATS")
-
-STATS_LEVEL = jnp.array(STATS_NUM)
-INFO_LEVEL = jnp.array(logging.INFO)
 
 
 class LogLevel(Enum):

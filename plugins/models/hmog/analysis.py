@@ -27,7 +27,7 @@ from goal.models import (
 from jax import Array
 from numpy.typing import NDArray
 
-from apps.configs import INFO_LEVEL, STATS_LEVEL
+from apps.configs import STATS_NUM
 from apps.plugins import (
     ClusteringDataset,
 )
@@ -39,6 +39,9 @@ from .base import LGM, HMoG
 # Start logger
 log = logging.getLogger(__name__)
 
+
+STATS_LEVEL = jnp.array(STATS_NUM)
+INFO_LEVEL = jnp.array(logging.INFO)
 
 ### Helpers ###
 

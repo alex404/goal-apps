@@ -25,7 +25,7 @@ from goal.models import (
 )
 from jax import Array
 
-from apps.configs import STATS_LEVEL
+from apps.configs import STATS_NUM
 from apps.plugins import (
     ClusteringDataset,
 )
@@ -49,6 +49,8 @@ class MaskingStrategy(Enum):
 # Start logger
 log = logging.getLogger(__name__)
 
+STATS_LEVEL = jnp.array(STATS_NUM)
+INFO_LEVEL = jnp.array(logging.INFO)
 
 ### Helpers ###
 

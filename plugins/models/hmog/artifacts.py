@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Callable, override
@@ -21,7 +22,7 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from numpy.typing import NDArray
 
-from apps.configs import STATS_LEVEL
+from apps.configs import STATS_NUM
 from apps.plugins import (
     ClusteringDataset,
 )
@@ -49,6 +50,10 @@ class AnalysisArgs:
 
     from_scratch: bool
     epoch: int | None
+
+
+STATS_LEVEL = jnp.array(STATS_NUM)
+INFO_LEVEL = jnp.array(logging.INFO)
 
 
 ### Generative Examples ###
