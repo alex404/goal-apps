@@ -29,8 +29,8 @@ mix:
   grad_clip: 1
   min_prob: 1e-4
   lat_min_var: 1e-6
-  upr_prs_reg: 3e-4
-  lwr_prs_reg: 3e-4
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 1e-3
   l1_reg: ${model.pre.l1_reg}
   l2_reg: ${model.pre.l2_reg}
 
