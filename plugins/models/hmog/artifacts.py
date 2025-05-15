@@ -472,11 +472,12 @@ class MergeResults(Artifact):
 
     prototypes: list[Array]  # Original prototypes
     mapping: NDArray[np.int32]  # Mapping from clusters to classes
-    accuracy: float  # Accuracy after mapping
-    nmi_score: float  # Normalized mutual information score
-    similarity_type: (
-        str  # What similarity metric was used ("kl", "coassignment", or "optimal")
-    )
+    train_accuracy: float  # Training accuracy after mapping
+    train_nmi_score: float  # NMI score on training data
+    test_accuracy: float  # Test accuracy after mapping
+    test_nmi_score: float  # NMI score on test data
+    valid_clusters: Array  # Indices of valid clusters used in mapping
+    similarity_type: str  # Similarity metric used
 
     @override
     def save_to_hdf5(self, file: File) -> None:
@@ -486,12 +487,15 @@ class MergeResults(Artifact):
         for i, proto in enumerate(self.prototypes):
             proto_group.create_dataset(f"{i}", data=np.array(proto))
 
-        # Save mapping
+        # Save mapping and valid clusters
         file.create_dataset("mapping", data=self.mapping)
+        file.create_dataset("valid_clusters", data=np.array(self.valid_clusters))
 
-        # Save metadata
-        file.attrs["accuracy"] = self.accuracy
-        file.attrs["nmi_score"] = self.nmi_score
+        # Save metrics
+        file.attrs["train_accuracy"] = self.train_accuracy
+        file.attrs["train_nmi_score"] = self.train_nmi_score
+        file.attrs["test_accuracy"] = self.test_accuracy
+        file.attrs["test_nmi_score"] = self.test_nmi_score
         file.attrs["similarity_type"] = self.similarity_type
 
     @classmethod
@@ -504,19 +508,25 @@ class MergeResults(Artifact):
         n_protos = len(proto_group)
         prototypes = [jnp.array(proto_group[f"{i}"]) for i in range(n_protos)]
 
-        # Load mapping
+        # Load mapping and valid clusters
         mapping = np.array(file["mapping"][()])
+        valid_clusters = jnp.array(file["valid_clusters"][()])
 
-        # Load metadata
-        accuracy = float(file.attrs["accuracy"])
-        nmi_score = float(file.attrs["nmi_score"])
+        # Load metrics
+        train_accuracy = float(file.attrs["train_accuracy"])
+        train_nmi_score = float(file.attrs["train_nmi_score"])
+        test_accuracy = float(file.attrs["test_accuracy"])
+        test_nmi_score = float(file.attrs["test_nmi_score"])
         similarity_type = str(file.attrs["similarity_type"])
 
         return cls(
             prototypes=prototypes,
             mapping=mapping,
-            accuracy=accuracy,
-            nmi_score=nmi_score,
+            train_accuracy=train_accuracy,
+            train_nmi_score=train_nmi_score,
+            test_accuracy=test_accuracy,
+            test_nmi_score=test_nmi_score,
+            valid_clusters=valid_clusters,
             similarity_type=similarity_type,
         )
 
@@ -541,74 +551,151 @@ def get_merge_results[M: HMoG, MR: MergeResults](
     params: Point[Natural, M],
     dataset: ClusteringDataset,
     merge_type: type[MR],
+    filter_empty_clusters: bool = True,
+    min_cluster_size: float = 0.0005,
 ) -> MR:
-    """Generate merge results using specified merge strategy.
-
-    Args:
-        model: HMoG model
-        params: Model parameters
-        dataset: Dataset with labels
-        merge_type: Type of merge results to create
-        data: Data points for calculating empirical similarities (only needed for co-assignment)
-
-    Returns:
-        Specified type of merge results
-    """
+    """Generate merge results using specified merge strategy."""
+    import numpy as np
+    import scipy.cluster.hierarchy
+    import scipy.spatial.distance
     from sklearn.metrics import normalized_mutual_info_score
 
     prototypes = get_component_prototypes(model, params)
+
+    # Get cluster probabilities for training data
     train_probs = cluster_probabilities(model, params.array, dataset.train_data)
+    train_assignments = jnp.argmax(train_probs, axis=1)
 
     n_clusters = model.upr_hrm.n_categories
     n_classes = dataset.n_classes
 
-    # Determine the similarity type and compute mapping
+    # Filter empty/near-empty clusters if requested
+    valid_clusters = jnp.arange(n_clusters)
+    if filter_empty_clusters:
+        # Count assignments to each cluster
+        cluster_counts = jnp.zeros(n_clusters)
+        for i in range(n_clusters):
+            cluster_counts = cluster_counts.at[i].set(jnp.sum(train_assignments == i))
+
+        # Find clusters with sufficient data points
+        min_count = max(1, int(min_cluster_size * len(dataset.train_data)))
+        valid_clusters = jnp.where(cluster_counts >= min_count)[0]
+
+        # Ensure we have at least min(n_clusters, n_classes) valid clusters
+        min_required = min(n_clusters, n_classes)
+        if len(valid_clusters) < min_required:
+            valid_clusters = jnp.argsort(-cluster_counts)[:min_required]
+
+    # Create a full mapping matrix of the original size
+    full_mapping = jnp.zeros((n_clusters, n_classes), dtype=jnp.int32)
+
+    # Filter train probabilities to valid clusters only
+    filtered_train_probs = train_probs[:, valid_clusters]
+
+    # Determine similarity type and compute mapping for valid clusters only
     if merge_type == KLMergeResults:
-        # Use KL-based hierarchy
+        # Get the KL-based hierarchy
         kl_hierarchy = get_cluster_hierarchy(
             model, params, KLClusterHierarchy, dataset.train_data
         )
-        mapping = hierarchy_to_mapping(
-            kl_hierarchy.linkage_matrix, n_clusters, n_classes
+        full_sim_matrix = np.array(kl_hierarchy.similarity_matrix)
+
+        # Extract submatrix for valid clusters
+        filtered_dist_matrix = full_sim_matrix[valid_clusters][:, valid_clusters]
+
+        # Ensure diagonal is zero
+        np.fill_diagonal(filtered_dist_matrix, 0)
+
+        # Convert square distance matrix to condensed form
+        n = filtered_dist_matrix.shape[0]
+        condensed_distances = np.zeros(n * (n - 1) // 2)
+        k = 0
+        for i in range(n):
+            for j in range(i + 1, n):
+                condensed_distances[k] = filtered_dist_matrix[i, j]
+                k += 1
+
+        # Run hierarchical clustering
+        filtered_linkage = scipy.cluster.hierarchy.linkage(
+            condensed_distances, method="average"
         )
+
+        # Get mapping for valid clusters
+        filtered_mapping = hierarchy_to_mapping(
+            filtered_linkage, len(valid_clusters), n_classes
+        )
+
         similarity_type = "kl"
+
     elif merge_type == CoAssignmentMergeResults:
-        # Use co-assignment-based hierarchy
+        # Get the co-assignment hierarchy
         coassign_hierarchy = get_cluster_hierarchy(
             model, params, CoAssignmentClusterHierarchy, dataset.train_data
         )
-        mapping = hierarchy_to_mapping(
-            coassign_hierarchy.linkage_matrix, n_clusters, n_classes
-        )
-        similarity_type = "coassignment"
-    elif merge_type == OptimalMergeResults:
-        if not dataset.has_labels:
-            raise ValueError(
-                "Dataset must have labels for computing optimal merge results"
-            )
+        full_sim_matrix = np.array(coassign_hierarchy.similarity_matrix)
 
-        # Use Hungarian algorithm for optimal assignment
-        mapping = compute_optimal_mapping(train_probs, dataset.train_labels, n_classes)
+        # Extract submatrix for valid clusters
+        filtered_sim_matrix = full_sim_matrix[valid_clusters][:, valid_clusters]
+
+        # Convert similarity to distance
+        filtered_dist_matrix = 1.0 - filtered_sim_matrix
+
+        # Ensure diagonal is exactly zero
+        np.fill_diagonal(filtered_dist_matrix, 0)
+
+        # Convert to condensed form
+        condensed_distances = scipy.spatial.distance.squareform(filtered_dist_matrix)
+
+        # Compute linkage
+        filtered_linkage = scipy.cluster.hierarchy.linkage(
+            condensed_distances, method="average"
+        )
+
+        # Get mapping for valid clusters
+        filtered_mapping = hierarchy_to_mapping(
+            filtered_linkage, len(valid_clusters), n_classes
+        )
+
+        similarity_type = "coassignment"
+
+    elif merge_type == OptimalMergeResults:
+        # This was already correctly filtering probabilities
+        filtered_mapping = compute_optimal_mapping(
+            filtered_train_probs, dataset.train_labels, n_classes
+        )
         similarity_type = "optimal"
     else:
         raise TypeError(f"Unsupported merge type: {merge_type}")
 
-    # Apply mapping to get merged cluster assignments
-    merged_probs = jnp.matmul(train_probs, mapping)
-    merged_assignments = jnp.argmax(merged_probs, axis=1)
+    # Place the filtered mapping into the full mapping matrix
+    for i, cluster_idx in enumerate(valid_clusters):
+        full_mapping = full_mapping.at[cluster_idx].set(filtered_mapping[i])
 
-    # Compute metrics
-    accuracy = cluster_accuracy(dataset.train_labels, merged_assignments)
-    nmi = normalized_mutual_info_score(
-        np.array(dataset.train_labels), np.array(merged_assignments)
+    # Compute metrics on training data
+    train_merged_probs = jnp.matmul(train_probs, full_mapping)
+    train_merged_assignments = jnp.argmax(train_merged_probs, axis=1)
+    train_accuracy = cluster_accuracy(dataset.train_labels, train_merged_assignments)
+    train_nmi = normalized_mutual_info_score(
+        np.array(dataset.train_labels), np.array(train_merged_assignments)
     )
 
-    # Create the merge results object
+    # Compute metrics on test data
+    test_probs = cluster_probabilities(model, params.array, dataset.test_data)
+    test_merged_probs = jnp.matmul(test_probs, full_mapping)
+    test_merged_assignments = jnp.argmax(test_merged_probs, axis=1)
+    test_accuracy = cluster_accuracy(dataset.test_labels, test_merged_assignments)
+    test_nmi = normalized_mutual_info_score(
+        np.array(dataset.test_labels), np.array(test_merged_assignments)
+    )
+
     return merge_type(
         prototypes=prototypes,
-        mapping=mapping,
-        accuracy=float(accuracy),
-        nmi_score=float(nmi),
+        mapping=full_mapping,
+        train_accuracy=float(train_accuracy),
+        train_nmi_score=float(train_nmi),
+        test_accuracy=float(test_accuracy),
+        test_nmi_score=float(test_nmi),
+        valid_clusters=valid_clusters,
         similarity_type=similarity_type,
     )
 
@@ -625,9 +712,9 @@ def merge_results_plotter(
         n_classes = results.mapping.shape[1]
         n_clusters = len(results.prototypes)
 
-        # Group clusters by class
+        # Group clusters by class (using only valid clusters)
         cluster_by_class = [[] for _ in range(n_classes)]
-        for cluster_idx in range(n_clusters):
+        for cluster_idx in results.valid_clusters:
             class_idx = np.argmax(results.mapping[cluster_idx])
             cluster_by_class[class_idx].append(cluster_idx)
 
@@ -677,13 +764,14 @@ def merge_results_plotter(
             for i, cluster_idx in enumerate(class_clusters):
                 cluster_ax = fig.add_subplot(class_gs[0, i])
                 dataset.paint_observable(results.prototypes[cluster_idx], cluster_ax)
-                # cluster_ax.set_title(f"C{cluster_idx}", fontsize=10)
 
         # Add overall title with metrics
         title = f"Merge Strategy: {results.similarity_type.capitalize()}\n"
-        title += f"Accuracy: {results.accuracy:.3f}, NMI Score: {results.nmi_score:.3f}"
-        fig.suptitle(title, fontsize=14)
+        title += f"Train Accuracy: {results.train_accuracy:.3f}, Train NMI: {results.train_nmi_score:.3f}\n"
+        title += f"Test Accuracy: {results.test_accuracy:.3f}, Test NMI: {results.test_nmi_score:.3f}\n"
+        title += f"Using {len(results.valid_clusters)}/{n_clusters} valid clusters"
 
+        fig.suptitle(title, fontsize=14)
         plt.tight_layout()
         return fig
 
@@ -867,23 +955,53 @@ def log_artifacts[M: HMoG](
         logger.log_artifact(handler, epoch, op_merge_results, plot_merge_results)
         # Log merge metrics
         metrics: MetricDict = {
-            "Clusters/KL Accuracy": (STATS_LEVEL, jnp.array(kl_merge_results.accuracy)),
-            "Clusters/KL NMI": (STATS_LEVEL, jnp.array(kl_merge_results.nmi_score)),
-            "Clusters/CoAssignment Accuracy": (
+            "Merging/KL Train Accuracy": (
                 STATS_LEVEL,
-                jnp.array(co_merge_results.accuracy),
+                jnp.array(kl_merge_results.train_accuracy),
             ),
-            "Clusters/CoAssignment NMI": (
+            "Merging/KL Train NMI": (
                 STATS_LEVEL,
-                jnp.array(co_merge_results.nmi_score),
+                jnp.array(kl_merge_results.train_nmi_score),
             ),
-            "Clusters/Optimal Accuracy": (
+            "Merging/KL Test Accuracy": (
                 STATS_LEVEL,
-                jnp.array(op_merge_results.accuracy),
+                jnp.array(kl_merge_results.test_accuracy),
             ),
-            "Clusters/Optimal NMI": (
+            "Merging/KL Test NMI": (
                 STATS_LEVEL,
-                jnp.array(op_merge_results.nmi_score),
+                jnp.array(kl_merge_results.test_nmi_score),
+            ),
+            "Merging/CoAssignment Train Accuracy": (
+                STATS_LEVEL,
+                jnp.array(co_merge_results.train_accuracy),
+            ),
+            "Merging/CoAssignment Train NMI": (
+                STATS_LEVEL,
+                jnp.array(co_merge_results.train_nmi_score),
+            ),
+            "Merging/CoAssignment Test Accuracy": (
+                STATS_LEVEL,
+                jnp.array(co_merge_results.test_accuracy),
+            ),
+            "Merging/CoAssignment Test NMI": (
+                STATS_LEVEL,
+                jnp.array(co_merge_results.test_nmi_score),
+            ),
+            "Merging/Optimal Train Accuracy": (
+                STATS_LEVEL,
+                jnp.array(op_merge_results.train_accuracy),
+            ),
+            "Merging/Optimal Train NMI": (
+                STATS_LEVEL,
+                jnp.array(op_merge_results.train_nmi_score),
+            ),
+            "Merging/Optimal Test Accuracy": (
+                STATS_LEVEL,
+                jnp.array(op_merge_results.test_accuracy),
+            ),
+            "Merging/Optimal Test NMI": (
+                STATS_LEVEL,
+                jnp.array(op_merge_results.test_nmi_score),
             ),
         }
         logger.log_metrics(metrics, jnp.array(epoch))

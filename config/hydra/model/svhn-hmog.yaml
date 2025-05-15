@@ -5,16 +5,16 @@ defaults:
 latent_dim: 40
 n_clusters: 40
 
-lr_scale_init: 1
+lr_scale_init: 0.2
 lr_scale_final: 1
 num_cycles: 10
 
 lgm_noise_scale: 0.01
-mix_noise_scale: 0.1
+mix_noise_scale: 0.01
 
 pre:
-  lr: 3e-5
-  n_epochs: 10000
+  lr: 1e-5
+  n_epochs: 20000
   batch_steps: 1000
   l1_reg: 1e-3
   l2_reg: 0
@@ -32,8 +32,8 @@ mix:
   grad_clip: 1
   min_prob: 1e-4
   lat_min_var: 1e-6
-  upr_prs_reg: 1e-3
-  lwr_prs_reg: 1e-3
+  upr_prs_reg: 3e-3
+  lwr_prs_reg: 3e-3
   l1_reg: ${model.pre.l1_reg}
   l2_reg: ${model.pre.l2_reg}
 
