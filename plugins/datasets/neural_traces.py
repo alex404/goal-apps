@@ -205,7 +205,7 @@ class NeuralTracesDataset(ClusteringDataset):
 
         # Limit the number of members to display
         display_members = members
-        max_display_members = 500
+        max_display_members = 1000
         if n_members > max_display_members:
             indices = np.random.choice(n_members, max_display_members, replace=False)
             display_members = members[indices]

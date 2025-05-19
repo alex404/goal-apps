@@ -28,12 +28,12 @@ class SVHNConfig(ClusteringDatasetConfig):
     """Configuration for SVHN dataset.
 
     Parameters:
-        convert_to_gray: Whether to convert RGB images to grayscale
+        greyscale: Whether to convert RGB images to grayscale
         crop_margin: Pixels to crop from each side to focus on the digit
     """
 
     _target_: str = "plugins.datasets.svhn.SVHNDataset.load"
-    convert_to_gray: bool = False  # Option to convert to grayscale
+    greyscale: bool = False  # Option to convert to grayscale
     crop_margin: int = 0  # Crop pixels from each side to focus on digit
 
 
@@ -47,7 +47,7 @@ class SVHNDataset(ClusteringDataset):
     """SVHN (Street View House Numbers) dataset."""
 
     cache_dir: Path
-    convert_to_gray: bool
+    greyscale: bool
     crop_margin: int
     _train_images: Array
     _train_labels: Array
@@ -56,13 +56,13 @@ class SVHNDataset(ClusteringDataset):
 
     @classmethod
     def load(
-        cls, cache_dir: Path, convert_to_gray: bool = True, crop_margin: int = 4
+        cls, cache_dir: Path, greyscale: bool = True, crop_margin: int = 4
     ) -> "SVHNDataset":
         """Load SVHN dataset.
 
         Args:
             cache_dir: Directory for caching downloaded data
-            convert_to_gray: Whether to convert RGB images to grayscale
+            greyscale: Whether to convert RGB images to grayscale
             crop_margin: Pixels to crop from each side to focus on the digit
 
         Returns:
@@ -80,7 +80,7 @@ class SVHNDataset(ClusteringDataset):
                 x = x[:, m : height - m, m : width - m]
 
             # Convert to grayscale if requested
-            if convert_to_gray:
+            if greyscale:
                 # Use standard RGB to grayscale conversion weights
                 x = np.expand_dims(
                     x[0] * 0.299 + x[1] * 0.587 + x[2] * 0.114,
@@ -124,7 +124,7 @@ Original error: {e!s}"""
 
         # Calculate flattened dimension based on whether grayscale conversion is applied
         flat_dim = (N_ROWS - 2 * crop_margin) * (N_COLS - 2 * crop_margin)
-        if not convert_to_gray:
+        if not greyscale:
             flat_dim *= N_CHANNELS
 
         # Convert to JAX arrays
@@ -139,7 +139,7 @@ Original error: {e!s}"""
         # Create and return the immutable instance
         return cls(
             cache_dir=cache_dir,
-            convert_to_gray=convert_to_gray,
+            greyscale=greyscale,
             crop_margin=crop_margin,
             _train_images=train_images,
             _train_labels=train_labels,
@@ -174,7 +174,7 @@ Original error: {e!s}"""
     @override
     def data_dim(self) -> int:
         height, width = self.observable_shape
-        channels = 1 if self.convert_to_gray else N_CHANNELS
+        channels = 1 if self.greyscale else N_CHANNELS
         return height * width * channels
 
     @property
@@ -198,7 +198,7 @@ Original error: {e!s}"""
     @override
     def paint_observable(self, observable: Array, axes: Axes):
         height, width = self.observable_shape
-        if self.convert_to_gray:
+        if self.greyscale:
             img = observable.reshape(height, width)
             axes.imshow(img, cmap="gray", interpolation="nearest")
         else:
@@ -242,7 +242,7 @@ Original error: {e!s}"""
 
         # Plot prototype
         height, width = self.observable_shape
-        if self.convert_to_gray:
+        if self.greyscale:
             prototype_img = prototype.reshape(height, width)
             proto_ax.imshow(prototype_img, cmap="gray", interpolation="nearest")
         else:
@@ -265,7 +265,7 @@ Original error: {e!s}"""
             # Plot selected members in grid
             for i in range(n_members):
                 member_ax = fig.add_subplot(members_gs[i // grid_size, i % grid_size])
-                if self.convert_to_gray:
+                if self.greyscale:
                     member_img = members[i].reshape(height, width)
                     member_ax.imshow(member_img, cmap="gray", interpolation="nearest")
                 else:

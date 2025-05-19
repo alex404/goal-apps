@@ -10,13 +10,13 @@ lr_scale_init: 1
 lr_scale_final: 1
 num_cycles: 10
 lgm_noise_scale: 0.001
-mix_noise_scale: 0.1
+mix_noise_scale: 0.001
 
 pre:
   lr: 3e-5
   n_epochs: 1000
   batch_steps: 1000
-  l1_reg: 0
+  l1_reg: 0.01
   l2_reg: 0
   grad_clip: 1
   min_var: 1e-5
@@ -31,14 +31,14 @@ mix:
   n_epochs: 0
 
 full:
-  lr: 1e-5
+  lr: 1e-6
   n_epochs: 400
   batch_steps: 5000
   grad_clip: 1
   min_prob: 1e-4
   obs_min_var: 1e-5
   lat_min_var: 1e-6
-  upr_prs_reg: 1e-2
-  lwr_prs_reg: 1e-2
-  l1_reg: 0
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 3e-3
+  l1_reg: 0.01
   l2_reg: 0
