@@ -32,7 +32,7 @@ from apps.plugins import (
 from apps.runtime.handler import MetricDict, RunHandler
 from apps.runtime.logger import JaxLogger
 
-from .analysis import log_epoch_metrics, pre_log_epoch_metrics
+from .analysis.logging import log_epoch_metrics, pre_log_epoch_metrics
 from .base import LGM, HMoG, Mixture, fori
 
 ### Constants ###

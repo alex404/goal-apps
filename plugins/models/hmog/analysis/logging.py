@@ -3,38 +3,61 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from goal.geometry import (
-    AffineMap,
-    Manifold,
     Mean,
     Natural,
     Point,
-    PositiveDefinite,
-    Rectangular,
     Replicated,
 )
-from goal.models import (
-    AnalyticLinearGaussianModel,
-    DifferentiableLinearGaussianModel,
-    Euclidean,
-    FullNormal,
-    Normal,
-)
 from jax import Array
-from numpy.typing import NDArray
 
 from apps.configs import STATS_NUM
 from apps.plugins import (
     ClusteringDataset,
 )
-from apps.runtime.handler import MetricDict
+from apps.runtime.handler import MetricDict, RunHandler
 from apps.runtime.logger import JaxLogger
 
-from .base import LGM, HMoG
+from ..base import LGM, HMoG
+from .base import (
+    analyze_component,
+    cluster_accuracy,
+    cluster_assignments,
+    clustering_nmi,
+    update_stats,
+)
+from .clusters import (
+    ClusterStatistics,
+    cluster_statistics_plotter,
+    get_cluster_statistics,
+)
+from .generative import (
+    GenerativeExamples,
+    generate_examples,
+    generative_examples_plotter,
+)
+from .hierarchy import (
+    CoAssignmentClusterHierarchy,
+    KLClusterHierarchy,
+    get_cluster_hierarchy,
+    hierarchy_plotter,
+)
+from .loadings import (
+    LoadingMatrixArtifact,
+    get_loading_matrices,
+    loading_matrix_plotter,
+)
+from .merge import (
+    CoAssignmentMergeResults,
+    KLMergeResults,
+    OptimalMergeResults,
+    get_merge_results,
+    merge_results_plotter,
+)
 
 # Start logger
 log = logging.getLogger(__name__)
@@ -43,405 +66,19 @@ log = logging.getLogger(__name__)
 STATS_LEVEL = jnp.array(STATS_NUM)
 INFO_LEVEL = jnp.array(logging.INFO)
 
+
+### Analysis Args ###
+
+
+@dataclass(frozen=True)
+class AnalysisArgs:
+    """Arguments for HMoG analysis."""
+
+    from_scratch: bool
+    epoch: int | None
+
+
 ### Helpers ###
-
-
-# Add to analysis.py
-
-
-def hierarchy_to_mapping(
-    linkage_matrix: NDArray[np.float64],
-    n_clusters: int,
-    n_classes: int,
-) -> NDArray[np.int32]:
-    """Convert hierarchical clustering to mapping matrix.
-
-    Args:
-        linkage_matrix: Hierarchical clustering linkage matrix
-        n_clusters: Number of original clusters
-        n_classes: Number of target classes
-
-    Returns:
-        Binary mapping matrix of shape (n_clusters, n_classes)
-    """
-    import scipy.cluster.hierarchy
-
-    # Cut the tree to get n_classes
-    cluster_ids = scipy.cluster.hierarchy.fcluster(
-        linkage_matrix, n_classes, criterion="maxclust"
-    )
-
-    # Convert cluster IDs to one-hot mapping
-    mapping = np.zeros((n_clusters, n_classes), dtype=np.int32)
-    for i in range(n_clusters):
-        # Cluster IDs from fcluster are 1-indexed
-        class_id = cluster_ids[i] - 1
-        mapping[i, class_id] = 1
-
-    return mapping
-
-
-def compute_optimal_mapping(
-    cluster_probs: Array,
-    true_labels: Array,
-    n_classes: int,
-) -> NDArray[np.int32]:
-    """Compute optimal mapping from clusters to classes using Hungarian algorithm.
-
-    Args:
-        cluster_probs: Cluster assignment probabilities (n_samples, n_clusters)
-        true_labels: True class labels (n_samples,)
-        n_classes: Number of classes
-
-    Returns:
-        Binary mapping matrix (n_clusters, n_classes)
-    """
-    from scipy.optimize import linear_sum_assignment
-
-    # Get hard assignments
-    cluster_assignments = jnp.argmax(cluster_probs, axis=1)
-
-    # Number of clusters
-    n_clusters = cluster_probs.shape[1]
-
-    # Create contingency matrix
-    contingency = np.zeros((n_clusters, n_classes))
-
-    # Fill contingency matrix
-    for i in range(len(true_labels)):
-        label = int(true_labels[i])
-        cluster = int(cluster_assignments[i])
-        contingency[cluster, label] += 1
-
-    # Use Hungarian algorithm for optimal assignment
-    # Negate contingency matrix for maximization
-    row_ind, col_ind = linear_sum_assignment(-contingency)
-
-    # Create mapping matrix
-    mapping = np.zeros((n_clusters, n_classes), dtype=np.int32)
-    for i, j in zip(row_ind, col_ind):
-        mapping[i, j] = 1
-
-    return mapping
-
-
-def cluster_probabilities(model: HMoG, params: Array, data: Array) -> Array:
-    """Get cluster probability distributions for each data point.
-
-    Args:
-        model: HMoG model
-        params: Model parameters
-        data: Data points to get probabilities for
-
-    Returns:
-        Array of shape (n_samples, n_clusters) with probability distributions
-    """
-
-    def data_point_probs(x: Array) -> Array:
-        cat_pst = model.upr_hrm.prior(
-            model.posterior_at(model.natural_point(params), x)
-        )
-        with model.upr_hrm.lat_man as lm:
-            return lm.to_probs(lm.to_mean(cat_pst))
-
-    return jax.lax.map(data_point_probs, data, batch_size=2048)
-
-
-def cluster_assignments(model: HMoG, params: Array, data: Array) -> Array:
-    """Assign data points to clusters using the model.
-
-    Args:
-        model: HMoG model
-        params: Model parameters
-        data: Data points to assign
-
-    Returns:
-        Array of cluster assignments
-    """
-    probs = cluster_probabilities(model, params, data)
-    return jnp.argmax(probs, axis=-1)
-
-
-def symmetric_kl_matrix[
-    M: HMoG,
-](
-    model: M,
-    params: Point[Natural, M],
-) -> Array:
-    mix_params = model.prior(params)
-    with model.con_upr_hrm as ch:
-        comp_lats, _ = ch.split_natural_mixture(mix_params)
-
-        def kl_div_between_components(i: Array, j: Array) -> Array:
-            comp_i = ch.cmp_man.get_replicate(comp_lats, i)
-            comp_i_mean = ch.obs_man.to_mean(comp_i)
-            comp_j = ch.cmp_man.get_replicate(comp_lats, j)
-            return ch.obs_man.relative_entropy(comp_i_mean, comp_j)
-
-        idxs = jnp.arange(ch.n_categories)
-
-    def kl_div_from_one_to_all(i: Array) -> Array:
-        return jax.vmap(kl_div_between_components, in_axes=(None, 0))(i, idxs)
-
-    kl_matrix = jax.lax.map(kl_div_from_one_to_all, idxs)
-    return (kl_matrix + kl_matrix.T) / 2
-
-
-def get_component_prototypes[
-    M: HMoG,
-](
-    model: M,
-    params: Point[Natural, M],
-) -> list[Array]:
-    # Split into likelihood and mixture parameters
-    lkl_params, mix_params = model.split_conjugated(params)
-
-    # Extract components from mixture
-    comp_lats, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
-
-    # For each component, compute the observable distribution and get its mean
-    prototypes: list[Array] = []
-
-    ana_lgm = AnalyticLinearGaussianModel(
-        obs_dim=model.lwr_hrm.obs_dim,  # Original latent becomes observable
-        obs_rep=model.lwr_hrm.obs_rep,
-        lat_dim=model.lwr_hrm.lat_dim,  # Original observable becomes latent
-    )
-
-    for i in range(comp_lats.shape[0]):
-        # Get latent mean for this component
-        comp_lat_params = model.con_upr_hrm.cmp_man.get_replicate(
-            comp_lats, jnp.asarray(i)
-        )
-        lwr_hrm_params = ana_lgm.join_conjugated(lkl_params, comp_lat_params)
-        lwr_hrm_means = ana_lgm.to_mean(lwr_hrm_params)
-        lwr_hrm_obs = ana_lgm.split_params(lwr_hrm_means)[0]
-        obs_means = ana_lgm.obs_man.split_mean_second_moment(lwr_hrm_obs)[0].array
-
-        prototypes.append(obs_means)
-
-    return prototypes
-
-
-def posterior_co_assignment_matrix[M: HMoG](
-    model: M,
-    params: Point[Natural, M],
-    data: Array,
-) -> Array:
-    """Compute posterior co-assignment matrix between components.
-
-    This computes how often two clusters are assigned to the same data points,
-    based on their posterior probabilities.
-
-    Args:
-        model: HMoG model
-        params: Model parameters
-        data: Data points for calculating empirical similarities
-
-    Returns:
-        Co-assignment similarity matrix (higher values = more similar)
-    """
-    # Get cluster probabilities for each data point
-    probs = cluster_probabilities(model, params.array, data)
-
-    # Compute co-assignment matrix efficiently through matrix multiplication
-    # co_assignment[i,j] = sum_x p(x,i) * p(x,j)
-    co_assignment = probs.T @ probs
-
-    # Normalize to get correlation-like measure
-    diag_sqrt = jnp.sqrt(jnp.diag(co_assignment))
-    # Build outer product of sqrt-diag entries, add small epsilon for stability
-    denom = diag_sqrt[:, None] * diag_sqrt[None, :] + 1e-12
-    normalized_co_assignment = co_assignment / denom
-
-    # Ensure perfect symmetry by averaging with transpose
-    normalized_co_assignment = 0.5 * (
-        normalized_co_assignment + normalized_co_assignment.T
-    )
-
-    return normalized_co_assignment
-
-
-def clustering_nmi(
-    n_clusters: int, n_classes: int, assignments: Array, true_labels: Array
-) -> Array:
-    """
-    Compute Normalized Mutual Information (NMI) between cluster assignments and true labels.
-
-    Fully JAX-compatible implementation that can be used with jax.jit.
-
-    Args:
-        assignments: Array of cluster assignments
-        true_labels: Array of true class labels
-
-    Returns:
-        NMI score (0-1, higher is better)
-    """
-    # Get number of clusters and classes
-    n_samples = assignments.shape[0]
-
-    # Create indices for counting
-    cluster_indices = assignments
-    class_indices = true_labels
-
-    # Compute cluster and class counts
-    cluster_counts = jnp.zeros(n_clusters).at[cluster_indices].add(1.0)
-    class_counts = jnp.zeros(n_classes).at[class_indices].add(1.0)
-
-    # Initialize contingency matrix
-    contingency = jnp.zeros((n_clusters, n_classes))
-
-    # Build contingency matrix using scatter_add approach
-    idx_matrix = jnp.stack([assignments, true_labels], axis=1)
-    values = jnp.ones(n_samples)
-
-    # Use a non-python loop to build the contingency table
-    def update_contingency(i, cont):
-        idx = idx_matrix[i]
-        val = values[i]
-        return cont.at[idx[0], idx[1]].add(val)
-
-    contingency = jax.lax.fori_loop(0, n_samples, update_contingency, contingency)
-
-    # Compute entropy for clusters
-    cluster_probs = cluster_counts / n_samples
-    cluster_entropy = -jnp.sum(
-        jnp.where(cluster_probs > 0, cluster_probs * jnp.log(cluster_probs), 0.0)
-    )
-
-    # Compute entropy for classes
-    class_probs = class_counts / n_samples
-    class_entropy = -jnp.sum(
-        jnp.where(class_probs > 0, class_probs * jnp.log(class_probs), 0.0)
-    )
-
-    # Compute mutual information
-    joint_probs = contingency / n_samples
-    outer_probs = jnp.outer(cluster_probs, class_probs)
-
-    # Avoid log(0) by masking
-    log_ratio = jnp.where(joint_probs > 0, jnp.log(joint_probs / outer_probs), 0.0)
-
-    mutual_info = jnp.sum(joint_probs * log_ratio)
-
-    # Compute NMI with small epsilon to avoid division by zero
-    epsilon = 1e-10
-    nmi = 2.0 * mutual_info / (cluster_entropy + class_entropy + epsilon)
-
-    # Ensure NMI is in [0, 1]
-    return jnp.clip(nmi, 0.0, 1.0)
-
-
-def relative_entropy_regularization_full[
-    ObsRep: PositiveDefinite,
-    PostRep: PositiveDefinite,
-](
-    lgm: DifferentiableLinearGaussianModel[ObsRep, PostRep],
-    batch: Array,
-    lkl_params: Point[
-        Natural, AffineMap[Rectangular, Euclidean, Euclidean, Normal[ObsRep]]
-    ],
-) -> tuple[AnalyticLinearGaussianModel[ObsRep], Array, Point[Mean, FullNormal]]:
-    # Relative entropy regularization
-    ana_lgm = AnalyticLinearGaussianModel(lgm.obs_dim, lgm.obs_rep, lgm.lat_dim)
-    z = ana_lgm.lat_man.to_natural(ana_lgm.lat_man.standard_normal())
-    lgm_params = ana_lgm.join_conjugated(lkl_params, z)
-    lgm_means = ana_lgm.mean_posterior_statistics(lgm_params, batch)
-    lgm_lat_means = ana_lgm.split_params(lgm_means)[2]
-    re_loss = ana_lgm.lat_man.relative_entropy(lgm_lat_means, z)
-    return ana_lgm, re_loss, lgm_lat_means
-
-
-def cluster_accuracy(true_labels: Array, pred_clusters: Array) -> Array:
-    """Compute clustering accuracy with optimal label assignment.
-
-    Uses a fixed-size contingency matrix approach to be JIT-compatible.
-
-    Args:
-        true_labels: Ground truth labels
-        pred_clusters: Predicted cluster assignments
-
-    Returns:
-        Clustering accuracy after optimal label assignment
-    """
-    # Use a fixed max size for JIT compatibility
-    # If your model has more clusters, adjust this value
-    max_clusters = 100
-
-    # Create a fixed-size contingency matrix
-    contingency = jnp.zeros((max_clusters, max_clusters))
-
-    # Fill the contingency matrix
-    def body_fun(i, cont):
-        true_label = jnp.clip(true_labels[i], 0, max_clusters - 1)
-        pred_cluster = jnp.clip(pred_clusters[i], 0, max_clusters - 1)
-        return cont.at[pred_cluster, true_label].add(1)
-
-    contingency = jax.lax.fori_loop(0, true_labels.shape[0], body_fun, contingency)
-
-    # Find the best cluster-to-label assignment
-    cluster_to_label = jnp.argmax(contingency, axis=1)
-
-    # Map each point's cluster to its best label
-    def map_fn(i):
-        cluster = jnp.clip(pred_clusters[i], 0, max_clusters - 1)
-        return cluster_to_label[cluster]
-
-    mapped_preds = jax.vmap(map_fn)(jnp.arange(true_labels.shape[0]))
-
-    # Compute accuracy
-    return jnp.mean(mapped_preds == true_labels)
-
-
-### Logging ###
-
-
-def update_stats[M: Manifold](
-    group: str, name: str, stats: Array, metrics: MetricDict
-) -> MetricDict:
-    metrics.update(
-        {
-            f"{group}/{name} Min": (
-                STATS_LEVEL,
-                jnp.min(stats),
-            ),
-            f"{group}/{name} Median": (
-                STATS_LEVEL,
-                jnp.median(stats),
-            ),
-            f"{group}/{name} Max": (
-                STATS_LEVEL,
-                jnp.max(stats),
-            ),
-        }
-    )
-    return metrics
-
-
-def analyze_component(
-    nor_man: FullNormal, nrm_params: Point[Natural, FullNormal]
-) -> Array:
-    nrm_means = nor_man.to_mean(nrm_params)
-    loc, prs = nor_man.split_location_precision(nrm_params)
-    mean, cov = nor_man.split_mean_covariance(nrm_means)
-    dns_prs = nor_man.cov_man.to_dense(prs)
-    dns_cov = nor_man.cov_man.to_dense(cov)
-    loc_nrm = jnp.linalg.norm(loc.array)
-    mean_nrm = jnp.linalg.norm(mean.array)
-    prs_cond = jnp.linalg.cond(dns_prs)
-    cov_cond = jnp.linalg.cond(dns_cov)
-    prs_ldet = jnp.linalg.slogdet(dns_prs)[1]
-    cov_ldet = jnp.linalg.slogdet(dns_cov)[1]
-    return jnp.asarray(
-        [
-            loc_nrm,
-            mean_nrm,
-            prs_cond,
-            cov_cond,
-            prs_ldet,
-            cov_ldet,
-        ]
-    )
 
 
 def pre_log_epoch_metrics[H: LGM](
@@ -771,3 +408,132 @@ def log_epoch_metrics[H: HMoG](
         return None
 
     jax.lax.cond(epoch % log_freq == 0, compute_metrics, no_op)
+
+
+### Log Artifacts ###
+
+
+def log_artifacts[M: HMoG](
+    handler: RunHandler,
+    dataset: ClusteringDataset,
+    logger: JaxLogger,
+    model: M,
+    epoch: int,
+    params: Point[Natural, M] | None = None,
+    key: Array | None = None,
+) -> None:
+    """Generate and save plots from artifacts.
+
+    Args:
+        handler: Run handler containing saved artifacts
+        dataset: Dataset used for visualization
+        logger: Logger for saving artifacts and figures
+        model: Model used for analysis and artifact generation
+        params: If provided, generate new artifacts from these parameters
+        epoch: Specific epoch to analyze, defaults to latest
+    """
+
+    if key is None:
+        key = jax.random.PRNGKey(42)
+
+    # from_scratch if params is provided
+    if params is not None:
+        handler.save_params(params.array, epoch)
+        cluster_statistics = get_cluster_statistics(model, dataset, params)
+        kl_hierarchy = get_cluster_hierarchy(
+            model, params, KLClusterHierarchy, dataset.train_data
+        )
+        co_hierarchy = get_cluster_hierarchy(
+            model, params, CoAssignmentClusterHierarchy, dataset.train_data
+        )
+        gen_examples = generate_examples(model, params, 25, key)
+        loading_matrices = get_loading_matrices(model, params)
+    else:
+        cluster_statistics = handler.load_artifact(epoch, ClusterStatistics)
+        kl_hierarchy = handler.load_artifact(epoch, KLClusterHierarchy)
+        co_hierarchy = handler.load_artifact(epoch, CoAssignmentClusterHierarchy)
+        gen_examples = handler.load_artifact(epoch, GenerativeExamples)
+        loading_matrices = handler.load_artifact(epoch, LoadingMatrixArtifact)
+
+    # Plot and save
+    plot_clusters_statistics = cluster_statistics_plotter(dataset)
+    plot_hierarchy = hierarchy_plotter(dataset)
+    plot_examples = generative_examples_plotter(dataset)
+    plot_loadings = loading_matrix_plotter(dataset)
+
+    logger.log_artifact(handler, epoch, cluster_statistics, plot_clusters_statistics)
+    logger.log_artifact(handler, epoch, kl_hierarchy, plot_hierarchy)
+    logger.log_artifact(handler, epoch, co_hierarchy, plot_hierarchy)
+    logger.log_artifact(handler, epoch, gen_examples, plot_examples)
+    logger.log_artifact(handler, epoch, loading_matrices, plot_loadings)
+
+    if dataset.has_labels:
+        if params is not None:
+            kl_merge_results = get_merge_results(model, params, dataset, KLMergeResults)
+            co_merge_results = get_merge_results(
+                model, params, dataset, CoAssignmentMergeResults
+            )
+            op_merge_results = get_merge_results(
+                model, params, dataset, OptimalMergeResults
+            )
+        else:
+            kl_merge_results = handler.load_artifact(epoch, KLMergeResults)
+            co_merge_results = handler.load_artifact(epoch, CoAssignmentMergeResults)
+            op_merge_results = handler.load_artifact(epoch, OptimalMergeResults)
+
+        plot_merge_results = merge_results_plotter(dataset)
+        logger.log_artifact(handler, epoch, kl_merge_results, plot_merge_results)
+        logger.log_artifact(handler, epoch, co_merge_results, plot_merge_results)
+        logger.log_artifact(handler, epoch, op_merge_results, plot_merge_results)
+        # Log merge metrics
+        metrics: MetricDict = {
+            "Merging/KL Train Accuracy": (
+                STATS_LEVEL,
+                jnp.array(kl_merge_results.train_accuracy),
+            ),
+            "Merging/KL Train NMI": (
+                STATS_LEVEL,
+                jnp.array(kl_merge_results.train_nmi_score),
+            ),
+            "Merging/KL Test Accuracy": (
+                STATS_LEVEL,
+                jnp.array(kl_merge_results.test_accuracy),
+            ),
+            "Merging/KL Test NMI": (
+                STATS_LEVEL,
+                jnp.array(kl_merge_results.test_nmi_score),
+            ),
+            "Merging/CoAssignment Train Accuracy": (
+                STATS_LEVEL,
+                jnp.array(co_merge_results.train_accuracy),
+            ),
+            "Merging/CoAssignment Train NMI": (
+                STATS_LEVEL,
+                jnp.array(co_merge_results.train_nmi_score),
+            ),
+            "Merging/CoAssignment Test Accuracy": (
+                STATS_LEVEL,
+                jnp.array(co_merge_results.test_accuracy),
+            ),
+            "Merging/CoAssignment Test NMI": (
+                STATS_LEVEL,
+                jnp.array(co_merge_results.test_nmi_score),
+            ),
+            "Merging/Optimal Train Accuracy": (
+                STATS_LEVEL,
+                jnp.array(op_merge_results.train_accuracy),
+            ),
+            "Merging/Optimal Train NMI": (
+                STATS_LEVEL,
+                jnp.array(op_merge_results.train_nmi_score),
+            ),
+            "Merging/Optimal Test Accuracy": (
+                STATS_LEVEL,
+                jnp.array(op_merge_results.test_accuracy),
+            ),
+            "Merging/Optimal Test NMI": (
+                STATS_LEVEL,
+                jnp.array(op_merge_results.test_nmi_score),
+            ),
+        }
+        logger.log_metrics(metrics, jnp.array(epoch))

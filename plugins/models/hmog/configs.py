@@ -113,7 +113,7 @@ class FixedObservableTrainerConfig:
 class AnalysisConfig:
     """Configuration for analysis of trained model."""
 
-    _target_: str = "plugins.models.hmog.artifacts.AnalysisArgs"
+    _target_: str = "plugins.models.hmog.analysis.logging.AnalysisArgs"
     from_scratch: bool = False
     epoch: int | None = None
 

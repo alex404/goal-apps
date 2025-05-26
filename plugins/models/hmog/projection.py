@@ -28,8 +28,7 @@ from apps.plugins import (
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
-from .analysis import log_epoch_metrics
-from .artifacts import AnalysisArgs, log_artifacts
+from .analysis.logging import AnalysisArgs, log_artifacts, log_epoch_metrics
 from .base import HMoG, Mixture, fori
 from .trainers import PreTrainer
 

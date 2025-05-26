@@ -26,7 +26,7 @@ from apps.plugins import (
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
-from .artifacts import AnalysisArgs, log_artifacts
+from .analysis.logging import AnalysisArgs, log_artifacts
 from .trainers import (
     FixedObservableTrainer,
     GradientTrainer,
