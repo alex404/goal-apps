@@ -3,12 +3,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import override
+from typing import Any, Self, override
 
+import jax.numpy as jnp
 from jax import Array
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 
-from .runtime.handler import RunHandler
+from .runtime.handler import Artifact, MetricDict, RunHandler
 from .runtime.logger import JaxLogger
 
 ### Interfaces ###
@@ -47,6 +49,10 @@ class Dataset(ABC):
             axes: Matplotlib axes to draw on
         """
 
+    def get_dataset_analyses(self) -> dict[str, Analysis[Self, Any, Artifact]]:
+        """Return dataset-specific analysis instances."""
+        return {}
+
 
 class Model[D: Dataset](ABC):
     """Root class for all models."""
@@ -75,6 +81,65 @@ class Model[D: Dataset](ABC):
         logger: JaxLogger,
     ) -> None:
         """Evaluate model on dataset."""
+
+
+### Analysis ###
+
+
+@dataclass(frozen=True)
+class Analysis[D: Dataset, M, T: Artifact](ABC):
+    """Base class for analyses that produce artifacts and visualizations.
+
+    This class standardizes the pattern of generating or loading artifacts
+    and creating visualizations from them. Each analysis encapsulates:
+    - The logic for generating an artifact from model parameters
+    - The visualization function for that artifact type
+    - The coordination of loading vs. regenerating artifacts
+    """
+
+    @abstractmethod
+    def generate(
+        self,
+        model: M,
+        params: Array,
+        dataset: D,
+        key: Array,
+    ) -> T:
+        """Generate the analysis artifact from model parameters."""
+
+    @abstractmethod
+    def plot(self, artifact: T, dataset: D) -> Figure:
+        """Create visualization from the artifact."""
+
+    @property
+    @abstractmethod
+    def artifact_type(self) -> type[T]:
+        """Return the artifact class for type checking and loading."""
+
+    def metrics(self, artifact: T) -> MetricDict:
+        """Return metrics collected during the analysis."""
+        return {}
+
+    def process(
+        self,
+        handler: RunHandler,
+        dataset: D,
+        logger: JaxLogger,
+        model: M,
+        epoch: int,
+        key: Array,
+        params: Array | None = None,
+    ) -> None:
+        """Process the analysis: generate or load artifact, then visualize and log."""
+        if params is not None:
+            artifact = self.generate(model, params, dataset, key)
+        else:
+            artifact = handler.load_artifact(epoch, self.artifact_type)
+
+        metrics = self.metrics(artifact)
+
+        logger.log_metrics(metrics, jnp.array(epoch))
+        logger.log_artifact(handler, epoch, artifact, lambda a: self.plot(a, dataset))
 
 
 ### Clustering ###

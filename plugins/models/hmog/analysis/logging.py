@@ -30,33 +30,17 @@ from .base import (
     clustering_nmi,
     update_stats,
 )
-from .clusters import (
-    ClusterStatistics,
-    cluster_statistics_plotter,
-    get_cluster_statistics,
-)
-from .generative import (
-    GenerativeExamples,
-    generate_examples,
-    generative_examples_plotter,
-)
+from .clusters import ClusterStatisticsAnalysis
+from .generative import GenerativeExamplesAnalysis
 from .hierarchy import (
-    CoAssignmentClusterHierarchy,
-    KLClusterHierarchy,
-    get_cluster_hierarchy,
-    hierarchy_plotter,
+    CoAssignmentHierarchyAnalysis,
+    KLHierarchyAnalysis,
 )
-from .loadings import (
-    LoadingMatrixArtifact,
-    get_loading_matrices,
-    loading_matrix_plotter,
-)
+from .loadings import LoadingMatrixAnalysis
 from .merge import (
-    CoAssignmentMergeResults,
-    KLMergeResults,
-    OptimalMergeResults,
-    get_merge_results,
-    merge_results_plotter,
+    CoAssignmentMergeAnalysis,
+    KLMergeAnalysis,
+    OptimalMergeAnalysis,
 )
 
 # Start logger
@@ -413,6 +397,9 @@ def log_epoch_metrics[H: HMoG](
 ### Log Artifacts ###
 
 
+# In plugins/models/hmog/analysis/logging.py
+
+
 def log_artifacts[M: HMoG](
     handler: RunHandler,
     dataset: ClusteringDataset,
@@ -422,118 +409,42 @@ def log_artifacts[M: HMoG](
     params: Point[Natural, M] | None = None,
     key: Array | None = None,
 ) -> None:
-    """Generate and save plots from artifacts.
-
-    Args:
-        handler: Run handler containing saved artifacts
-        dataset: Dataset used for visualization
-        logger: Logger for saving artifacts and figures
-        model: Model used for analysis and artifact generation
-        params: If provided, generate new artifacts from these parameters
-        epoch: Specific epoch to analyze, defaults to latest
-    """
+    """Generate and save plots from artifacts."""
 
     if key is None:
         key = jax.random.PRNGKey(42)
 
-    # from_scratch if params is provided
     if params is not None:
         handler.save_params(params.array, epoch)
-        cluster_statistics = get_cluster_statistics(model, dataset, params)
-        kl_hierarchy = get_cluster_hierarchy(
-            model, params, KLClusterHierarchy, dataset.train_data
-        )
-        co_hierarchy = get_cluster_hierarchy(
-            model, params, CoAssignmentClusterHierarchy, dataset.train_data
-        )
-        gen_examples = generate_examples(model, params, 25, key)
-        loading_matrices = get_loading_matrices(model, params)
-    else:
-        cluster_statistics = handler.load_artifact(epoch, ClusterStatistics)
-        kl_hierarchy = handler.load_artifact(epoch, KLClusterHierarchy)
-        co_hierarchy = handler.load_artifact(epoch, CoAssignmentClusterHierarchy)
-        gen_examples = handler.load_artifact(epoch, GenerativeExamples)
-        loading_matrices = handler.load_artifact(epoch, LoadingMatrixArtifact)
 
-    # Plot and save
-    plot_clusters_statistics = cluster_statistics_plotter(dataset)
-    plot_hierarchy = hierarchy_plotter(dataset)
-    plot_examples = generative_examples_plotter(dataset)
-    plot_loadings = loading_matrix_plotter(dataset)
+    # Convert params to array if provided
+    params_array = params.array if params is not None else None
 
-    logger.log_artifact(handler, epoch, cluster_statistics, plot_clusters_statistics)
-    logger.log_artifact(handler, epoch, kl_hierarchy, plot_hierarchy)
-    logger.log_artifact(handler, epoch, co_hierarchy, plot_hierarchy)
-    logger.log_artifact(handler, epoch, gen_examples, plot_examples)
-    logger.log_artifact(handler, epoch, loading_matrices, plot_loadings)
+    analyses = [
+        ClusterStatisticsAnalysis(),
+        KLHierarchyAnalysis(),
+        CoAssignmentHierarchyAnalysis(),
+        GenerativeExamplesAnalysis(n_samples=1000),
+        LoadingMatrixAnalysis(),
+    ]
 
+    for analysis in analyses:
+        analysis.process(handler, dataset, logger, model, epoch, key, params_array)
+
+    # Conditional analyses for labeled datasets
     if dataset.has_labels:
-        if params is not None:
-            kl_merge_results = get_merge_results(model, params, dataset, KLMergeResults)
-            co_merge_results = get_merge_results(
-                model, params, dataset, CoAssignmentMergeResults
-            )
-            op_merge_results = get_merge_results(
-                model, params, dataset, OptimalMergeResults
-            )
-        else:
-            kl_merge_results = handler.load_artifact(epoch, KLMergeResults)
-            co_merge_results = handler.load_artifact(epoch, CoAssignmentMergeResults)
-            op_merge_results = handler.load_artifact(epoch, OptimalMergeResults)
+        merge_analyses = [
+            KLMergeAnalysis(True, 0.0005),
+            CoAssignmentMergeAnalysis(True, 0.0005),
+            OptimalMergeAnalysis(True, 0.0005),
+        ]
 
-        plot_merge_results = merge_results_plotter(dataset)
-        logger.log_artifact(handler, epoch, kl_merge_results, plot_merge_results)
-        logger.log_artifact(handler, epoch, co_merge_results, plot_merge_results)
-        logger.log_artifact(handler, epoch, op_merge_results, plot_merge_results)
-        # Log merge metrics
-        metrics: MetricDict = {
-            "Merging/KL Train Accuracy": (
-                STATS_LEVEL,
-                jnp.array(kl_merge_results.train_accuracy),
-            ),
-            "Merging/KL Train NMI": (
-                STATS_LEVEL,
-                jnp.array(kl_merge_results.train_nmi_score),
-            ),
-            "Merging/KL Test Accuracy": (
-                STATS_LEVEL,
-                jnp.array(kl_merge_results.test_accuracy),
-            ),
-            "Merging/KL Test NMI": (
-                STATS_LEVEL,
-                jnp.array(kl_merge_results.test_nmi_score),
-            ),
-            "Merging/CoAssignment Train Accuracy": (
-                STATS_LEVEL,
-                jnp.array(co_merge_results.train_accuracy),
-            ),
-            "Merging/CoAssignment Train NMI": (
-                STATS_LEVEL,
-                jnp.array(co_merge_results.train_nmi_score),
-            ),
-            "Merging/CoAssignment Test Accuracy": (
-                STATS_LEVEL,
-                jnp.array(co_merge_results.test_accuracy),
-            ),
-            "Merging/CoAssignment Test NMI": (
-                STATS_LEVEL,
-                jnp.array(co_merge_results.test_nmi_score),
-            ),
-            "Merging/Optimal Train Accuracy": (
-                STATS_LEVEL,
-                jnp.array(op_merge_results.train_accuracy),
-            ),
-            "Merging/Optimal Train NMI": (
-                STATS_LEVEL,
-                jnp.array(op_merge_results.train_nmi_score),
-            ),
-            "Merging/Optimal Test Accuracy": (
-                STATS_LEVEL,
-                jnp.array(op_merge_results.test_accuracy),
-            ),
-            "Merging/Optimal Test NMI": (
-                STATS_LEVEL,
-                jnp.array(op_merge_results.test_nmi_score),
-            ),
-        }
-        logger.log_metrics(metrics, jnp.array(epoch))
+        for analysis in merge_analyses:
+            analysis.process(handler, dataset, logger, model, epoch, key, params_array)
+
+    # Dataset-specific analyses
+    specialized_analyses = dataset.get_dataset_analyses()
+    for name, analysis in specialized_analyses.items():
+        # For dataset-specific analyses, we might need to pass cluster assignments
+        # This would be handled through the dataset's interface
+        analysis.process(handler, dataset, logger, model, epoch, key, params_array)

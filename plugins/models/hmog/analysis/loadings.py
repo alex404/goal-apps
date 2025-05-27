@@ -19,6 +19,7 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 
 from apps.plugins import (
+    Analysis,
     ClusteringDataset,
 )
 from apps.runtime.handler import Artifact
@@ -45,8 +46,8 @@ class LoadingMatrixArtifact(Artifact):
     @override
     def load_from_hdf5(cls, file: File) -> LoadingMatrixArtifact:
         """Load loading matrices from HDF5 file."""
-        natural_loadings = jnp.array(file["natural_loadings"][()])  # pyright: ignore[reportIndexIssue]
-        mean_loadings = jnp.array(file["mean_loadings"][()])  # pyright: ignore[reportIndexIssue]
+        natural_loadings = jnp.array(file["natural_loadings"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        mean_loadings = jnp.array(file["mean_loadings"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
         return cls(natural_loadings=natural_loadings, mean_loadings=mean_loadings)
 
 
@@ -123,3 +124,36 @@ def loading_matrix_plotter(
         return fig
 
     return plot_loading_matrices
+
+
+### Analysis ###
+
+
+@dataclass(frozen=True)
+class LoadingMatrixAnalysis(Analysis[ClusteringDataset, HMoG, LoadingMatrixArtifact]):
+    """Analysis of cluster prototypes with their members."""
+
+    @property
+    @override
+    def artifact_type(self) -> type[LoadingMatrixArtifact]:
+        return LoadingMatrixArtifact
+
+    @override
+    def generate(
+        self,
+        model: HMoG,
+        params: Array,
+        dataset: ClusteringDataset,
+        key: Array,
+    ) -> LoadingMatrixArtifact:
+        """Generate collection of clusters with their members."""
+        # Convert array to typed point for the model
+        typed_params = model.natural_point(params)
+        return get_loading_matrices(model, typed_params)
+
+    @override
+    def plot(
+        self, artifact: LoadingMatrixArtifact, dataset: ClusteringDataset
+    ) -> Figure:
+        """Create grid of cluster prototype visualizations."""
+        return loading_matrix_plotter(dataset)(artifact)

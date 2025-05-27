@@ -17,6 +17,7 @@ from jax import Array
 from matplotlib.figure import Figure
 
 from apps.plugins import (
+    Analysis,
     ClusteringDataset,
 )
 from apps.runtime.handler import Artifact
@@ -41,7 +42,7 @@ class GenerativeExamples(Artifact):
     @override
     def load_from_hdf5(cls, file: File) -> GenerativeExamples:
         """Load generated samples from HDF5 file."""
-        samples = jnp.array(file["samples"][()])  # pyright: ignore[reportIndexIssue]
+        samples = jnp.array(file["samples"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
         return cls(samples=samples)
 
 
@@ -104,3 +105,36 @@ def generative_examples_plotter(
         return fig
 
     return plot_generative_examples
+
+
+### Analysis ###
+
+
+@dataclass(frozen=True)
+class GenerativeExamplesAnalysis(Analysis[ClusteringDataset, HMoG, GenerativeExamples]):
+    """Analysis of cluster prototypes with their members."""
+
+    n_samples: int
+
+    @property
+    @override
+    def artifact_type(self) -> type[GenerativeExamples]:
+        return GenerativeExamples
+
+    @override
+    def generate(
+        self,
+        model: HMoG,
+        params: Array,
+        dataset: ClusteringDataset,
+        key: Array,
+    ) -> GenerativeExamples:
+        """Generate collection of clusters with their members."""
+        # Convert array to typed point for the model
+        typed_params = model.natural_point(params)
+        return generate_examples(model, typed_params, self.n_samples, key)
+
+    @override
+    def plot(self, artifact: GenerativeExamples, dataset: ClusteringDataset) -> Figure:
+        """Create grid of cluster prototype visualizations."""
+        return generative_examples_plotter(dataset)(artifact)

@@ -18,6 +18,7 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 
 from apps.plugins import (
+    Analysis,
     ClusteringDataset,
 )
 from apps.runtime.handler import Artifact
@@ -136,3 +137,35 @@ def cluster_statistics_plotter(
         return fig
 
     return plot_cluster_statistics
+
+
+### Cluster Analysis ###
+
+
+@dataclass(frozen=True)
+class ClusterStatisticsAnalysis(Analysis[ClusteringDataset, HMoG, ClusterStatistics]):
+    """Analysis of cluster prototypes with their members."""
+
+    @property
+    @override
+    def artifact_type(self) -> type[ClusterStatistics]:
+        return ClusterStatistics
+
+    @override
+    def generate(
+        self,
+        model: HMoG,
+        params: Array,
+        dataset: ClusteringDataset,
+        key: Array | None = None,
+    ) -> ClusterStatistics:
+        """Generate collection of clusters with their members."""
+        # Convert array to typed point for the model
+        typed_params = model.natural_point(params)
+        return get_cluster_statistics(model, dataset, typed_params)
+
+    @override
+    def plot(self, artifact: ClusterStatistics, dataset: ClusteringDataset) -> Figure:
+        """Create grid of cluster prototype visualizations."""
+        plotter = cluster_statistics_plotter(dataset)
+        return plotter(artifact)

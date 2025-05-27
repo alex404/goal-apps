@@ -6,7 +6,7 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self, TypeVar, cast
+from typing import Any, Self, cast
 
 import h5py
 import numpy as np
@@ -38,8 +38,6 @@ class Artifact(ABC):
 
 
 ### Run Handler ###
-
-T = TypeVar("T", bound=Artifact)
 
 
 class RunHandler:
@@ -73,7 +71,7 @@ class RunHandler:
             epoch_dir.mkdir(exist_ok=True)
         return epoch_dir
 
-    def _get_artifact_path(
+    def _get_artifact_path[T: Artifact](
         self, epoch: int, artifact_class: type[T], suffix: str
     ) -> Path:
         """Get the path for an artifact file with given suffix."""
@@ -166,7 +164,7 @@ class RunHandler:
             # Ensure metric_name is str
             metric_str = str(metric_name)
             # Sort and convert to list of tuples
-            sorted_df = cast(pd.DataFrame, group_df.sort_values("epoch"))
+            sorted_df = cast(pd.DataFrame, group_df.sort_values("epoch"))  # pyright: ignore[reportCallIssue]
             result[metric_str] = []
 
             # Iterate through rows safely

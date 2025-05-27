@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC
 from dataclasses import dataclass
 from typing import Callable, override
 
@@ -20,6 +21,7 @@ from matplotlib.gridspec import GridSpec
 from numpy.typing import NDArray
 
 from apps.plugins import (
+    Analysis,
     ClusteringDataset,
 )
 from apps.runtime.handler import Artifact
@@ -27,7 +29,7 @@ from apps.runtime.handler import Artifact
 from ..base import HMoG
 from .base import cluster_probabilities, get_component_prototypes, symmetric_kl_matrix
 
-### Analysis ###
+### Helpers ###
 
 
 def posterior_co_assignment_matrix[M: HMoG](
@@ -62,14 +64,10 @@ def posterior_co_assignment_matrix[M: HMoG](
     normalized_co_assignment = co_assignment / denom
 
     # Ensure perfect symmetry by averaging with transpose
-    normalized_co_assignment = 0.5 * (
-        normalized_co_assignment + normalized_co_assignment.T
-    )
-
-    return normalized_co_assignment
+    return 0.5 * (normalized_co_assignment + normalized_co_assignment.T)
 
 
-### Cluster Hierarchies ###
+### Artifacts ###
 
 
 @dataclass(frozen=True)
@@ -103,8 +101,8 @@ class ClusterHierarchy(Artifact):
         prototypes = [jnp.array(proto_group[f"{i}"]) for i in range(n_protos)]
 
         # Load matrices
-        linkage_matrix = np.array(file["linkage_matrix"][()])  # pyright: ignore[reportIndexIssue]
-        similarity_matrix = np.array(file["similarity_matrix"][()])  # pyright: ignore[reportIndexIssue]
+        linkage_matrix = np.array(file["linkage_matrix"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        similarity_matrix = np.array(file["similarity_matrix"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
 
         return cls(
             prototypes=prototypes,
@@ -280,3 +278,47 @@ def hierarchy_plotter(
         return fig
 
     return plot_cluster_hierarchy
+
+
+### Analysis ###
+
+
+@dataclass(frozen=True)
+class HierarchyAnalysis[T: ClusterHierarchy](Analysis[ClusteringDataset, HMoG, T], ABC):
+    @override
+    def generate(
+        self,
+        model: HMoG,
+        params: Array,
+        dataset: ClusteringDataset,
+        key: Array | None = None,
+    ) -> T:
+        typed_params = model.natural_point(params)
+        return get_cluster_hierarchy(
+            model, typed_params, self.artifact_type, dataset.train_data
+        )
+
+    @override
+    def plot(self, artifact: T, dataset: ClusteringDataset) -> Figure:
+        plotter = hierarchy_plotter(dataset)
+        return plotter(artifact)
+
+
+@dataclass(frozen=True)
+class KLHierarchyAnalysis(HierarchyAnalysis[KLClusterHierarchy]):
+    """Co-assignment probability-based hierarchical clustering analysis."""
+
+    @property
+    @override
+    def artifact_type(self) -> type[KLClusterHierarchy]:
+        return KLClusterHierarchy
+
+
+@dataclass(frozen=True)
+class CoAssignmentHierarchyAnalysis(HierarchyAnalysis[CoAssignmentClusterHierarchy]):
+    """Co-assignment probability-based hierarchical clustering analysis."""
+
+    @property
+    @override
+    def artifact_type(self) -> type[CoAssignmentClusterHierarchy]:
+        return CoAssignmentClusterHierarchy

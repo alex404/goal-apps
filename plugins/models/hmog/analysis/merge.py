@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC
 from dataclasses import dataclass
 from typing import Callable, override
 
@@ -19,12 +20,18 @@ from matplotlib.gridspec import GridSpec
 from numpy.typing import NDArray
 
 from apps.plugins import (
+    Analysis,
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact
+from apps.runtime.handler import Artifact, MetricDict
 
 from ..base import HMoG
-from .base import cluster_accuracy, cluster_probabilities, get_component_prototypes
+from .base import (
+    STATS_LEVEL,
+    cluster_accuracy,
+    cluster_probabilities,
+    get_component_prototypes,
+)
 from .hierarchy import (
     CoAssignmentClusterHierarchy,
     KLClusterHierarchy,
@@ -156,8 +163,8 @@ class MergeResults(Artifact):
         prototypes = [jnp.array(proto_group[f"{i}"]) for i in range(n_protos)]
 
         # Load mapping and valid clusters
-        mapping = np.array(file["mapping"][()])  # pyright: ignore[reportIndexIssue]
-        valid_clusters = jnp.array(file["valid_clusters"][()])  # pyright: ignore[reportIndexIssue]
+        mapping = np.array(file["mapping"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        valid_clusters = jnp.array(file["valid_clusters"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
 
         # Load metrics
         train_accuracy = float(file.attrs["train_accuracy"])  # pyright: ignore[reportArgumentType]
@@ -427,3 +434,127 @@ def merge_results_plotter(
         return fig
 
     return plot_merge_results
+
+
+### Analysis Classes ###
+
+
+@dataclass(frozen=True)
+class MergeAnalysis[T: MergeResults](Analysis[ClusteringDataset, HMoG, T], ABC):
+    """KL divergence-based cluster merging analysis."""
+
+    filter_empty_clusters: bool
+    min_cluster_size: float
+
+    @override
+    def generate(
+        self,
+        model: HMoG,
+        params: Array,
+        dataset: ClusteringDataset,
+        key: Array | None = None,
+    ) -> T:
+        typed_params = model.natural_point(params)
+        return get_merge_results(
+            model,
+            typed_params,
+            dataset,
+            self.artifact_type,
+            self.filter_empty_clusters,
+            self.min_cluster_size,
+        )
+
+    @override
+    def plot(self, artifact: T, dataset: ClusteringDataset) -> Figure:
+        plotter = merge_results_plotter(dataset)
+        return plotter(artifact)
+
+
+@dataclass(frozen=True)
+class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
+    @property
+    @override
+    def artifact_type(self) -> type[OptimalMergeResults]:
+        return OptimalMergeResults
+
+    @override
+    def metrics(self, artifact: OptimalMergeResults) -> MetricDict:
+        """Return metrics for optimal merge results."""
+        return {
+            "Merging/Optimal Train Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_accuracy),
+            ),
+            "Merging/Optimal Train NMI": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_nmi_score),
+            ),
+            "Merging/Optimal Test Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_accuracy),
+            ),
+            "Merging/Optimal Test NMI": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_nmi_score),
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class KLMergeAnalysis(MergeAnalysis[KLMergeResults]):
+    @property
+    @override
+    def artifact_type(self) -> type[KLMergeResults]:
+        return KLMergeResults
+
+    @override
+    def metrics(self, artifact: KLMergeResults) -> MetricDict:
+        """Return metrics for KL merge results."""
+        return {
+            "Merging/KL Train Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_accuracy),
+            ),
+            "Merging/KL Train NMI": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_nmi_score),
+            ),
+            "Merging/KL Test Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_accuracy),
+            ),
+            "Merging/KL Test NMI": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_nmi_score),
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class CoAssignmentMergeAnalysis(MergeAnalysis[CoAssignmentMergeResults]):
+    @property
+    @override
+    def artifact_type(self) -> type[CoAssignmentMergeResults]:
+        return CoAssignmentMergeResults
+
+    @override
+    def metrics(self, artifact: CoAssignmentMergeResults) -> MetricDict:
+        """Return metrics for co-assignment merge results."""
+        return {
+            "Merging/CoAssignment Train Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_accuracy),
+            ),
+            "Merging/CoAssignment Train NMI": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_nmi_score),
+            ),
+            "Merging/CoAssignment Test Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_accuracy),
+            ),
+            "Merging/CoAssignment Test NMI": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_nmi_score),
+            ),
+        }
