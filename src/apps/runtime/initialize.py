@@ -8,6 +8,7 @@ from types import TracebackType
 
 import hydra
 import jax
+import matplotlib.pyplot as plt
 from hydra.core.config_store import ConfigStore
 from jax.lib import xla_bridge
 from omegaconf import OmegaConf
@@ -20,7 +21,6 @@ from ..plugins import Dataset, Model
 from ..util import print_config_tree
 from .handler import RunHandler
 from .logger import JaxLogger
-from .visualization import setup_matplotlib_style
 
 ### Python Logging ###
 
@@ -42,6 +42,13 @@ THEME = Theme(
 )
 
 ### Initialization Helpers ###
+
+
+def setup_matplotlib_style() -> None:
+    """Load and set the default matplotlib style."""
+    style_path = Path(__file__).parents[3] / "config" / "default.mplstyle"
+    if style_path.exists():
+        plt.style.use(str(style_path))
 
 
 def setup_logging(run_dir: Path, log_level: LogLevel) -> None:
