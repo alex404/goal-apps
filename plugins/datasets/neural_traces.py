@@ -234,9 +234,9 @@ class NeuralTracesDataset(ClusteringDataset):
         )
 
         # Create subplots for each component
-        chirp_ax = Axes(fig, gs[0, 0])
-        bar_ax = Axes(fig, gs[0, 1])
-        feat_ax = Axes(fig, gs[0, 2])
+        chirp_ax = Axes(fig, gs[0, 0])  # pyright: ignore[reportArgumentType]
+        bar_ax = Axes(fig, gs[0, 1])  # pyright: ignore[reportArgumentType]
+        feat_ax = Axes(fig, gs[0, 2])  # pyright: ignore[reportArgumentType]
 
         # Add the subplots to the figure
         axes.figure.add_subplot(chirp_ax)
@@ -319,9 +319,9 @@ class NeuralTracesDataset(ClusteringDataset):
         )
 
         # Create subplots for each component
-        chirp_ax = Axes(fig, gs[0, 0])
-        bar_ax = Axes(fig, gs[0, 1])
-        feat_ax = Axes(fig, gs[0, 2])
+        chirp_ax = Axes(fig, gs[0, 0])  # pyright: ignore[reportArgumentType]
+        bar_ax = Axes(fig, gs[0, 1])  # pyright: ignore[reportArgumentType]
+        feat_ax = Axes(fig, gs[0, 2])  # pyright: ignore[reportArgumentType]
 
         # Add the subplots to the figure
         axes.figure.add_subplot(chirp_ax)
