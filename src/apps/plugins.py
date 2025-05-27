@@ -211,6 +211,10 @@ class ClusteringModel(Model[ClusteringDataset], ABC):
         """Generate new samples using the trained model."""
 
     @abstractmethod
+    def cluster_assignments(self, params: Array, data: Array) -> Array:
+        """Assign data points to clusters."""
+
+    @abstractmethod
     @override
     def train(
         self,

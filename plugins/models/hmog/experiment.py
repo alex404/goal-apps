@@ -26,6 +26,7 @@ from apps.plugins import (
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
+from .analysis.base import cluster_assignments as hmog_cluster_assignments
 from .analysis.logging import AnalysisArgs, log_artifacts
 from .trainers import (
     FixedObservableTrainer,
@@ -184,6 +185,11 @@ class HMoGExperiment(ClusteringModel, ABC):
         return self.model.observable_sample(
             key, self.model.natural_point(params), n_samples
         )
+
+    @override
+    def cluster_assignments(self, params: Array, data: Array) -> Array:
+        """Assign data points to clusters using the HMoG model."""
+        return hmog_cluster_assignments(self.model, params, data)
 
     @override
     def analyze(

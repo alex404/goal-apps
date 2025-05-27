@@ -6,6 +6,7 @@ dependencies = [
     "goal-jax",
     "matplotlib",
     "scikit-learn",
+    "seaborn",
     "hydra-core",
     "wandb",
     "typer",
