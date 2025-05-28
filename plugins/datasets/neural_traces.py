@@ -378,7 +378,7 @@ class NeuralTracesDataset(ClusteringDataset):
         )
 
         return {
-            "baden_berens_comparison": BadenBerensComparisonAnalysis(raw_df),
+            "baden_berens_comparison": BadenBerensAnalysis(raw_df),
         }
 
 
@@ -386,7 +386,7 @@ class NeuralTracesDataset(ClusteringDataset):
 
 
 @dataclass(frozen=True)
-class BadenBerensComparison(Artifact):
+class BadenBerens(Artifact):
     """Comparison between clustering results and reference cell types."""
 
     # Core comparison data
@@ -438,7 +438,7 @@ class BadenBerensComparison(Artifact):
 
     @classmethod
     @override
-    def load_from_hdf5(cls, file: File) -> BadenBerensComparison:
+    def load_from_hdf5(cls, file: File) -> BadenBerens:
         """Load comparison data from HDF5."""
         # Load array datasets
         confusion_matrix = jnp.array(file["confusion_matrix"][()])  # pyright: ignore[reportArgumentType,reportIndexIssue]
@@ -503,8 +503,8 @@ class BadenBerensComparison(Artifact):
 
 
 @dataclass(frozen=True)
-class BadenBerensComparisonAnalysis(
-    Analysis[ClusteringDataset, ClusteringExperiment, BadenBerensComparison]
+class BadenBerensAnalysis(
+    Analysis[ClusteringDataset, ClusteringExperiment, BadenBerens]
 ):
     """Analysis comparing clustering results with reference cell types."""
 
@@ -512,8 +512,8 @@ class BadenBerensComparisonAnalysis(
 
     @property
     @override
-    def artifact_type(self) -> type[BadenBerensComparison]:
-        return BadenBerensComparison
+    def artifact_type(self) -> type[BadenBerens]:
+        return BadenBerens
 
     @override
     def generate(
@@ -522,7 +522,7 @@ class BadenBerensComparisonAnalysis(
         params: Array,
         dataset: ClusteringDataset,
         key: Array,
-    ) -> BadenBerensComparison:
+    ) -> BadenBerens:
         """Generate comparison between clustering and reference cell types."""
 
         # Get cluster assignments from the model
@@ -619,7 +619,7 @@ class BadenBerensComparisonAnalysis(
         ari = adjusted_rand_score(cell_types, assignments)
         nmi = normalized_mutual_info_score(cell_types, assignments)
 
-        return BadenBerensComparison(
+        return BadenBerens(
             confusion_matrix=jnp.array(confusion),
             cluster_to_celltype=cluster_to_celltype,
             celltype_to_clusters=celltype_to_clusters,
@@ -633,9 +633,7 @@ class BadenBerensComparisonAnalysis(
         )
 
     @override
-    def plot(
-        self, artifact: BadenBerensComparison, dataset: ClusteringDataset
-    ) -> Figure:
+    def plot(self, artifact: BadenBerens, dataset: ClusteringDataset) -> Figure:
         """Create Baden-Berens style visualization."""
 
         fig = plt.figure(figsize=(20, 24))
@@ -707,7 +705,7 @@ class BadenBerensComparisonAnalysis(
         return fig
 
     @override
-    def metrics(self, artifact: BadenBerensComparison) -> MetricDict:
+    def metrics(self, artifact: BadenBerens) -> MetricDict:
         """Return comparison metrics."""
         return {
             "Comparison/ARI Score": (jnp.array(0), jnp.array(artifact.ari_score)),
@@ -718,7 +716,7 @@ class BadenBerensComparisonAnalysis(
             ),
         }
 
-    def _order_clusters_by_response(self, artifact: BadenBerensComparison) -> list[int]:
+    def _order_clusters_by_response(self, artifact: BadenBerens) -> list[int]:
         """Order clusters by response properties for visualization."""
         # Simple ordering by ON/OFF index - you can make this more sophisticated
         on_off_indices = []
@@ -731,9 +729,7 @@ class BadenBerensComparisonAnalysis(
         # Sort from OFF (negative) to ON (positive)
         return list(np.argsort(on_off_indices))
 
-    def _get_cluster_color(
-        self, cluster_id: int, artifact: BadenBerensComparison
-    ) -> str:
+    def _get_cluster_color(self, cluster_id: int, artifact: BadenBerens) -> str:
         """Assign color based on cluster properties."""
         # This is a simplified version - you might want to base this on
         # dominant cell type or response properties
@@ -752,13 +748,13 @@ class BadenBerensComparisonAnalysis(
         values: Array,
         title: str,
         cluster_order: list[int],
-        artifact: BadenBerensComparison,
+        artifact: BadenBerens,
     ):
         """Plot histogram of metric values colored by cluster."""
         # Implementation for metric histograms
         pass
 
-    def _plot_confusion_summary(self, ax, artifact: BadenBerensComparison):
+    def _plot_confusion_summary(self, ax, artifact: BadenBerens):
         """Plot confusion matrix summary."""
         # Normalize by columns (cell types)
         confusion_norm = artifact.confusion_matrix / np.sum(
