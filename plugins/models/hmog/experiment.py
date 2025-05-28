@@ -21,7 +21,7 @@ from jax import Array
 
 from apps.plugins import (
     ClusteringDataset,
-    ClusteringModel,
+    ClusteringExperiment,
 )
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
@@ -29,9 +29,9 @@ from apps.runtime.logger import JaxLogger
 from .analysis.base import cluster_assignments as hmog_cluster_assignments
 from .analysis.logging import AnalysisArgs, log_artifacts
 from .trainers import (
-    FixedObservableTrainer,
-    GradientTrainer,
-    PreTrainer,
+    FullGradientTrainer,
+    LGMPreTrainer,
+    MixtureGradientTrainer,
 )
 
 ### Preamble ###
@@ -43,15 +43,15 @@ log = logging.getLogger(__name__)
 ### HMog Experiment ###
 
 
-class HMoGExperiment(ClusteringModel, ABC):
+class HMoGExperiment(ClusteringExperiment, ABC):
     """Experiment framework for HMoGs."""
 
     # Training configuration
     model: DifferentiableHMoG[Diagonal, Diagonal]
-    pre: PreTrainer
-    lgm: GradientTrainer
-    mix: FixedObservableTrainer
-    full: GradientTrainer
+    pre: LGMPreTrainer
+    lgm: FullGradientTrainer
+    mix: MixtureGradientTrainer
+    full: FullGradientTrainer
 
     lr_scale_init: float
     lr_scale_final: float
@@ -69,10 +69,10 @@ class HMoGExperiment(ClusteringModel, ABC):
         data_dim: int,
         latent_dim: int,
         n_clusters: int,
-        pre: PreTrainer,
-        lgm: GradientTrainer,
-        mix: FixedObservableTrainer,
-        full: GradientTrainer,
+        pre: LGMPreTrainer,
+        lgm: FullGradientTrainer,
+        mix: MixtureGradientTrainer,
+        full: FullGradientTrainer,
         analysis: AnalysisArgs,
         lr_scale_init: float,
         lr_scale_final: float,

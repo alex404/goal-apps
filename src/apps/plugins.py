@@ -54,13 +54,13 @@ class Dataset(ABC):
         return {}
 
 
-class Model[D: Dataset](ABC):
+class Experiment[D: Dataset](ABC):
     """Root class for all models."""
 
     @property
     @abstractmethod
     def n_epochs(self) -> int:
-        """Dimensionality of each data point."""
+        """Number of epochs used for training the model."""
 
     @abstractmethod
     def analyze(
@@ -194,7 +194,7 @@ class ClusteringDataset(Dataset, ABC):
 # Models
 
 
-class ClusteringModel(Model[ClusteringDataset], ABC):
+class ClusteringExperiment(Experiment[ClusteringDataset], ABC):
     """Abstract base class for all unsupervised models."""
 
     @property

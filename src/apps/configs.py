@@ -48,7 +48,7 @@ class DatasetConfig:
 
 
 @dataclass
-class ModelConfig:
+class ExperimentConfig:
     """Base configuration for models."""
 
     _target_: str
@@ -65,7 +65,7 @@ class ClusteringDatasetConfig(DatasetConfig):
 
 
 @dataclass
-class ClusteringModelConfig(ModelConfig):
+class ClusteringExperimentConfig(ExperimentConfig):
     """Base configuration for clustering models."""
 
     _target_: str
@@ -84,5 +84,5 @@ class ClusteringRunConfig(RunConfig):
     """Base configuration for clustering simulations."""
 
     dataset: ClusteringDatasetConfig
-    model: ClusteringModelConfig
+    model: ClusteringExperimentConfig
     defaults: list[Any] = field(default_factory=lambda: defaults)

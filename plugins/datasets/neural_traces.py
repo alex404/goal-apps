@@ -21,7 +21,7 @@ from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 from apps.configs import ClusteringDatasetConfig
-from apps.plugins import Analysis, ClusteringDataset, ClusteringModel
+from apps.plugins import Analysis, ClusteringDataset, ClusteringExperiment
 from apps.runtime.handler import Artifact, MetricDict
 
 
@@ -504,7 +504,7 @@ class BadenBerensComparison(Artifact):
 
 @dataclass(frozen=True)
 class BadenBerensComparisonAnalysis(
-    Analysis[ClusteringDataset, ClusteringModel, BadenBerensComparison]
+    Analysis[ClusteringDataset, ClusteringExperiment, BadenBerensComparison]
 ):
     """Analysis comparing clustering results with reference cell types."""
 
@@ -518,7 +518,7 @@ class BadenBerensComparisonAnalysis(
     @override
     def generate(
         self,
-        model: ClusteringModel,
+        model: ClusteringExperiment,
         params: Array,
         dataset: ClusteringDataset,
         key: Array,

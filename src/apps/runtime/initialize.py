@@ -17,7 +17,7 @@ from rich.logging import RichHandler
 from rich.theme import Theme
 
 from ..configs import LogLevel, RunConfig
-from ..plugins import Dataset, Model
+from ..plugins import Dataset, Experiment
 from ..util import print_config_tree
 from .handler import RunHandler
 from .logger import JaxLogger
@@ -123,7 +123,7 @@ def setup_jax(device: str = "cpu", disable_jit: bool = False) -> None:
 def initialize_run(
     run_type: type[RunConfig],
     overrides: list[str],
-) -> tuple[RunHandler, Dataset, Model[Dataset], JaxLogger]:
+) -> tuple[RunHandler, Dataset, Experiment[Dataset], JaxLogger]:
     """Initialize a new run with hydra config and wandb logging."""
     cs = ConfigStore.instance()
     cs.store(name="config_schema", node=run_type)
@@ -162,7 +162,7 @@ def initialize_run(
 
     # Instantiate model
     log.info("Loading model...")
-    model: Model[Dataset] = hydra.utils.instantiate(
+    model: Experiment[Dataset] = hydra.utils.instantiate(
         cfg.model, data_dim=dataset.data_dim
     )
 

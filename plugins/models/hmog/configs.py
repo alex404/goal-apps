@@ -8,7 +8,7 @@ from typing import Any
 from hydra.core.config_store import ConfigStore
 from omegaconf import MISSING
 
-from apps.configs import ClusteringModelConfig
+from apps.configs import ClusteringExperimentConfig
 
 ### Gradient Trainer Configs ###
 
@@ -17,7 +17,7 @@ from apps.configs import ClusteringModelConfig
 class PreTrainerConfig:
     """Base configuration for pre-trainers."""
 
-    _target_: str = "plugins.models.hmog.trainers.PreTrainer"
+    _target_: str = "plugins.models.hmog.trainers.LGMPreTrainer"
     lr: float = 1e-3
     n_epochs: int = 1000
     batch_size: int | None = None
@@ -33,7 +33,7 @@ class PreTrainerConfig:
 class GradientTrainerConfig:
     """Base configuration for gradient-based trainers."""
 
-    _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
+    _target_: str = "plugins.models.hmog.trainers.FullGradientTrainer"
     lr: float = 1e-4
     n_epochs: int = 200
     batch_size: int | None = None
@@ -51,39 +51,30 @@ class GradientTrainerConfig:
 
 
 @dataclass
-class GradientLGMTrainerConfig(GradientTrainerConfig):
+class LGMGradientTrainerConfig(GradientTrainerConfig):
     """Configuration for gradient-based LGM trainer."""
 
-    _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
+    _target_: str = "plugins.models.hmog.trainers.FullGradientTrainer"
     mask_type: str = "LGM"
 
 
-# @dataclass
-# class GradientMixtureTrainerConfig(GradientTrainerConfig):
-#     """Configuration for gradient-based mixture trainer."""
-#
-#     _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
-#     mask_type: str = "MIXTURE"
-#
-
-
 @dataclass
-class GradientFullModelTrainerConfig(GradientTrainerConfig):
+class FullGradientTrainerConfig(GradientTrainerConfig):
     """Configuration for gradient-based full model trainer."""
 
-    _target_: str = "plugins.models.hmog.trainers.GradientTrainer"
+    _target_: str = "plugins.models.hmog.trainers.FullGradientTrainer"
     mask_type: str = "FULL"
 
 
 @dataclass
-class FixedObservableTrainerConfig:
+class MixtureGradientTrainerConfig:
     """Configuration for fixed observable trainer.
 
     This trainer holds observable parameters fixed and only updates mixture parameters,
     which is much more efficient for high-dimensional data.
     """
 
-    _target_: str = "plugins.models.hmog.trainers.FixedObservableTrainer"
+    _target_: str = "plugins.models.hmog.trainers.MixtureGradientTrainer"
 
     # Training hyperparameters
     lr: float = 1e-4
@@ -123,14 +114,14 @@ class AnalysisConfig:
 cycle_defaults: list[Any] = [
     {"pre": "gradient_pre"},
     {"lgm": "gradient_lgm"},
-    {"mix": "fixed_observable"},
+    {"mix": "gradient_mixture"},
     {"full": "gradient_full"},
 ]
 
 
 @dataclass
-class HMoGConfig(ClusteringModelConfig):
-    # Model architecture
+class HMoGConfig(ClusteringExperimentConfig):
+    # Experiment architecture
     data_dim: int = MISSING
     latent_dim: int = 10
     n_clusters: int = 10
@@ -141,7 +132,7 @@ class HMoGConfig(ClusteringModelConfig):
     # Training configuration
     pre: PreTrainerConfig = field(default=MISSING)
     lgm: GradientTrainerConfig = field(default=MISSING)
-    mix: FixedObservableTrainerConfig = field(default=MISSING)
+    mix: MixtureGradientTrainerConfig = field(default=MISSING)
     full: GradientTrainerConfig = field(default=MISSING)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
 
@@ -175,12 +166,12 @@ class ProjectionTrainerConfig:
 
 
 @dataclass
-class ProjectionHMoGConfig(ClusteringModelConfig):
+class ProjectionHMoGConfig(ClusteringExperimentConfig):
     """Configuration for projection-based HMoG training."""
 
     _target_: str = "plugins.models.hmog.projection.ProjectionHMoGExperiment"
 
-    # Model architecture
+    # Experiment architecture
     pretrain: bool = False
     data_dim: int = MISSING
     latent_dim: int = 10
@@ -200,9 +191,9 @@ cs = ConfigStore.instance()
 
 # Register base configs
 cs.store(group="model/pre", name="gradient_pre", node=PreTrainerConfig)
-cs.store(group="model/lgm", name="gradient_lgm", node=GradientLGMTrainerConfig)
-cs.store(group="model/mix", name="fixed_observable", node=FixedObservableTrainerConfig)
-cs.store(group="model/full", name="gradient_full", node=GradientFullModelTrainerConfig)
+cs.store(group="model/lgm", name="gradient_lgm", node=LGMGradientTrainerConfig)
+cs.store(group="model/mix", name="gradient_mixture", node=MixtureGradientTrainerConfig)
+cs.store(group="model/full", name="gradient_full", node=FullGradientTrainerConfig)
 
 # Register model configs
 cs.store(group="model", name="hmog_diff", node=DifferentiableHMoGConfig)

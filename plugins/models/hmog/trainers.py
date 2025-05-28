@@ -117,7 +117,7 @@ def precision_regularizer(
 
 
 @dataclass(frozen=True)
-class GradientTrainer:
+class FullGradientTrainer:
     """Base trainer for gradient-based training of HMoG models."""
 
     # Training hyperparameters
@@ -427,7 +427,7 @@ class GradientTrainer:
 
 
 @dataclass(frozen=True)
-class PreTrainer:
+class LGMPreTrainer:
     """Base trainer for gradient-based training of HMoG models."""
 
     # Training hyperparameters
@@ -651,7 +651,7 @@ class PreTrainer:
 
 
 @dataclass(frozen=True)
-class FixedObservableTrainer:
+class MixtureGradientTrainer:
     """Trainer that holds observable parameters fixed and only updates mixture parameters.
 
     For high-dimensional data, this caches the mapping from observation to latent space,

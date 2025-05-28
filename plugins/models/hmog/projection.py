@@ -23,14 +23,14 @@ from jax import Array
 
 from apps.plugins import (
     ClusteringDataset,
-    ClusteringModel,
+    ClusteringExperiment,
 )
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
 from .analysis.logging import AnalysisArgs, log_artifacts, log_epoch_metrics
 from .base import HMoG, Mixture, fori
-from .trainers import PreTrainer
+from .trainers import LGMPreTrainer
 
 # Start logger
 log = logging.getLogger(__name__)
@@ -283,7 +283,7 @@ class ProjectionTrainer:
         return params_final
 
 
-class ProjectionHMoGExperiment(ClusteringModel):
+class ProjectionHMoGExperiment(ClusteringExperiment):
     """Experiment framework for projection-based HMoG training.
 
     This approach trains a model in two phases:
@@ -301,7 +301,7 @@ class ProjectionHMoGExperiment(ClusteringModel):
         data_dim: int,
         latent_dim: int,
         n_clusters: int,
-        pre: PreTrainer,
+        pre: LGMPreTrainer,
         pro: ProjectionTrainer,
         analysis: AnalysisArgs,
         lgm_noise_scale: float,
