@@ -210,10 +210,10 @@ class HMoGExperiment(ClusteringExperiment, ABC):
         if self.analysis.from_scratch:
             log.info("Recomputing artifacts from scratch.")
             params = self.model.natural_point(handler.load_params(epoch))
-            log_artifacts(handler, dataset, logger, self.model, epoch, params)
+            log_artifacts(handler, dataset, logger, self, self.model, epoch, params)
         else:
             log.info("Loading existing artifacts.")
-            log_artifacts(handler, dataset, logger, self.model, epoch)
+            log_artifacts(handler, dataset, logger, self, self.model, epoch)
 
     @override
     def train(
@@ -331,6 +331,6 @@ class HMoGExperiment(ClusteringExperiment, ABC):
                 )
                 epoch += self.full.n_epochs
 
-            log_artifacts(handler, dataset, logger, self.model, epoch, params)
+            log_artifacts(handler, dataset, logger, self, self.model, epoch, params)
 
             log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")

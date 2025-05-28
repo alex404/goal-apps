@@ -518,7 +518,7 @@ class BadenBerensComparisonAnalysis(
     @override
     def generate(
         self,
-        model: ClusteringExperiment,
+        experiment: ClusteringExperiment,
         params: Array,
         dataset: ClusteringDataset,
         key: Array,
@@ -526,8 +526,8 @@ class BadenBerensComparisonAnalysis(
         """Generate comparison between clustering and reference cell types."""
 
         # Get cluster assignments from the model
-        assignments = model.cluster_assignments(params, dataset.train_data)
-        n_clusters = model.n_clusters
+        assignments = experiment.cluster_assignments(params, dataset.train_data)
+        n_clusters = experiment.n_clusters
 
         # Extract cell types from raw dataframe
         # Assuming the ordering matches between processed dataset and raw df
