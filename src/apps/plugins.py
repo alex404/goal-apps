@@ -217,11 +217,20 @@ class ClusteringExperiment(Experiment[ClusteringDataset], ABC):
         """Assign data points to clusters."""
 
     @abstractmethod
-    def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> Array:
+    def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get prototype/centroid for each cluster.
 
         Returns:
             Array of shape (n_clusters, data_dim) containing cluster prototypes
+        """
+
+    @abstractmethod
+    def get_cluster_members(self, handler: RunHandler, epoch: int) -> list[Array]:
+        """Get cluster members by loading from ClusterStatistics artifact.
+
+        Returns:
+            List of arrays, where members[i] contains all members of cluster i
+            with shape (n_members_i, data_dim)
         """
 
     @abstractmethod

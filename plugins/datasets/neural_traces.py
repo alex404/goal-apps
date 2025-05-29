@@ -13,7 +13,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.cluster.hierarchy as sch
-import scipy.spatial.distance as spdist
 from h5py import File
 from hydra.core.config_store import ConfigStore
 from jax import Array
@@ -23,7 +22,7 @@ from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 from apps.configs import ClusteringDatasetConfig
-from apps.plugins import Analysis, ClusteringDataset, ClusteringExperiment
+from apps.plugins import Analysis, ClusteringDataset, HierarchicalClusteringExperiment
 from apps.runtime.handler import Artifact, MetricDict, RunHandler
 
 
@@ -515,7 +514,7 @@ class BadenBerens(Artifact):
 
 @dataclass(frozen=True)
 class BadenBerensAnalysis(
-    Analysis[ClusteringDataset, ClusteringExperiment, BadenBerens]
+    Analysis[ClusteringDataset, HierarchicalClusteringExperiment, BadenBerens]
 ):
     """Baden-Berens style analysis comparing clustering with ground truth cell types."""
 
@@ -532,32 +531,33 @@ class BadenBerensAnalysis(
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: ClusteringExperiment,  # Changed from 'experiment' to 'model'
+        model: HierarchicalClusteringExperiment,
         epoch: int,
         params: Array,
     ) -> BadenBerens:
         """Generate Baden-Berens analysis from clustering results."""
 
-        # Get cluster assignments
+        # Get cluster assignments (needed for mapping to raw_df)
         assignments = model.cluster_assignments(params, dataset.train_data)
-        n_clusters = model.n_clusters  # Get ground truth cell types
+        n_clusters = model.n_clusters
+
+        neural_dataset = dataset
+        assert isinstance(neural_dataset, NeuralTracesDataset)
+
+        # Use stored prototypes and parse them into components
+        stored_prototypes = model.get_cluster_prototypes(handler, epoch)
+        cluster_chirp_traces, cluster_bar_traces = self._parse_stored_prototypes(
+            stored_prototypes, neural_dataset
+        )
+
+        # Use stored cluster members for cluster sizes
+        stored_members = model.get_cluster_members(handler, epoch)
+        cluster_sizes = jnp.array([len(members) for members in stored_members])
+
+        # Get ground truth cell types (aligned with train_data)
         celltype_labels = self.raw_df["celltype"].values[: len(assignments)]
 
-        # Calculate cluster sizes
-        cluster_sizes = jnp.array(
-            [jnp.sum(assignments == i) for i in range(n_clusters)]
-        )
-
-        # Extract response traces for each cluster
-        cluster_chirp_traces = self._extract_cluster_chirp_traces(
-            assignments, n_clusters
-        )
-        cluster_bar_traces = self._extract_cluster_bar_traces(assignments, n_clusters)
-        cluster_noise_traces = self._extract_cluster_noise_traces(
-            assignments, n_clusters
-        )
-
-        # Extract response metrics
+        # Extract neural-specific metrics using cluster assignments
         cluster_rf_diameter = self._extract_cluster_metric(
             assignments, n_clusters, "rf_cdia_um"
         )
@@ -574,30 +574,27 @@ class BadenBerensAnalysis(
             assignments, n_clusters, "ventral_dorsal_pos_um"
         )
 
-        # Generate cluster ordering based on functional properties
+        # Generate cluster ordering, colors, names
         cluster_order = self._compute_functional_ordering(
             cluster_chirp_traces, cluster_ds_index, cluster_os_index
         )
-
-        # Generate cluster colors
         cluster_colors = self._generate_cluster_colors(n_clusters, cluster_order)
-
-        # Generate cluster names based on properties
         cluster_names = self._generate_cluster_names(
             cluster_chirp_traces, cluster_ds_index, cluster_os_index
         )
 
-        # Compute hierarchical clustering
-        linkage_matrix = self._compute_hierarchical_clustering(
-            cluster_chirp_traces, cluster_bar_traces
-        )
+        # Use stored hierarchical clustering
+        linkage_matrix = model.get_cluster_hierarchy(handler, epoch)
 
-        # Calculate quality metrics - convert JAX arrays to numpy for sklearn
+        # Calculate quality metrics
         ari_score = adjusted_rand_score(celltype_labels, np.array(assignments))
         nmi_score = normalized_mutual_info_score(celltype_labels, np.array(assignments))
 
+        # Create noise traces placeholder
+        cluster_noise_traces = jnp.zeros((n_clusters, 100))
+
         return BadenBerens(
-            cluster_assignments=jnp.array(assignments),
+            cluster_assignments=assignments,
             celltype_labels=jnp.array(celltype_labels),
             cluster_order=cluster_order,
             cluster_colors=cluster_colors,
@@ -611,94 +608,34 @@ class BadenBerensAnalysis(
             cluster_soma_y=cluster_soma_y,
             cluster_sizes=cluster_sizes,
             cluster_names=cluster_names,
-            linkage_matrix=jnp.array(
-                linkage_matrix, dtype=jnp.float64
-            ),  # Ensure float64
+            linkage_matrix=linkage_matrix,
             ari_score=float(ari_score),
             nmi_score=float(nmi_score),
         )
 
-    def _extract_cluster_chirp_traces(
-        self, assignments: Array, n_clusters: int
-    ) -> Array:
-        """Extract average chirp response for each cluster."""
-        traces = []
-        # Convert assignments to numpy for indexing
-        assignments_np = np.array(assignments)
+    def _parse_stored_prototypes(
+        self, prototypes: list[Array], dataset: NeuralTracesDataset
+    ) -> tuple[Array, Array]:
+        """Parse stored prototypes into chirp and bar components."""
+        chirp_traces = []
+        bar_traces = []
+        neural_dataset = dataset
+        assert isinstance(neural_dataset, NeuralTracesDataset)
 
-        for i in range(n_clusters):
-            mask = assignments_np == i
-            if np.sum(mask) > 0:
-                cluster_indices = np.where(mask)[0]
-                # Use 8Hz chirp response
-                chirp_data = [
-                    self.raw_df["chirp_8Hz_average_norm"].iloc[idx]
-                    for idx in cluster_indices
-                ]
-                avg_trace = np.mean(np.stack(chirp_data), axis=0)
-            else:
-                avg_trace = np.zeros(259)  # 8Hz chirp length
-            traces.append(avg_trace)
-        return jnp.array(traces)
+        for proto in prototypes:
+            # Parse based on dataset structure: [chirp | bar | features]
+            chirp_response = proto[: dataset.chirp_len]
+            bar_response = proto[
+                dataset.chirp_len : dataset.chirp_len + dataset.bar_len
+            ]
 
-    def _extract_cluster_bar_traces(self, assignments: Array, n_clusters: int) -> Array:
-        """Extract directional bar responses for each cluster."""
-        # For now, extract single bar trace - expand later for directional responses
-        n_directions = 8  # Typical for moving bar experiments
-        n_timepoints = 32  # From data exploration
+            chirp_traces.append(chirp_response)
+            # Replicate bar response for all directions (placeholder)
+            n_directions = 8
+            directional_bar = jnp.tile(bar_response, (n_directions, 1))
+            bar_traces.append(directional_bar)
 
-        traces = []
-        # Convert assignments to numpy for indexing
-        assignments_np = np.array(assignments)
-
-        for i in range(n_clusters):
-            mask = assignments_np == i
-            if np.sum(mask) > 0:
-                cluster_indices = np.where(mask)[0]
-                bar_data = [
-                    self.raw_df["preproc_bar"].iloc[idx] for idx in cluster_indices
-                ]
-                avg_trace = np.mean(np.stack(bar_data), axis=0)
-                # Replicate for all directions for now
-                directional_traces = np.tile(avg_trace, (n_directions, 1))
-            else:
-                directional_traces = np.zeros((n_directions, n_timepoints))
-            traces.append(directional_traces)
-        return jnp.array(traces)
-
-    def _extract_cluster_noise_traces(
-        self, assignments: Array, n_clusters: int
-    ) -> Array:
-        """Extract noise response traces (placeholder for now)."""
-        # Noise data not available in current dataset
-        n_timepoints = 100  # Placeholder
-        return jnp.zeros((n_clusters, n_timepoints))
-
-    def _extract_cluster_metric(
-        self, assignments: Array, n_clusters: int, metric_name: str
-    ) -> Array:
-        """Extract average metric value for each cluster."""
-        values = []
-        # Convert assignments to numpy for indexing
-        assignments_np = np.array(assignments)
-
-        for i in range(n_clusters):
-            mask = assignments_np == i
-            if np.sum(mask) > 0:
-                cluster_indices = np.where(mask)[0]
-                metric_data = [
-                    self.raw_df[metric_name].iloc[idx]
-                    for idx in cluster_indices
-                    if not pd.isna(self.raw_df[metric_name].iloc[idx])
-                ]
-                if metric_data:
-                    avg_value = np.mean(metric_data)
-                else:
-                    avg_value = np.nan
-            else:
-                avg_value = np.nan
-            values.append(avg_value)
-        return jnp.array(values)
+        return jnp.array(chirp_traces), jnp.array(bar_traces)
 
     def _compute_functional_ordering(
         self, chirp_traces: Array, ds_index: Array, os_index: Array
@@ -764,30 +701,6 @@ class BadenBerensAnalysis(
             names.append(f"{base_name} {i}")
 
         return names
-
-    def _compute_hierarchical_clustering(
-        self, chirp_traces: Array, bar_traces: Array
-    ) -> np.ndarray:
-        """Compute hierarchical clustering based on response similarity."""
-        # Combine features for clustering
-        features = []
-        for i in range(len(chirp_traces)):
-            # Use chirp trace and average bar response
-            chirp_feat = chirp_traces[i]
-            bar_feat = jnp.mean(bar_traces[i], axis=0)  # Average over directions
-            combined = jnp.concatenate([chirp_feat, bar_feat])
-            features.append(combined)
-
-        # Convert to numpy array with float64 dtype
-        features = np.array(features, dtype=np.float64)
-
-        # Compute distance matrix
-        dist_matrix = spdist.pdist(features, metric="euclidean")
-
-        # Hierarchical clustering - ensure float64 dtype
-        linkage = sch.linkage(dist_matrix, method="average")
-
-        return linkage.astype(np.float64)
 
     @override
     def plot(self, artifact: BadenBerens, dataset: ClusteringDataset) -> Figure:

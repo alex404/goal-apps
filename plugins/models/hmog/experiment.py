@@ -339,11 +339,17 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
             log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")
 
     @override
-    def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> Array:
+    def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get cluster prototypes by loading from ClusterStatistics artifact."""
         # First try to load from file
         stats = handler.load_artifact(epoch, ClusterStatistics)
-        return jnp.stack(stats.prototypes)
+        return stats.prototypes
+
+    @override
+    def get_cluster_members(self, handler: RunHandler, epoch: int) -> list[Array]:
+        """Get cluster members by loading from ClusterStatistics artifact."""
+        stats = handler.load_artifact(epoch, ClusterStatistics)
+        return stats.members
 
     @override
     def get_cluster_hierarchy(self, handler: RunHandler, epoch: int) -> Array:
