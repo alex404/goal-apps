@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import scipy.cluster.hierarchy as sch
 import seaborn
-from h5py import File
+from h5py import File, Group
 from hydra.core.config_store import ConfigStore
 from jax import Array
 from matplotlib.axes import Axes
@@ -395,10 +395,10 @@ class BadenBerens(Artifact):
     cluster_bar_traces: Array  # (n_clusters, n_directions, n_timepoints)
     cluster_noise_traces: Array  # (n_clusters, n_timepoints) if available
 
-    # Response metrics by cluster
-    cluster_rf_diameter: Array  # (n_clusters,) mean RF diameter
-    cluster_ds_index: Array  # (n_clusters,) mean direction selectivity
-    cluster_os_index: Array  # (n_clusters,) mean orientation selectivity
+    # Response metrics by cluster - NOW STORING ALL VALUES, NOT JUST MEANS
+    cluster_rf_diameter_values: list[Array]  # List of arrays, one per cluster
+    cluster_ds_index_values: list[Array]  # List of arrays, one per cluster
+    cluster_os_index_values: list[Array]  # List of arrays, one per cluster
     cluster_soma_x: Array  # (n_clusters,) mean soma x position
     cluster_soma_y: Array  # (n_clusters,) mean soma y position
 
@@ -431,11 +431,19 @@ class BadenBerens(Artifact):
             "cluster_noise_traces", data=np.array(self.cluster_noise_traces)
         )
 
-        file.create_dataset(
-            "cluster_rf_diameter", data=np.array(self.cluster_rf_diameter)
-        )
-        file.create_dataset("cluster_ds_index", data=np.array(self.cluster_ds_index))
-        file.create_dataset("cluster_os_index", data=np.array(self.cluster_os_index))
+        # Save metric value lists as groups
+        rf_group = file.create_group("cluster_rf_diameter_values")
+        for i, vals in enumerate(self.cluster_rf_diameter_values):
+            rf_group.create_dataset(f"cluster_{i}", data=np.array(vals))
+
+        ds_group = file.create_group("cluster_ds_index_values")
+        for i, vals in enumerate(self.cluster_ds_index_values):
+            ds_group.create_dataset(f"cluster_{i}", data=np.array(vals))
+
+        os_group = file.create_group("cluster_os_index_values")
+        for i, vals in enumerate(self.cluster_os_index_values):
+            os_group.create_dataset(f"cluster_{i}", data=np.array(vals))
+
         file.create_dataset("cluster_soma_x", data=np.array(self.cluster_soma_x))
         file.create_dataset("cluster_soma_y", data=np.array(self.cluster_soma_y))
 
@@ -462,9 +470,27 @@ class BadenBerens(Artifact):
         cluster_bar_traces = jnp.array(file["cluster_bar_traces"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
         cluster_noise_traces = jnp.array(file["cluster_noise_traces"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
 
-        cluster_rf_diameter = jnp.array(file["cluster_rf_diameter"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        cluster_ds_index = jnp.array(file["cluster_ds_index"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        cluster_os_index = jnp.array(file["cluster_os_index"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        # Load metric value lists
+        n_clusters = int(file.attrs["n_clusters"])  # pyright: ignore[reportArgumentType]
+
+        rf_group = file["cluster_rf_diameter_values"]
+        assert isinstance(rf_group, Group)
+        cluster_rf_diameter_values = [
+            jnp.array(rf_group[f"cluster_{i}"]) for i in range(n_clusters)
+        ]
+
+        ds_group = file["cluster_ds_index_values"]
+        assert isinstance(ds_group, Group)
+        cluster_ds_index_values = [
+            jnp.array(ds_group[f"cluster_{i}"]) for i in range(n_clusters)
+        ]
+
+        os_group = file["cluster_os_index_values"]
+        assert isinstance(os_group, Group)
+        cluster_os_index_values = [
+            jnp.array(os_group[f"cluster_{i}"]) for i in range(n_clusters)
+        ]
+
         cluster_soma_x = jnp.array(file["cluster_soma_x"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
         cluster_soma_y = jnp.array(file["cluster_soma_y"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
 
@@ -472,7 +498,6 @@ class BadenBerens(Artifact):
         linkage_matrix = jnp.array(file["linkage_matrix"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
 
         # Load cluster names
-        n_clusters = int(file.attrs["n_clusters"])  # pyright: ignore[reportArgumentType]
         cluster_names = [file.attrs[f"cluster_name_{i}"] for i in range(n_clusters)]
 
         ari_score = float(file.attrs["ari_score"])  # pyright: ignore[reportArgumentType]
@@ -484,9 +509,9 @@ class BadenBerens(Artifact):
             cluster_chirp_traces=cluster_chirp_traces,
             cluster_bar_traces=cluster_bar_traces,
             cluster_noise_traces=cluster_noise_traces,
-            cluster_rf_diameter=cluster_rf_diameter,
-            cluster_ds_index=cluster_ds_index,
-            cluster_os_index=cluster_os_index,
+            cluster_rf_diameter_values=cluster_rf_diameter_values,
+            cluster_ds_index_values=cluster_ds_index_values,
+            cluster_os_index_values=cluster_os_index_values,
             cluster_soma_x=cluster_soma_x,
             cluster_soma_y=cluster_soma_y,
             cluster_sizes=cluster_sizes,
@@ -522,7 +547,7 @@ class BadenBerensAnalysis(
     ) -> BadenBerens:
         """Generate Baden-Berens analysis from clustering results."""
 
-        # Get cluster assignments (needed for mapping to raw_df)
+        # Get cluster assignments
         assignments = model.cluster_assignments(params, dataset.train_data)
         n_clusters = model.n_clusters
 
@@ -535,39 +560,56 @@ class BadenBerensAnalysis(
             stored_prototypes, neural_dataset
         )
 
-        # Use stored cluster members for cluster sizes
+        # Use stored cluster members to extract feature values
         stored_members = model.get_cluster_members(handler, epoch)
         cluster_sizes = jnp.array([len(members) for members in stored_members])
 
-        # Get ground truth cell types (aligned with train_data)
-        celltype_labels = self.raw_df["celltype"].values[: len(assignments)]
+        # Extract feature values from cluster members
+        cluster_ds_pvalue_values = []
+        cluster_os_pvalue_values = []
+        cluster_roi_size_values = []
 
-        # Extract neural-specific metrics using cluster assignments
-        cluster_rf_diameter = self._extract_cluster_metric(
-            assignments, n_clusters, "rf_cdia_um"
-        )
-        cluster_ds_index = self._extract_cluster_metric(
-            assignments, n_clusters, "bar_ds_index"
-        )
-        cluster_os_index = self._extract_cluster_metric(
-            assignments, n_clusters, "bar_os_index"
-        )
-        cluster_soma_x = self._extract_cluster_metric(
-            assignments, n_clusters, "temporal_nasal_pos_um"
-        )
-        cluster_soma_y = self._extract_cluster_metric(
-            assignments, n_clusters, "ventral_dorsal_pos_um"
-        )
+        chirp_len = neural_dataset.chirp_len
+        bar_len = neural_dataset.bar_len
 
-        # Generate cluster ordering, colors, names
-        cluster_names = self._generate_cluster_names(
-            cluster_chirp_traces, cluster_ds_index, cluster_os_index
-        )
+        for members in stored_members:
+            if len(members) > 0:
+                # Extract features from the end of each member's data
+                features = members[:, chirp_len + bar_len :]  # Shape: (n_members, 3)
+                cluster_ds_pvalue_values.append(features[:, 0])
+                cluster_os_pvalue_values.append(features[:, 1])
+                cluster_roi_size_values.append(features[:, 2])
+            else:
+                cluster_ds_pvalue_values.append(jnp.array([]))
+                cluster_os_pvalue_values.append(jnp.array([]))
+                cluster_roi_size_values.append(jnp.array([]))
+
+        # Get celltype labels if available (otherwise use dummy labels)
+        if hasattr(self, "raw_df") and "celltype" in self.raw_df.columns:
+            # Try to get labels, but if we can't match them, use dummy labels
+            quality_mask = (self.raw_df.chirp_qidx > 0.35) | (
+                self.raw_df.bar_qidx > 0.6
+            )
+            filtered_df = self.raw_df[quality_mask].reset_index(drop=True)
+            n_train = len(assignments)
+            if len(filtered_df) >= n_train:
+                celltype_labels = filtered_df["celltype"].values[:n_train]
+            else:
+                celltype_labels = np.zeros(n_train)  # Dummy labels
+        else:
+            celltype_labels = np.zeros(len(assignments))  # Dummy labels
+
+        # For spatial coordinates, we'll use zeros as placeholders
+        cluster_soma_x = jnp.zeros(n_clusters)
+        cluster_soma_y = jnp.zeros(n_clusters)
+
+        # Generate cluster names based on chirp responses
+        cluster_names = self._generate_simple_cluster_names(cluster_chirp_traces)
 
         # Use stored hierarchical clustering
         linkage_matrix = model.get_cluster_hierarchy(handler, epoch)
 
-        # Calculate quality metrics - convert to numpy arrays for sklearn
+        # Calculate quality metrics
         ari_score = adjusted_rand_score(
             np.array(celltype_labels), np.array(assignments)
         )
@@ -584,9 +626,9 @@ class BadenBerensAnalysis(
             cluster_chirp_traces=cluster_chirp_traces,
             cluster_bar_traces=cluster_bar_traces,
             cluster_noise_traces=cluster_noise_traces,
-            cluster_rf_diameter=cluster_rf_diameter,
-            cluster_ds_index=cluster_ds_index,
-            cluster_os_index=cluster_os_index,
+            cluster_rf_diameter_values=cluster_roi_size_values,  # Reuse field for ROI size
+            cluster_ds_index_values=cluster_ds_pvalue_values,  # Store p-values
+            cluster_os_index_values=cluster_os_pvalue_values,  # Store p-values
             cluster_soma_x=cluster_soma_x,
             cluster_soma_y=cluster_soma_y,
             cluster_sizes=cluster_sizes,
@@ -617,32 +659,6 @@ class BadenBerensAnalysis(
             bar_traces.append(directional_bar)
 
         return jnp.array(chirp_traces), jnp.array(bar_traces)
-
-    def _generate_cluster_names(
-        self, chirp_traces: Array, ds_index: Array, os_index: Array
-    ) -> list[str]:
-        """Generate descriptive names for clusters."""
-        names = []
-        for i in range(len(chirp_traces)):
-            # Basic ON/OFF classification
-            trace = chirp_traces[i]
-            on_response = jnp.mean(trace[100:150])
-            off_response = jnp.mean(trace[150:200])
-
-            if off_response > on_response + 0.1:
-                base_name = "OFF"
-            elif on_response > off_response + 0.1:
-                base_name = "ON"
-            else:
-                base_name = "ON-OFF"
-
-            # Add directional selectivity info
-            if not jnp.isnan(ds_index[i]) and ds_index[i] > 0.3:
-                base_name += " DS"
-
-            names.append(f"{base_name} {i}")
-
-        return names
 
     @override
     def plot(self, artifact: BadenBerens, dataset: ClusteringDataset) -> Figure:
@@ -829,49 +845,55 @@ class BadenBerensAnalysis(
         self, fig: Figure, gs: GridSpec, artifact: BadenBerens, leaf_order: list[int]
     ) -> None:
         """Plot individual histograms for each cluster's metrics."""
-        # Import here to avoid issues if not installed
+        # Update labels to match what we're actually plotting
         metrics_info = [
-            ("rf_cdia_um", "RF", (0, 400)),
-            ("bar_ds_index", "DSi", (0, 1)),
-            ("bar_os_index", "OSi", (0, 1)),
+            ("roi_size", "ROI Size (μm²)", (0, 400)),
+            ("ds_pvalue", "DS p-value", (0, 1)),
+            ("os_pvalue", "OS p-value", (0, 1)),
         ]
         palette = self.palette(len(leaf_order))
+
+        # Collect all values across all clusters for background histograms
+        all_roi_values = jnp.concatenate(
+            [vals for vals in artifact.cluster_rf_diameter_values if len(vals) > 0]
+        )
+        all_ds_values = jnp.concatenate(
+            [vals for vals in artifact.cluster_ds_index_values if len(vals) > 0]
+        )
+        all_os_values = jnp.concatenate(
+            [vals for vals in artifact.cluster_os_index_values if len(vals) > 0]
+        )
+        all_values_dict = {
+            "roi_size": all_roi_values,
+            "ds_pvalue": all_ds_values,
+            "os_pvalue": all_os_values,
+        }
 
         # Create histograms for each cluster
         for i, cluster_idx in enumerate(leaf_order):
             color = palette[i]
             cluster_idx = int(cluster_idx)
 
-            # Create ONE subplot per cluster that spans the entire cell
-            ax = fig.add_subplot(gs[i, 3])
-
-            # Create three inset axes with more width
+            # Create subplot spanning the metrics column
             outer_ax = fig.add_subplot(gs[i, 3])
-            outer_ax.axis("off")  # Turn off the outer frame
+            outer_ax.axis("off")
 
             inner_gs = GridSpecFromSubplotSpec(1, 4, subplot_spec=gs[i, 3], wspace=0.25)
 
-            for j, (metric_name, label, xlim) in enumerate(metrics_info):
+            for j, (metric_key, label, xlim) in enumerate(metrics_info):
                 ax_hist = fig.add_subplot(inner_gs[0, j])
 
-                # Get the mean and values
-                if j == 0:
-                    mean_val = artifact.cluster_rf_diameter[cluster_idx]
-                    all_vals = artifact.cluster_rf_diameter[
-                        ~np.isnan(artifact.cluster_rf_diameter)
-                    ]
-                elif j == 1:
-                    mean_val = artifact.cluster_ds_index[cluster_idx]
-                    all_vals = artifact.cluster_ds_index[
-                        ~np.isnan(artifact.cluster_ds_index)
-                    ]
+                # Get cluster-specific values
+                if metric_key == "roi_size":
+                    cluster_vals = artifact.cluster_rf_diameter_values[cluster_idx]
+                elif metric_key == "ds_pvalue":
+                    cluster_vals = artifact.cluster_ds_index_values[cluster_idx]
                 else:
-                    mean_val = artifact.cluster_os_index[cluster_idx]
-                    all_vals = artifact.cluster_os_index[
-                        ~np.isnan(artifact.cluster_os_index)
-                    ]
+                    cluster_vals = artifact.cluster_os_index_values[cluster_idx]
 
-                if not np.isnan(mean_val) and len(all_vals) > 0:
+                # Plot background histogram of all values
+                all_vals = all_values_dict[metric_key]
+                if len(all_vals) > 0:
                     bins = np.linspace(xlim[0], xlim[1], 20)
                     ax_hist.hist(
                         all_vals,
@@ -880,78 +902,67 @@ class BadenBerensAnalysis(
                         alpha=0.2,
                         color="gray",
                         edgecolor="none",
+                        label="All cells",
                     )
-                    ax_hist.axvline(mean_val, color=color, linewidth=3, alpha=0.9)
 
+                # Plot cluster-specific histogram
+                if len(cluster_vals) > 0:
+                    ax_hist.hist(
+                        cluster_vals,
+                        bins=bins,
+                        density=True,
+                        alpha=0.7,
+                        color=color,
+                        edgecolor="none",
+                        label=f"Cluster {cluster_idx}",
+                    )
                 ax_hist.set_xlim(xlim)
                 ax_hist.spines["top"].set_visible(False)
                 ax_hist.spines["right"].set_visible(False)
                 ax_hist.spines["left"].set_visible(False)
                 ax_hist.set_yticks([])
 
-                if j == 0:
+                if j == 0:  # ROI size
                     ax_hist.set_xticks([0, 200, 400])
                     ax_hist.set_xticklabels(["0", "200", "400"], fontsize=7)
-                else:
+                else:  # p-values
                     ax_hist.set_xticks([0, 0.5, 1])
                     ax_hist.set_xticklabels(["0", "0.5", "1"], fontsize=7)
 
                 if i == len(leaf_order) - 1:
                     ax_hist.set_xlabel(label, fontsize=8)
 
-                    # Add cluster size on the right
-                    n_cells = int(artifact.cluster_sizes[cluster_idx])
-                    ax.text(
-                        0.95,
-                        0.5,
-                        f"n={n_cells}",
-                        transform=ax.transAxes,
-                        fontsize=8,
-                        ha="right",
-                        va="center",
-                    )
-
-                    # Turn off the main axes frame
-                    ax.axis("off")
-
-    def _extract_cluster_metric(
-        self, assignments: Array, n_clusters: int, metric_name: str
-    ) -> Array:
-        """Extract average metric value for each cluster."""
-        values = []
-        # Convert assignments to numpy for indexing
-        assignments_np = np.array(assignments)
-
-        # Store both mean and all values for histogram plotting
-        for i in range(n_clusters):
-            mask = assignments_np == i
-            if np.sum(mask) > 0:
-                cluster_indices = np.where(mask)[0]
-                metric_data = []
-                for idx in cluster_indices:
-                    if idx < len(self.raw_df):
-                        val = self.raw_df[metric_name].iloc[idx]
-                        if pd.notna(val):
-                            metric_data.append(val)
-
-                if metric_data:
-                    avg_value = np.mean(metric_data)
-                else:
-                    avg_value = np.nan
-            else:
-                avg_value = np.nan
-            values.append(avg_value)
-
-        return jnp.array(values)
-
-    def _extract_chirp_on_off_index(self, assignments: Array, n_clusters: int) -> Array:
-        """Extract chirp on/off index if available in raw data."""
-        if "chirp_on_off_index" in self.raw_df.columns:
-            return self._extract_cluster_metric(
-                assignments, n_clusters, "chirp_on_off_index"
+            # Add cluster size on the right
+            n_cells = int(artifact.cluster_sizes[cluster_idx])
+            outer_ax.text(
+                0.95,
+                0.5,
+                f"n={n_cells}",
+                transform=outer_ax.transAxes,
+                fontsize=8,
+                ha="right",
+                va="center",
             )
-        # Fallback to computing from traces
-        return jnp.zeros(n_clusters)  # Will be computed in color generation
+
+    def _generate_simple_cluster_names(self, chirp_traces: Array) -> list[str]:
+        """Generate simple descriptive names for clusters based on chirp response."""
+        names = []
+        for i in range(len(chirp_traces)):
+            # Basic ON/OFF classification from chirp response
+            trace = chirp_traces[i]
+            on_response = jnp.mean(trace[100:150])
+            off_response = jnp.mean(trace[150:200])
+
+            if off_response > on_response + 0.1:
+                base_name = "OFF"
+            elif on_response > off_response + 0.1:
+                base_name = "ON"
+            else:
+                base_name = "ON-OFF"
+
+            names.append(f"{base_name} {i}")
+
+        return names
 
     @override
     def metrics(self, artifact: BadenBerens) -> MetricDict:
