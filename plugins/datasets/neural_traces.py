@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import colorsys
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.cluster.hierarchy as sch
+import seaborn
 from h5py import File
 from hydra.core.config_store import ConfigStore
 from jax import Array
@@ -389,7 +389,6 @@ class BadenBerens(Artifact):
     # Cluster assignments and metadata
     cluster_assignments: Array  # (n_cells,) cluster IDs
     celltype_labels: Array  # (n_cells,) ground truth cell type IDs
-    cluster_colors: Array  # (n_clusters, 3) RGB colors for each cluster
 
     # Response traces by cluster
     cluster_chirp_traces: Array  # (n_clusters, n_timepoints)
@@ -421,7 +420,6 @@ class BadenBerens(Artifact):
             "cluster_assignments", data=np.array(self.cluster_assignments)
         )
         file.create_dataset("celltype_labels", data=np.array(self.celltype_labels))
-        file.create_dataset("cluster_colors", data=np.array(self.cluster_colors))
 
         file.create_dataset(
             "cluster_chirp_traces", data=np.array(self.cluster_chirp_traces)
@@ -459,7 +457,6 @@ class BadenBerens(Artifact):
         # Load arrays
         cluster_assignments = jnp.array(file["cluster_assignments"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
         celltype_labels = jnp.array(file["celltype_labels"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        cluster_colors = jnp.array(file["cluster_colors"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
 
         cluster_chirp_traces = jnp.array(file["cluster_chirp_traces"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
         cluster_bar_traces = jnp.array(file["cluster_bar_traces"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
@@ -484,7 +481,6 @@ class BadenBerens(Artifact):
         return cls(
             cluster_assignments=cluster_assignments,
             celltype_labels=celltype_labels,
-            cluster_colors=cluster_colors,
             cluster_chirp_traces=cluster_chirp_traces,
             cluster_bar_traces=cluster_bar_traces,
             cluster_noise_traces=cluster_noise_traces,
@@ -571,18 +567,6 @@ class BadenBerensAnalysis(
         # Use stored hierarchical clustering
         linkage_matrix = model.get_cluster_hierarchy(handler, epoch)
 
-        dendro = sch.dendrogram(
-            np.array(linkage_matrix, dtype=np.float64),
-            no_plot=True,  # Don't plot, just get the ordering
-        )
-        dendrogram_leaf_order = dendro["leaves"]
-        if dendrogram_leaf_order is None:
-            # Fallback to sequential ordering
-            dendrogram_leaf_order = list(range(n_clusters))
-
-        # Generate colors based on dendrogram ordering and functional properties
-        cluster_colors = self._generate_cluster_colors(n_clusters, cluster_chirp_traces)
-
         # Calculate quality metrics - convert to numpy arrays for sklearn
         ari_score = adjusted_rand_score(
             np.array(celltype_labels), np.array(assignments)
@@ -597,7 +581,6 @@ class BadenBerensAnalysis(
         return BadenBerens(
             cluster_assignments=assignments,
             celltype_labels=jnp.array(celltype_labels),
-            cluster_colors=cluster_colors,
             cluster_chirp_traces=cluster_chirp_traces,
             cluster_bar_traces=cluster_bar_traces,
             cluster_noise_traces=cluster_noise_traces,
@@ -634,44 +617,6 @@ class BadenBerensAnalysis(
             bar_traces.append(directional_bar)
 
         return jnp.array(chirp_traces), jnp.array(bar_traces)
-
-    def _generate_cluster_colors(self, n_clusters: int, chirp_traces: Array) -> Array:
-        """Generate colors for clusters following OFF (red) to ON (blue) gradient."""
-
-        # Compute ON-OFF index for each cluster to determine color mapping
-        on_off_indices = []
-        for i in range(n_clusters):
-            trace = chirp_traces[i]
-            # ON-OFF index: response to light increment vs decrement
-            on_response = jnp.mean(trace[100:150])  # During light ON
-            off_response = jnp.mean(trace[150:200])  # During light OFF
-            on_off_index = on_response - off_response
-            on_off_indices.append(float(on_off_index))
-
-        # Sort clusters by ON-OFF index to create the color gradient
-        functional_order = sorted(range(n_clusters), key=lambda i: on_off_indices[i])
-
-        # Create color mapping: each cluster gets a color based on its functional position
-        colors = []
-        for cluster_idx in range(n_clusters):
-            # Find this cluster's position in the functional ordering
-            pos = functional_order.index(cluster_idx)
-            ratio = pos / (n_clusters - 1) if n_clusters > 1 else 0.5
-
-            # Gradient from red (OFF) through yellow-green to blue (ON)
-            if ratio < 0.5:
-                # Red to yellow-green
-                hue = 0.0 + ratio * 0.3  # 0 (red) to 0.3 (yellow-green)
-                saturation = 0.8
-            else:
-                # Yellow-green to blue
-                hue = 0.3 + (ratio - 0.5) * 0.4  # 0.3 to 0.7 (blue)
-                saturation = 0.8
-
-            rgb = colorsys.hsv_to_rgb(hue, saturation, 0.9)
-            colors.append(rgb)
-
-        return jnp.array(colors)
 
     def _generate_cluster_names(
         self, chirp_traces: Array, ds_index: Array, os_index: Array
@@ -730,31 +675,12 @@ class BadenBerensAnalysis(
         # C. Response metrics - USE THE LEAF ORDER
         self._plot_cluster_histograms(fig, gs, artifact, dendrogram_leaf_order)
 
-        # Overall title
+        # Overall title - simplified without metrics
         fig.suptitle(
-            f"RGC Functional Classification (ARI={artifact.ari_score:.3f}, NMI={artifact.nmi_score:.3f})",
+            "RGC Functional Classification",
             fontsize=16,
             y=0.99,
         )
-
-        # Add panel labels
-        ax_dendro.text(
-            -0.15,
-            1.02,
-            "a",
-            transform=ax_dendro.transAxes,
-            fontsize=20,
-            fontweight="bold",
-        )
-        ax_chirp.text(
-            -0.05,
-            1.02,
-            "b",
-            transform=ax_chirp.transAxes,
-            fontsize=20,
-            fontweight="bold",
-        )
-        # Panel c label will be added to the first histogram
 
         plt.subplots_adjust(top=0.96)
         return fig
@@ -789,37 +715,53 @@ class BadenBerensAnalysis(
 
         return leaves
 
+    def palette(self, n_colors: int):
+        """Generate a color palette for clusters."""
+        return seaborn.cubehelix_palette(
+            n_colors=n_colors, start=0.5, rot=-1.5, dark=0.3, light=0.7, reverse=True
+        )
+
     def _plot_response_traces(
         self, ax_chirp: Axes, ax_bar: Axes, artifact: BadenBerens, leaf_order: list[int]
     ) -> None:
-        """Plot chirp and bar response traces with better scaling."""
+        """Plot chirp and bar response traces above baseline."""
         n_clusters = len(leaf_order)
 
-        # Calculate trace spacing to fill the axes properly
-        trace_height = 1.0 / n_clusters  # Normalized height per trace
+        # Calculate trace spacing
         trace_spacing = 1.0 / n_clusters
+        traces_min = jnp.min(artifact.cluster_chirp_traces)
+        traces_max = jnp.max(artifact.cluster_chirp_traces)
+        traces_range = traces_max - traces_min
 
-        # Normalize traces for display
-        chirp_scale = 0.8 * trace_spacing  # Use 80% of available space
-        bar_scale = 0.8 * trace_spacing
+        # Set2 color palette for clusters
+        palette = self.palette(n_clusters)
 
-        # Plot chirp responses - USE LEAF ORDER
+        # Plot chirp responses
         for i, cluster_idx in enumerate(leaf_order):
-            y_position = 1.0 - (i + 0.5) * trace_spacing  # Position from top
+            color = palette[i]
+            y_position = 1.0 - (i + 0.5) * trace_spacing
 
             trace = artifact.cluster_chirp_traces[cluster_idx]
-            # Normalize trace to [-1, 1] range
-            trace_norm = (trace - jnp.mean(trace)) / (jnp.std(trace) + 1e-6)
-            trace_scaled = trace_norm * chirp_scale * 0.4 + y_position
-
-            color = tuple(float(c) for c in artifact.cluster_colors[cluster_idx])
+            trace_baselined = trace - jnp.min(trace)
+            scale_factor = trace_spacing * 0.9
+            trace_scaled = (trace_baselined / traces_range) * scale_factor
+            trace_final = trace_scaled + y_position
 
             # Create time axis
             time_points = np.linspace(0, 1, len(trace))
 
-            ax_chirp.plot(time_points, trace_scaled, color=color, linewidth=1)
+            # Plot trace
+            ax_chirp.plot(time_points, trace_final, color=color, linewidth=1.2)
+
+            # Fill only positive deviations from baseline
             ax_chirp.fill_between(
-                time_points, y_position, trace_scaled, color=color, alpha=0.3
+                time_points,
+                y_position,
+                trace_final,
+                where=(trace_final > y_position),
+                color=color,
+                alpha=0.3,
+                linewidth=0,
             )
 
             # Add cluster label
@@ -842,22 +784,36 @@ class BadenBerensAnalysis(
         ax_chirp.spines["right"].set_visible(False)
         ax_chirp.set_yticks([])
 
-        # Plot bar responses
+        traces_min = jnp.min(artifact.cluster_bar_traces)
+        traces_max = jnp.max(artifact.cluster_bar_traces)
+        traces_range = traces_max - traces_min
+
+        # Plot bar responses similarly
         for i, cluster_idx in enumerate(leaf_order):
+            color = palette[i]
             y_position = 1.0 - (i + 0.5) * trace_spacing
 
             trace = jnp.mean(artifact.cluster_bar_traces[cluster_idx], axis=0)
-            # Normalize trace
-            trace_norm = (trace - jnp.mean(trace)) / (jnp.std(trace) + 1e-6)
-            trace_scaled = trace_norm * bar_scale * 0.4 + y_position
+            trace_min = jnp.min(trace)
+            trace_baselined = trace - trace_min
 
-            color = tuple(float(c) for c in artifact.cluster_colors[cluster_idx])
+            # Scale trace
+            scale_factor = trace_spacing * 0.9
+            trace_scaled = (trace_baselined / traces_range) * scale_factor
+
+            trace_final = trace_scaled + y_position
 
             time_points = np.linspace(0, 1, len(trace))
 
-            ax_bar.plot(time_points, trace_scaled, color=color, linewidth=1)
+            ax_bar.plot(time_points, trace_final, color=color, linewidth=1.2)
             ax_bar.fill_between(
-                time_points, y_position, trace_scaled, color=color, alpha=0.3
+                time_points,
+                y_position,
+                trace_final,
+                where=(trace_final > y_position),
+                color=color,
+                alpha=0.3,
+                linewidth=0,
             )
 
         # Style bar axis
@@ -874,129 +830,89 @@ class BadenBerensAnalysis(
     ) -> None:
         """Plot individual histograms for each cluster's metrics."""
         # Import here to avoid issues if not installed
-        try:
-            from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-        except ImportError:
-            # Fallback if inset_axes not available
-            return
-
         metrics_info = [
-            ("rf_cdia_um", "RF Diameter (μm)", (0, 400)),
-            ("bar_ds_index", "DS Index", (0, 1)),
-            ("bar_os_index", "OS Index", (0, 1)),
+            ("rf_cdia_um", "RF", (0, 400)),
+            ("bar_ds_index", "DSi", (0, 1)),
+            ("bar_os_index", "OSi", (0, 1)),
         ]
-
-        # Get overall distributions for background
-        all_rf = []
-        all_ds = []
-        all_os = []
-
-        # Get cells for overall distributions - need to fix the indexing issue
-        # For now, just use what we have from cluster means
-        for idx in range(len(artifact.cluster_names)):
-            if not np.isnan(artifact.cluster_rf_diameter[idx]):
-                all_rf.append(float(artifact.cluster_rf_diameter[idx]))
-            if not np.isnan(artifact.cluster_ds_index[idx]):
-                all_ds.append(float(artifact.cluster_ds_index[idx]))
-            if not np.isnan(artifact.cluster_os_index[idx]):
-                all_os.append(float(artifact.cluster_os_index[idx]))
-
-        all_distributions = [all_rf, all_ds, all_os]
-
-        # Convert assignments to numpy for indexing
-        assignments_np = np.array(artifact.cluster_assignments)
+        palette = self.palette(len(leaf_order))
 
         # Create histograms for each cluster
         for i, cluster_idx in enumerate(leaf_order):
+            color = palette[i]
             cluster_idx = int(cluster_idx)
-            color = tuple(float(c) for c in artifact.cluster_colors[cluster_idx])
-
-            # Get cells in this cluster
-            cluster_mask = assignments_np == cluster_idx
-            cluster_indices = np.where(cluster_mask)[0]
 
             # Create ONE subplot per cluster that spans the entire cell
             ax = fig.add_subplot(gs[i, 3])
 
-            # Create three inset axes HORIZONTALLY arranged
-            n_metrics = len(metrics_info)
-            inset_width = 0.28  # Width of each histogram (leave space between)
-            inset_height = 0.8  # Height of histograms
-            inset_spacing = 0.04  # Space between histograms
+            # Create three inset axes with more width
+            outer_ax = fig.add_subplot(gs[i, 3])
+            outer_ax.axis("off")  # Turn off the outer frame
+
+            inner_gs = GridSpecFromSubplotSpec(1, 4, subplot_spec=gs[i, 3], wspace=0.25)
 
             for j, (metric_name, label, xlim) in enumerate(metrics_info):
-                # Position histograms horizontally
-                inset_left = j * (inset_width + inset_spacing) + 0.02
+                ax_hist = fig.add_subplot(inner_gs[0, j])
 
-                # Create inset axes
-                ax_inset = inset_axes(
-                    ax,
-                    width=f"{inset_width * 100}%",
-                    height=f"{inset_height * 100}%",
-                    loc="center left",
-                    bbox_to_anchor=(inset_left, 0.1, inset_width, inset_height),
-                    bbox_transform=ax.transAxes,
-                    borderpad=0,
-                )
-
-                # For now, just show the mean value as a vertical line
-                # since we don't have the full distribution
-                if j == 0:  # RF diameter
+                # Get the mean and values
+                if j == 0:
                     mean_val = artifact.cluster_rf_diameter[cluster_idx]
-                elif j == 1:  # DS index
+                    all_vals = artifact.cluster_rf_diameter[
+                        ~np.isnan(artifact.cluster_rf_diameter)
+                    ]
+                elif j == 1:
                     mean_val = artifact.cluster_ds_index[cluster_idx]
-                else:  # OS index
+                    all_vals = artifact.cluster_ds_index[
+                        ~np.isnan(artifact.cluster_ds_index)
+                    ]
+                else:
                     mean_val = artifact.cluster_os_index[cluster_idx]
+                    all_vals = artifact.cluster_os_index[
+                        ~np.isnan(artifact.cluster_os_index)
+                    ]
 
-                if not np.isnan(mean_val) and len(all_distributions[j]) > 0:
-                    # Plot background distribution in gray
-                    bins = np.linspace(xlim[0], xlim[1], 15)
-
-                    # Background histogram
-                    ax_inset.hist(
-                        all_distributions[j],
+                if not np.isnan(mean_val) and len(all_vals) > 0:
+                    bins = np.linspace(xlim[0], xlim[1], 20)
+                    ax_hist.hist(
+                        all_vals,
                         bins=bins,
                         density=True,
-                        alpha=0.3,
+                        alpha=0.2,
                         color="gray",
                         edgecolor="none",
                     )
+                    ax_hist.axvline(mean_val, color=color, linewidth=3, alpha=0.9)
 
-                    # Show cluster mean as vertical line
-                    ax_inset.axvline(mean_val, color=color, linewidth=2, alpha=0.8)
+                ax_hist.set_xlim(xlim)
+                ax_hist.spines["top"].set_visible(False)
+                ax_hist.spines["right"].set_visible(False)
+                ax_hist.spines["left"].set_visible(False)
+                ax_hist.set_yticks([])
 
-                # Style the inset
-                ax_inset.set_xlim(xlim)
-                ax_inset.spines["top"].set_visible(False)
-                ax_inset.spines["right"].set_visible(False)
+                if j == 0:
+                    ax_hist.set_xticks([0, 200, 400])
+                    ax_hist.set_xticklabels(["0", "200", "400"], fontsize=7)
+                else:
+                    ax_hist.set_xticks([0, 0.5, 1])
+                    ax_hist.set_xticklabels(["0", "0.5", "1"], fontsize=7)
 
-                # Minimize visual clutter
-                if j == 0:  # RF diameter
-                    ax_inset.set_xticks([0, 400])
-                    ax_inset.set_xticklabels(["0", "400"], fontsize=5)
-                else:  # DS/OS indices
-                    ax_inset.set_xticks([0, 1])
-                    ax_inset.set_xticklabels(["0", "1"], fontsize=5)
-
-                ax_inset.set_yticks([])
-
-                # Only show labels on bottom row
                 if i == len(leaf_order) - 1:
-                    ax_inset.set_xlabel(label.split()[0], fontsize=6)  # Just first word
+                    ax_hist.set_xlabel(label, fontsize=8)
 
-                # Add panel label to first cluster, first metric
-                if i == 0 and j == 0:
-                    ax_inset.text(
-                        -0.5,
-                        1.2,
-                        "c",
-                        transform=ax_inset.transAxes,
-                        fontsize=20,
-                        fontweight="bold",
+                    # Add cluster size on the right
+                    n_cells = int(artifact.cluster_sizes[cluster_idx])
+                    ax.text(
+                        0.95,
+                        0.5,
+                        f"n={n_cells}",
+                        transform=ax.transAxes,
+                        fontsize=8,
+                        ha="right",
+                        va="center",
                     )
 
-            # Turn off the main axes frame
-            ax.axis("off")
+                    # Turn off the main axes frame
+                    ax.axis("off")
 
     def _extract_cluster_metric(
         self, assignments: Array, n_clusters: int, metric_name: str
@@ -1028,18 +944,17 @@ class BadenBerensAnalysis(
 
         return jnp.array(values)
 
+    def _extract_chirp_on_off_index(self, assignments: Array, n_clusters: int) -> Array:
+        """Extract chirp on/off index if available in raw data."""
+        if "chirp_on_off_index" in self.raw_df.columns:
+            return self._extract_cluster_metric(
+                assignments, n_clusters, "chirp_on_off_index"
+            )
+        # Fallback to computing from traces
+        return jnp.zeros(n_clusters)  # Will be computed in color generation
+
     @override
     def metrics(self, artifact: BadenBerens) -> MetricDict:
         """Return quality metrics."""
-        return {
-            "BadenBerens/ARI Score": (jnp.array(0), jnp.array(artifact.ari_score)),
-            "BadenBerens/NMI Score": (jnp.array(0), jnp.array(artifact.nmi_score)),
-            "BadenBerens/Mean Cluster Size": (
-                jnp.array(0),
-                jnp.mean(artifact.cluster_sizes),
-            ),
-            "BadenBerens/Active Clusters": (
-                jnp.array(0),
-                jnp.sum(artifact.cluster_sizes > 0),
-            ),
-        }
+        # Import here to ensure proper type
+        return {}
