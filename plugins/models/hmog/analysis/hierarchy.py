@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.cluster.hierarchy
+import scipy.spatial.distance
 from goal.geometry import (
     Natural,
     Point,
@@ -169,10 +170,6 @@ def generate_cluster_hierarchy[M: HMoG, C: ClusterHierarchy](
 
     # Force diagonal to exactly zero
     np.fill_diagonal(dist_matrix, 0.0)
-
-    # Import scipy here for clarity
-    import scipy.cluster.hierarchy
-    import scipy.spatial.distance
 
     # Convert to condensed form
     dist_vector = scipy.spatial.distance.squareform(dist_matrix)

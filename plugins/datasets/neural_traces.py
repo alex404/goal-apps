@@ -19,6 +19,7 @@ from jax import Array
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 from apps.configs import ClusteringDatasetConfig
@@ -304,7 +305,6 @@ class NeuralTracesDataset(ClusteringDataset):
     @override
     def paint_observable(self, observable: Array, axes: Axes) -> None:
         """Visualize a single neural trace."""
-        from matplotlib.gridspec import GridSpecFromSubplotSpec
 
         # Turn off the main axes
         axes.set_axis_off()
@@ -721,17 +721,17 @@ class BadenBerensAnalysis(
             wspace=0.15,
         )
 
-        # A. Dendrogram (spans all rows)
+        # A. Dendrogram (spans all rows) - GET THE LEAF ORDER
         ax_dendro = fig.add_subplot(gs[:, 0])
-        self._plot_dendrogram(ax_dendro, artifact)
+        dendrogram_leaf_order = self._plot_dendrogram(ax_dendro, artifact)
 
-        # B. Response traces (spans all rows)
+        # B. Response traces (spans all rows) - USE THE LEAF ORDER
         ax_chirp = fig.add_subplot(gs[:, 1])
         ax_bar = fig.add_subplot(gs[:, 2])
-        self._plot_response_traces(ax_chirp, ax_bar, artifact)
+        self._plot_response_traces(ax_chirp, ax_bar, artifact, dendrogram_leaf_order)
 
-        # C. Response metrics - one subplot per cluster
-        self._plot_cluster_histograms(fig, gs, artifact)  # Pass fig as parameter
+        # C. Response metrics - USE THE LEAF ORDER
+        self._plot_cluster_histograms(fig, gs, artifact, dendrogram_leaf_order)
 
         # Overall title
         fig.suptitle(
@@ -762,7 +762,7 @@ class BadenBerensAnalysis(
         plt.subplots_adjust(top=0.96)
         return fig
 
-    def _plot_dendrogram(self, ax, artifact: BadenBerens):
+    def _plot_dendrogram(self, ax, artifact: BadenBerens) -> list[int]:
         """Plot hierarchical clustering dendrogram."""
         # Create dendrogram with colors matching clusters
         # Ensure linkage matrix is numpy float64
@@ -788,9 +788,13 @@ class BadenBerensAnalysis(
         ax.spines["left"].set_visible(False)
         ax.set_yticks([])
 
-    def _plot_response_traces(self, ax_chirp, ax_bar, artifact: BadenBerens):
+        return leaves
+
+    def _plot_response_traces(
+        self, ax_chirp, ax_bar, artifact: BadenBerens, leaf_order: list[int]
+    ):
         """Plot chirp and bar response traces with better scaling."""
-        n_clusters = len(artifact.cluster_order)
+        n_clusters = len(leaf_order)
 
         # Calculate trace spacing to fill the axes properly
         trace_height = 1.0 / n_clusters  # Normalized height per trace
@@ -800,8 +804,8 @@ class BadenBerensAnalysis(
         chirp_scale = 0.8 * trace_spacing  # Use 80% of available space
         bar_scale = 0.8 * trace_spacing
 
-        # Plot chirp responses
-        for i, cluster_idx in enumerate(artifact.cluster_order):
+        # Plot chirp responses - USE LEAF ORDER
+        for i, cluster_idx in enumerate(leaf_order):
             cluster_idx = int(cluster_idx)
             y_position = 1.0 - (i + 0.5) * trace_spacing  # Position from top
 
@@ -868,9 +872,10 @@ class BadenBerensAnalysis(
         ax_bar.spines["right"].set_visible(False)
         ax_bar.set_yticks([])
 
-    def _plot_cluster_histograms(self, fig, gs, artifact: BadenBerens):
+    def _plot_cluster_histograms(
+        self, fig, gs, artifact: BadenBerens, leaf_order: list[int]
+    ):
         """Plot individual histograms for each cluster's metrics."""
-        from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
         metrics_info = [
             ("rf_cdia_um", "RF Diameter (μm)", (0, 400)),
@@ -886,7 +891,8 @@ class BadenBerensAnalysis(
         # Convert assignments to numpy for indexing
         assignments_np = np.array(artifact.cluster_assignments)
 
-        for idx in range(len(assignments_np)):
+        for idx in leaf_order:
+            idx = int(idx)
             if idx < len(self.raw_df):
                 if not pd.isna(self.raw_df["rf_cdia_um"].iloc[idx]):
                     all_rf.append(self.raw_df["rf_cdia_um"].iloc[idx])
