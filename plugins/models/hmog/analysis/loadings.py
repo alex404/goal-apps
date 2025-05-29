@@ -22,7 +22,7 @@ from apps.plugins import (
     Analysis,
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact
+from apps.runtime.handler import Artifact, RunHandler
 
 from ..base import HMoG
 
@@ -51,7 +51,7 @@ class LoadingMatrixArtifact(Artifact):
         return cls(natural_loadings=natural_loadings, mean_loadings=mean_loadings)
 
 
-def get_loading_matrices[M: HMoG](
+def generate_loading_matrices[M: HMoG](
     model: M,
     params: Point[Natural, M],
 ) -> LoadingMatrixArtifact:
@@ -141,15 +141,17 @@ class LoadingMatrixAnalysis(Analysis[ClusteringDataset, HMoG, LoadingMatrixArtif
     @override
     def generate(
         self,
-        model: HMoG,
-        params: Array,
-        dataset: ClusteringDataset,
         key: Array,
+        handler: RunHandler,
+        dataset: ClusteringDataset,
+        model: HMoG,
+        epoch: int,
+        params: Array,
     ) -> LoadingMatrixArtifact:
         """Generate collection of clusters with their members."""
         # Convert array to typed point for the model
         typed_params = model.natural_point(params)
-        return get_loading_matrices(model, typed_params)
+        return generate_loading_matrices(model, typed_params)
 
     @override
     def plot(

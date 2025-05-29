@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import colorsys
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,7 +12,8 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
+import scipy.cluster.hierarchy as sch
+import scipy.spatial.distance as spdist
 from h5py import File
 from hydra.core.config_store import ConfigStore
 from jax import Array
@@ -22,7 +24,7 @@ from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 from apps.configs import ClusteringDatasetConfig
 from apps.plugins import Analysis, ClusteringDataset, ClusteringExperiment
-from apps.runtime.handler import Artifact, MetricDict
+from apps.runtime.handler import Artifact, MetricDict, RunHandler
 
 
 @dataclass
@@ -385,118 +387,127 @@ class NeuralTracesDataset(ClusteringDataset):
 """Baden-Berens style analyses for neural traces dataset."""
 
 
+"""Baden-Berens style analyses for neural traces dataset."""
+
+
 @dataclass(frozen=True)
 class BadenBerens(Artifact):
-    """Comparison between clustering results and reference cell types."""
+    """Baden-Berens style analysis of retinal ganglion cell clustering."""
 
-    # Core comparison data
-    confusion_matrix: Array  # (n_clusters, n_celltypes)
-    cluster_to_celltype: dict[int, dict[int, float]]  # cluster -> {celltype: fraction}
-    celltype_to_clusters: dict[int, dict[int, float]]  # celltype -> {cluster: fraction}
+    # Cluster assignments and metadata
+    cluster_assignments: Array  # (n_cells,) cluster IDs
+    celltype_labels: Array  # (n_cells,) ground truth cell type IDs
+    cluster_order: Array  # Ordering of clusters for display
+    cluster_colors: Array  # (n_clusters, 3) RGB colors for each cluster
 
-    # Averaged response profiles by cluster
-    cluster_chirp_responses: Array  # (n_clusters, n_timepoints)
-    cluster_bar_responses: Array  # (n_clusters, n_timepoints)
+    # Response traces by cluster
+    cluster_chirp_traces: Array  # (n_clusters, n_timepoints)
+    cluster_bar_traces: Array  # (n_clusters, n_directions, n_timepoints)
+    cluster_noise_traces: Array  # (n_clusters, n_timepoints) if available
 
     # Response metrics by cluster
-    cluster_metrics: dict[str, Array]  # metric_name -> (n_clusters,)
+    cluster_rf_diameter: Array  # (n_clusters,) mean RF diameter
+    cluster_ds_index: Array  # (n_clusters,) mean direction selectivity
+    cluster_os_index: Array  # (n_clusters,) mean orientation selectivity
+    cluster_soma_x: Array  # (n_clusters,) mean soma x position
+    cluster_soma_y: Array  # (n_clusters,) mean soma y position
 
-    # Metadata
-    cluster_sizes: Array  # Number of cells per cluster
-    celltype_labels: list[int]  # Unique cell type IDs
+    # Cluster properties
+    cluster_sizes: Array  # (n_clusters,) number of cells per cluster
+    cluster_names: list[str]  # Descriptive names for each cluster
+
+    # Hierarchical clustering
+    linkage_matrix: Array  # Scipy linkage matrix for dendrogram
+
+    # Quality metrics
     ari_score: float
     nmi_score: float
 
     @override
     def save_to_hdf5(self, file: File) -> None:
-        """Save comparison data to HDF5."""
-        file.create_dataset("confusion_matrix", data=np.array(self.confusion_matrix))
+        """Save Baden-Berens analysis to HDF5."""
         file.create_dataset(
-            "cluster_chirp_responses", data=np.array(self.cluster_chirp_responses)
+            "cluster_assignments", data=np.array(self.cluster_assignments)
+        )
+        file.create_dataset("celltype_labels", data=np.array(self.celltype_labels))
+        file.create_dataset("cluster_order", data=np.array(self.cluster_order))
+        file.create_dataset("cluster_colors", data=np.array(self.cluster_colors))
+
+        file.create_dataset(
+            "cluster_chirp_traces", data=np.array(self.cluster_chirp_traces)
         )
         file.create_dataset(
-            "cluster_bar_responses", data=np.array(self.cluster_bar_responses)
+            "cluster_bar_traces", data=np.array(self.cluster_bar_traces)
         )
+        file.create_dataset(
+            "cluster_noise_traces", data=np.array(self.cluster_noise_traces)
+        )
+
+        file.create_dataset(
+            "cluster_rf_diameter", data=np.array(self.cluster_rf_diameter)
+        )
+        file.create_dataset("cluster_ds_index", data=np.array(self.cluster_ds_index))
+        file.create_dataset("cluster_os_index", data=np.array(self.cluster_os_index))
+        file.create_dataset("cluster_soma_x", data=np.array(self.cluster_soma_x))
+        file.create_dataset("cluster_soma_y", data=np.array(self.cluster_soma_y))
+
         file.create_dataset("cluster_sizes", data=np.array(self.cluster_sizes))
+        file.create_dataset("linkage_matrix", data=np.array(self.linkage_matrix))
 
-        # Save dictionaries as groups
-        c2ct_group = file.create_group("cluster_to_celltype")
-        for cluster_id, celltype_dict in self.cluster_to_celltype.items():
-            cluster_group = c2ct_group.create_group(str(cluster_id))
-            for celltype, fraction in celltype_dict.items():
-                cluster_group.attrs[str(celltype)] = fraction
+        # Save cluster names as attributes
+        for i, name in enumerate(self.cluster_names):
+            file.attrs[f"cluster_name_{i}"] = name
+        file.attrs["n_clusters"] = len(self.cluster_names)
 
-        # Save metrics
-        metrics_group = file.create_group("cluster_metrics")
-        for metric_name, values in self.cluster_metrics.items():
-            metrics_group.create_dataset(metric_name, data=np.array(values))
-
-        # Save metadata
-        file.attrs["celltype_labels"] = self.celltype_labels
         file.attrs["ari_score"] = self.ari_score
         file.attrs["nmi_score"] = self.nmi_score
 
     @classmethod
     @override
     def load_from_hdf5(cls, file: File) -> BadenBerens:
-        """Load comparison data from HDF5."""
-        # Load array datasets
-        confusion_matrix = jnp.array(file["confusion_matrix"][()])  # pyright: ignore[reportArgumentType,reportIndexIssue]
-        cluster_chirp_responses = jnp.array(file["cluster_chirp_responses"][()])  # pyright: ignore[reportArgumentType,reportIndexIssue]
-        cluster_bar_responses = jnp.array(file["cluster_bar_responses"][()])  # pyright: ignore[reportArgumentType,reportIndexIssue]
-        cluster_sizes = jnp.array(file["cluster_sizes"][()])  # pyright: ignore[reportArgumentType,reportIndexIssue]
+        """Load Baden-Berens analysis from HDF5."""
+        # Load arrays
+        cluster_assignments = jnp.array(file["cluster_assignments"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        celltype_labels = jnp.array(file["celltype_labels"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_order = jnp.array(file["cluster_order"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_colors = jnp.array(file["cluster_colors"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
 
-        # Load cluster_to_celltype mapping
-        cluster_to_celltype = {}
-        c2ct_group = file["cluster_to_celltype"]
-        for cluster_id_str in c2ct_group.keys():
-            cluster_id = int(cluster_id_str)
-            cluster_group = c2ct_group[cluster_id_str]
-            celltype_dict = {}
-            for celltype_str in cluster_group.attrs.keys():
-                celltype = int(celltype_str)
-                fraction = float(cluster_group.attrs[celltype_str])
-                celltype_dict[celltype] = fraction
-            cluster_to_celltype[cluster_id] = celltype_dict
+        cluster_chirp_traces = jnp.array(file["cluster_chirp_traces"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_bar_traces = jnp.array(file["cluster_bar_traces"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_noise_traces = jnp.array(file["cluster_noise_traces"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
 
-        # Reconstruct celltype_to_clusters from the confusion matrix
-        # This is more reliable than saving/loading it separately
-        celltype_to_clusters = {}
-        unique_celltypes = list(file.attrs["celltype_labels"])
-        n_clusters, n_celltypes = confusion_matrix.shape
+        cluster_rf_diameter = jnp.array(file["cluster_rf_diameter"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_ds_index = jnp.array(file["cluster_ds_index"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_os_index = jnp.array(file["cluster_os_index"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_soma_x = jnp.array(file["cluster_soma_x"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_soma_y = jnp.array(file["cluster_soma_y"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
 
-        for ct_idx, celltype in enumerate(unique_celltypes):
-            celltype_size = np.sum(confusion_matrix[:, ct_idx])
-            if celltype_size > 0:
-                celltype_dict = {}
-                for cluster_id in range(n_clusters):
-                    fraction = float(
-                        confusion_matrix[cluster_id, ct_idx] / celltype_size
-                    )
-                    if fraction > 0:
-                        celltype_dict[cluster_id] = fraction
-                celltype_to_clusters[int(celltype)] = celltype_dict
+        cluster_sizes = jnp.array(file["cluster_sizes"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        linkage_matrix = jnp.array(file["linkage_matrix"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
 
-        # Load cluster metrics
-        cluster_metrics = {}
-        metrics_group = file["cluster_metrics"]
-        for metric_name in metrics_group:
-            cluster_metrics[metric_name] = jnp.array(metrics_group[metric_name][()])  # pyright: ignore[reportArgumentType,reportIndexIssue]
+        # Load cluster names
+        n_clusters = int(file.attrs["n_clusters"])  # pyright: ignore[reportArgumentType]
+        cluster_names = [file.attrs[f"cluster_name_{i}"] for i in range(n_clusters)]
 
-        # Load metadata attributes
-        celltype_labels = list(file.attrs["celltype_labels"])  # pyright: ignore[reportArgumentType]
         ari_score = float(file.attrs["ari_score"])  # pyright: ignore[reportArgumentType]
         nmi_score = float(file.attrs["nmi_score"])  # pyright: ignore[reportArgumentType]
 
         return cls(
-            confusion_matrix=confusion_matrix,
-            cluster_to_celltype=cluster_to_celltype,
-            celltype_to_clusters=celltype_to_clusters,
-            cluster_chirp_responses=cluster_chirp_responses,
-            cluster_bar_responses=cluster_bar_responses,
-            cluster_metrics=cluster_metrics,
-            cluster_sizes=cluster_sizes,
+            cluster_assignments=cluster_assignments,
             celltype_labels=celltype_labels,
+            cluster_order=cluster_order,
+            cluster_colors=cluster_colors,
+            cluster_chirp_traces=cluster_chirp_traces,
+            cluster_bar_traces=cluster_bar_traces,
+            cluster_noise_traces=cluster_noise_traces,
+            cluster_rf_diameter=cluster_rf_diameter,
+            cluster_ds_index=cluster_ds_index,
+            cluster_os_index=cluster_os_index,
+            cluster_soma_x=cluster_soma_x,
+            cluster_soma_y=cluster_soma_y,
+            cluster_sizes=cluster_sizes,
+            cluster_names=cluster_names,
+            linkage_matrix=linkage_matrix,
             ari_score=ari_score,
             nmi_score=nmi_score,
         )
@@ -506,9 +517,9 @@ class BadenBerens(Artifact):
 class BadenBerensAnalysis(
     Analysis[ClusteringDataset, ClusteringExperiment, BadenBerens]
 ):
-    """Analysis comparing clustering results with reference cell types."""
+    """Baden-Berens style analysis comparing clustering with ground truth cell types."""
 
-    raw_df: pd.DataFrame  # Raw dataframe with cell type labels
+    raw_df: pd.DataFrame  # Raw dataframe with all cell information
 
     @property
     @override
@@ -518,252 +529,645 @@ class BadenBerensAnalysis(
     @override
     def generate(
         self,
-        experiment: ClusteringExperiment,
-        params: Array,
-        dataset: ClusteringDataset,
         key: Array,
+        handler: RunHandler,
+        dataset: ClusteringDataset,
+        model: ClusteringExperiment,  # Changed from 'experiment' to 'model'
+        epoch: int,
+        params: Array,
     ) -> BadenBerens:
-        """Generate comparison between clustering and reference cell types."""
+        """Generate Baden-Berens analysis from clustering results."""
 
-        # Get cluster assignments from the model
-        assignments = experiment.cluster_assignments(params, dataset.train_data)
-        n_clusters = experiment.n_clusters
-
-        # Extract cell types from raw dataframe
-        # Assuming the ordering matches between processed dataset and raw df
-        cell_types = self.raw_df["celltype"].values[: len(assignments)]
-        unique_celltypes = np.unique(cell_types)
-        n_celltypes = len(unique_celltypes)
-
-        # Build confusion matrix
-        confusion = np.zeros((n_clusters, n_celltypes))
-        for cluster_id, celltype in zip(assignments, cell_types):
-            celltype_idx = np.where(unique_celltypes == celltype)[0][0]
-            confusion[int(cluster_id), celltype_idx] += 1
+        # Get cluster assignments
+        assignments = model.cluster_assignments(params, dataset.train_data)
+        n_clusters = model.n_clusters  # Get ground truth cell types
+        celltype_labels = self.raw_df["celltype"].values[: len(assignments)]
 
         # Calculate cluster sizes
-        cluster_sizes = np.sum(confusion, axis=1)
+        cluster_sizes = jnp.array(
+            [jnp.sum(assignments == i) for i in range(n_clusters)]
+        )
 
-        # Build cluster to celltype mapping
-        cluster_to_celltype = {}
-        for cluster_id in range(n_clusters):
-            if cluster_sizes[cluster_id] > 0:
-                fractions = confusion[cluster_id] / cluster_sizes[cluster_id]
-                cluster_to_celltype[int(cluster_id)] = {
-                    int(unique_celltypes[i]): float(fractions[i])
-                    for i in range(n_celltypes)
-                    if fractions[i] > 0
-                }
+        # Extract response traces for each cluster
+        cluster_chirp_traces = self._extract_cluster_chirp_traces(
+            assignments, n_clusters
+        )
+        cluster_bar_traces = self._extract_cluster_bar_traces(assignments, n_clusters)
+        cluster_noise_traces = self._extract_cluster_noise_traces(
+            assignments, n_clusters
+        )
 
-        # Build celltype to clusters mapping
-        celltype_sizes = np.sum(confusion, axis=0)
-        celltype_to_clusters = {}
-        for ct_idx, celltype in enumerate(unique_celltypes):
-            if celltype_sizes[ct_idx] > 0:
-                fractions = confusion[:, ct_idx] / celltype_sizes[ct_idx]
-                celltype_to_clusters[int(celltype)] = {
-                    int(cluster_id): float(fractions[cluster_id])
-                    for cluster_id in range(n_clusters)
-                    if fractions[cluster_id] > 0
-                }
+        # Extract response metrics
+        cluster_rf_diameter = self._extract_cluster_metric(
+            assignments, n_clusters, "rf_cdia_um"
+        )
+        cluster_ds_index = self._extract_cluster_metric(
+            assignments, n_clusters, "bar_ds_index"
+        )
+        cluster_os_index = self._extract_cluster_metric(
+            assignments, n_clusters, "bar_os_index"
+        )
+        cluster_soma_x = self._extract_cluster_metric(
+            assignments, n_clusters, "temporal_nasal_pos_um"
+        )
+        cluster_soma_y = self._extract_cluster_metric(
+            assignments, n_clusters, "ventral_dorsal_pos_um"
+        )
 
-        # Extract average response profiles by cluster
-        chirp_responses = []
-        bar_responses = []
+        # Generate cluster ordering based on functional properties
+        cluster_order = self._compute_functional_ordering(
+            cluster_chirp_traces, cluster_ds_index, cluster_os_index
+        )
 
-        for cluster_id in range(n_clusters):
-            cluster_mask = assignments == cluster_id
-            if np.sum(cluster_mask) > 0:
-                # Get indices of cells in this cluster
-                cluster_indices = np.where(cluster_mask)[0]
+        # Generate cluster colors
+        cluster_colors = self._generate_cluster_colors(n_clusters, cluster_order)
 
-                # Average chirp responses (using 8Hz chirp)
-                chirp_data = [
-                    self.raw_df["chirp_8Hz_average_norm"].iloc[i]
-                    for i in cluster_indices
-                ]
-                avg_chirp = np.mean(chirp_data, axis=0)
-                chirp_responses.append(avg_chirp)
+        # Generate cluster names based on properties
+        cluster_names = self._generate_cluster_names(
+            cluster_chirp_traces, cluster_ds_index, cluster_os_index
+        )
 
-                # Average bar responses
-                bar_data = [self.raw_df["preproc_bar"].iloc[i] for i in cluster_indices]
-                avg_bar = np.mean(bar_data, axis=0)
-                bar_responses.append(avg_bar)
-            else:
-                # Empty cluster
-                chirp_responses.append(np.zeros(259))  # 8Hz chirp length
-                bar_responses.append(np.zeros(32))  # bar response length
+        # Compute hierarchical clustering
+        linkage_matrix = self._compute_hierarchical_clustering(
+            cluster_chirp_traces, cluster_bar_traces
+        )
 
-        # Extract response metrics by cluster
-        cluster_metrics = {}
-        metric_fields = ["rf_cdia_um", "bar_ds_index", "bar_os_index"]
-
-        for metric in metric_fields:
-            metric_values = []
-            for cluster_id in range(n_clusters):
-                cluster_mask = assignments == cluster_id
-                if np.sum(cluster_mask) > 0:
-                    cluster_indices = np.where(cluster_mask)[0]
-                    values = [self.raw_df[metric].iloc[i] for i in cluster_indices]
-                    # Filter out NaN values
-                    valid_values = [v for v in values if not np.isnan(v)]
-                    if valid_values:
-                        metric_values.append(np.mean(valid_values))
-                    else:
-                        metric_values.append(np.nan)
-                else:
-                    metric_values.append(np.nan)
-            cluster_metrics[metric] = jnp.array(metric_values)
-
-        # Calculate comparison scores
-        ari = adjusted_rand_score(cell_types, assignments)
-        nmi = normalized_mutual_info_score(cell_types, assignments)
+        # Calculate quality metrics - convert JAX arrays to numpy for sklearn
+        ari_score = adjusted_rand_score(celltype_labels, np.array(assignments))
+        nmi_score = normalized_mutual_info_score(celltype_labels, np.array(assignments))
 
         return BadenBerens(
-            confusion_matrix=jnp.array(confusion),
-            cluster_to_celltype=cluster_to_celltype,
-            celltype_to_clusters=celltype_to_clusters,
-            cluster_chirp_responses=jnp.array(chirp_responses),
-            cluster_bar_responses=jnp.array(bar_responses),
-            cluster_metrics=cluster_metrics,
-            cluster_sizes=jnp.array(cluster_sizes),
-            celltype_labels=list(unique_celltypes),
-            ari_score=float(ari),
-            nmi_score=float(nmi),
+            cluster_assignments=jnp.array(assignments),
+            celltype_labels=jnp.array(celltype_labels),
+            cluster_order=cluster_order,
+            cluster_colors=cluster_colors,
+            cluster_chirp_traces=cluster_chirp_traces,
+            cluster_bar_traces=cluster_bar_traces,
+            cluster_noise_traces=cluster_noise_traces,
+            cluster_rf_diameter=cluster_rf_diameter,
+            cluster_ds_index=cluster_ds_index,
+            cluster_os_index=cluster_os_index,
+            cluster_soma_x=cluster_soma_x,
+            cluster_soma_y=cluster_soma_y,
+            cluster_sizes=cluster_sizes,
+            cluster_names=cluster_names,
+            linkage_matrix=jnp.array(
+                linkage_matrix, dtype=jnp.float64
+            ),  # Ensure float64
+            ari_score=float(ari_score),
+            nmi_score=float(nmi_score),
         )
+
+    def _extract_cluster_chirp_traces(
+        self, assignments: Array, n_clusters: int
+    ) -> Array:
+        """Extract average chirp response for each cluster."""
+        traces = []
+        # Convert assignments to numpy for indexing
+        assignments_np = np.array(assignments)
+
+        for i in range(n_clusters):
+            mask = assignments_np == i
+            if np.sum(mask) > 0:
+                cluster_indices = np.where(mask)[0]
+                # Use 8Hz chirp response
+                chirp_data = [
+                    self.raw_df["chirp_8Hz_average_norm"].iloc[idx]
+                    for idx in cluster_indices
+                ]
+                avg_trace = np.mean(np.stack(chirp_data), axis=0)
+            else:
+                avg_trace = np.zeros(259)  # 8Hz chirp length
+            traces.append(avg_trace)
+        return jnp.array(traces)
+
+    def _extract_cluster_bar_traces(self, assignments: Array, n_clusters: int) -> Array:
+        """Extract directional bar responses for each cluster."""
+        # For now, extract single bar trace - expand later for directional responses
+        n_directions = 8  # Typical for moving bar experiments
+        n_timepoints = 32  # From data exploration
+
+        traces = []
+        # Convert assignments to numpy for indexing
+        assignments_np = np.array(assignments)
+
+        for i in range(n_clusters):
+            mask = assignments_np == i
+            if np.sum(mask) > 0:
+                cluster_indices = np.where(mask)[0]
+                bar_data = [
+                    self.raw_df["preproc_bar"].iloc[idx] for idx in cluster_indices
+                ]
+                avg_trace = np.mean(np.stack(bar_data), axis=0)
+                # Replicate for all directions for now
+                directional_traces = np.tile(avg_trace, (n_directions, 1))
+            else:
+                directional_traces = np.zeros((n_directions, n_timepoints))
+            traces.append(directional_traces)
+        return jnp.array(traces)
+
+    def _extract_cluster_noise_traces(
+        self, assignments: Array, n_clusters: int
+    ) -> Array:
+        """Extract noise response traces (placeholder for now)."""
+        # Noise data not available in current dataset
+        n_timepoints = 100  # Placeholder
+        return jnp.zeros((n_clusters, n_timepoints))
+
+    def _extract_cluster_metric(
+        self, assignments: Array, n_clusters: int, metric_name: str
+    ) -> Array:
+        """Extract average metric value for each cluster."""
+        values = []
+        # Convert assignments to numpy for indexing
+        assignments_np = np.array(assignments)
+
+        for i in range(n_clusters):
+            mask = assignments_np == i
+            if np.sum(mask) > 0:
+                cluster_indices = np.where(mask)[0]
+                metric_data = [
+                    self.raw_df[metric_name].iloc[idx]
+                    for idx in cluster_indices
+                    if not pd.isna(self.raw_df[metric_name].iloc[idx])
+                ]
+                if metric_data:
+                    avg_value = np.mean(metric_data)
+                else:
+                    avg_value = np.nan
+            else:
+                avg_value = np.nan
+            values.append(avg_value)
+        return jnp.array(values)
+
+    def _compute_functional_ordering(
+        self, chirp_traces: Array, ds_index: Array, os_index: Array
+    ) -> Array:
+        """Order clusters based on functional properties."""
+        # Simple ordering based on ON-OFF index from chirp response
+        on_off_indices = []
+        for trace in chirp_traces:
+            # ON-OFF index: response to light increment vs decrement
+            on_response = jnp.mean(trace[100:150])  # During light ON
+            off_response = jnp.mean(trace[150:200])  # During light OFF
+            on_off_index = on_response - off_response
+            on_off_indices.append(on_off_index)
+
+        # Order from OFF to ON
+        return jnp.argsort(jnp.array(on_off_indices))
+
+    def _generate_cluster_colors(self, n_clusters: int, cluster_order: Array) -> Array:
+        """Generate colors for clusters following OFF (red) to ON (blue) gradient."""
+        colors = []
+        for i in range(n_clusters):
+            # Position in ordering
+            pos = int(jnp.where(cluster_order == i)[0][0])
+            ratio = pos / (n_clusters - 1) if n_clusters > 1 else 0.5
+
+            # Gradient from red (OFF) through yellow-green to blue (ON)
+            if ratio < 0.5:
+                # Red to yellow-green
+                hue = 0.0 + ratio * 0.3  # 0 (red) to 0.3 (yellow-green)
+                saturation = 0.8
+            else:
+                # Yellow-green to blue
+                hue = 0.3 + (ratio - 0.5) * 0.4  # 0.3 to 0.7 (blue)
+                saturation = 0.8
+
+            rgb = colorsys.hsv_to_rgb(hue, saturation, 0.9)
+            colors.append(rgb)
+
+        return jnp.array(colors)
+
+    def _generate_cluster_names(
+        self, chirp_traces: Array, ds_index: Array, os_index: Array
+    ) -> list[str]:
+        """Generate descriptive names for clusters."""
+        names = []
+        for i in range(len(chirp_traces)):
+            # Basic ON/OFF classification
+            trace = chirp_traces[i]
+            on_response = jnp.mean(trace[100:150])
+            off_response = jnp.mean(trace[150:200])
+
+            if off_response > on_response + 0.1:
+                base_name = "OFF"
+            elif on_response > off_response + 0.1:
+                base_name = "ON"
+            else:
+                base_name = "ON-OFF"
+
+            # Add directional selectivity info
+            if not jnp.isnan(ds_index[i]) and ds_index[i] > 0.3:
+                base_name += " DS"
+
+            names.append(f"{base_name} {i}")
+
+        return names
+
+    def _compute_hierarchical_clustering(
+        self, chirp_traces: Array, bar_traces: Array
+    ) -> np.ndarray:
+        """Compute hierarchical clustering based on response similarity."""
+        # Combine features for clustering
+        features = []
+        for i in range(len(chirp_traces)):
+            # Use chirp trace and average bar response
+            chirp_feat = chirp_traces[i]
+            bar_feat = jnp.mean(bar_traces[i], axis=0)  # Average over directions
+            combined = jnp.concatenate([chirp_feat, bar_feat])
+            features.append(combined)
+
+        # Convert to numpy array with float64 dtype
+        features = np.array(features, dtype=np.float64)
+
+        # Compute distance matrix
+        dist_matrix = spdist.pdist(features, metric="euclidean")
+
+        # Hierarchical clustering - ensure float64 dtype
+        linkage = sch.linkage(dist_matrix, method="average")
+
+        return linkage.astype(np.float64)
 
     @override
     def plot(self, artifact: BadenBerens, dataset: ClusteringDataset) -> Figure:
         """Create Baden-Berens style visualization."""
+        n_clusters = len(artifact.cluster_order)
 
-        fig = plt.figure(figsize=(20, 24))
-        gs = GridSpec(60, 12, figure=fig, hspace=0.4, wspace=0.3)
+        # Scale figure height with number of clusters
+        fig_height = max(12, n_clusters * 0.3)  # ~0.3 inches per cluster
+        fig = plt.figure(figsize=(20, fig_height))
 
-        # Create a reordering based on response properties
-        # This is a simplified version - you might want more sophisticated ordering
-        cluster_order = self._order_clusters_by_response(artifact)
-
-        # Left: Response traces
-        ax_chirp = fig.add_subplot(gs[:, 2:4])
-        ax_bar = fig.add_subplot(gs[:, 4:6])
-
-        # Plot responses for each cluster
-        for i, cluster_id in enumerate(cluster_order):
-            y_pos = len(cluster_order) - i - 1
-
-            # Chirp response
-            chirp = artifact.cluster_chirp_responses[cluster_id]
-            ax_chirp.plot(
-                chirp + y_pos * 2, color=self._get_cluster_color(cluster_id, artifact)
-            )
-
-            # Bar response
-            bar = artifact.cluster_bar_responses[cluster_id]
-            ax_bar.plot(
-                bar + y_pos * 2, color=self._get_cluster_color(cluster_id, artifact)
-            )
-
-        ax_chirp.set_title("8Hz Chirp Response")
-        ax_bar.set_title("Bar Response")
-
-        # Right: Response metrics
-        ax_rf = fig.add_subplot(gs[0:20, 8:10])
-        ax_dsi = fig.add_subplot(gs[20:40, 8:10])
-        ax_osi = fig.add_subplot(gs[40:60, 8:10])
-
-        # Plot histograms
-        self._plot_metric_histogram(
-            ax_rf,
-            artifact.cluster_metrics["rf_cdia_um"],
-            "RF Diameter (μm)",
-            cluster_order,
-            artifact,
-        )
-        self._plot_metric_histogram(
-            ax_dsi,
-            artifact.cluster_metrics["bar_ds_index"],
-            "DS Index",
-            cluster_order,
-            artifact,
-        )
-        self._plot_metric_histogram(
-            ax_osi,
-            artifact.cluster_metrics["bar_os_index"],
-            "OS Index",
-            cluster_order,
-            artifact,
+        # Adjust grid to account for variable height
+        gs = GridSpec(
+            n_clusters,
+            4,
+            figure=fig,
+            width_ratios=[0.8, 2.5, 1.5, 1.5],
+            hspace=0.02,
+            wspace=0.15,
         )
 
-        # Add confusion matrix
-        ax_conf = fig.add_subplot(gs[45:60, 0:2])
-        self._plot_confusion_summary(ax_conf, artifact)
+        # A. Dendrogram (spans all rows)
+        ax_dendro = fig.add_subplot(gs[:, 0])
+        self._plot_dendrogram(ax_dendro, artifact)
 
-        plt.suptitle(
-            f"Clustering Analysis (ARI={artifact.ari_score:.3f}, NMI={artifact.nmi_score:.3f})"
+        # B. Response traces (spans all rows)
+        ax_chirp = fig.add_subplot(gs[:, 1])
+        ax_bar = fig.add_subplot(gs[:, 2])
+        self._plot_response_traces(ax_chirp, ax_bar, artifact)
+
+        # C. Response metrics - one subplot per cluster
+        self._plot_cluster_histograms(fig, gs, artifact)  # Pass fig as parameter
+
+        # Overall title
+        fig.suptitle(
+            f"RGC Functional Classification (ARI={artifact.ari_score:.3f}, NMI={artifact.nmi_score:.3f})",
+            fontsize=16,
+            y=0.99,
         )
 
+        # Add panel labels
+        ax_dendro.text(
+            -0.15,
+            1.02,
+            "a",
+            transform=ax_dendro.transAxes,
+            fontsize=20,
+            fontweight="bold",
+        )
+        ax_chirp.text(
+            -0.05,
+            1.02,
+            "b",
+            transform=ax_chirp.transAxes,
+            fontsize=20,
+            fontweight="bold",
+        )
+        # Panel c label will be added to the first histogram
+
+        plt.subplots_adjust(top=0.96)
         return fig
+
+    def _plot_dendrogram(self, ax, artifact: BadenBerens):
+        """Plot hierarchical clustering dendrogram."""
+        # Create dendrogram with colors matching clusters
+        # Ensure linkage matrix is numpy float64
+        linkage_matrix = np.array(artifact.linkage_matrix, dtype=np.float64)
+
+        dendro = sch.dendrogram(
+            linkage_matrix,
+            orientation="left",
+            ax=ax,
+            no_labels=True,
+            color_threshold=0,
+            above_threshold_color="k",
+        )
+
+        # Get the reordered indices
+        leaves = dendro["leaves"]
+
+        # Color the leaf nodes according to cluster colors
+        ax.set_xlabel("Distance")
+        ax.set_title("Hierarchical Clustering")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_visible(False)
+        ax.set_yticks([])
+
+    def _plot_response_traces(self, ax_chirp, ax_bar, artifact: BadenBerens):
+        """Plot chirp and bar response traces with better scaling."""
+        n_clusters = len(artifact.cluster_order)
+
+        # Calculate trace spacing to fill the axes properly
+        trace_height = 1.0 / n_clusters  # Normalized height per trace
+        trace_spacing = 1.0 / n_clusters
+
+        # Normalize traces for display
+        chirp_scale = 0.8 * trace_spacing  # Use 80% of available space
+        bar_scale = 0.8 * trace_spacing
+
+        # Plot chirp responses
+        for i, cluster_idx in enumerate(artifact.cluster_order):
+            cluster_idx = int(cluster_idx)
+            y_position = 1.0 - (i + 0.5) * trace_spacing  # Position from top
+
+            trace = artifact.cluster_chirp_traces[cluster_idx]
+            # Normalize trace to [-1, 1] range
+            trace_norm = (trace - jnp.mean(trace)) / (jnp.std(trace) + 1e-6)
+            trace_scaled = trace_norm * chirp_scale * 0.4 + y_position
+
+            color = tuple(float(c) for c in artifact.cluster_colors[cluster_idx])
+
+            # Create time axis
+            time_points = np.linspace(0, 1, len(trace))
+
+            ax_chirp.plot(time_points, trace_scaled, color=color, linewidth=1)
+            ax_chirp.fill_between(
+                time_points, y_position, trace_scaled, color=color, alpha=0.3
+            )
+
+            # Add cluster label
+            ax_chirp.text(
+                -0.02,
+                y_position,
+                f"{cluster_idx}",
+                ha="right",
+                va="center",
+                fontsize=8,
+                transform=ax_chirp.transData,
+            )
+
+        # Style chirp axis
+        ax_chirp.set_xlim(0, 1)
+        ax_chirp.set_ylim(0, 1)
+        ax_chirp.set_xlabel("Time (normalized)")
+        ax_chirp.set_title("8Hz Chirp Response")
+        ax_chirp.spines["top"].set_visible(False)
+        ax_chirp.spines["right"].set_visible(False)
+        ax_chirp.set_yticks([])
+
+        # Plot bar responses
+        for i, cluster_idx in enumerate(artifact.cluster_order):
+            cluster_idx = int(cluster_idx)
+            y_position = 1.0 - (i + 0.5) * trace_spacing
+
+            trace = jnp.mean(artifact.cluster_bar_traces[cluster_idx], axis=0)
+            # Normalize trace
+            trace_norm = (trace - jnp.mean(trace)) / (jnp.std(trace) + 1e-6)
+            trace_scaled = trace_norm * bar_scale * 0.4 + y_position
+
+            color = tuple(float(c) for c in artifact.cluster_colors[cluster_idx])
+
+            time_points = np.linspace(0, 1, len(trace))
+
+            ax_bar.plot(time_points, trace_scaled, color=color, linewidth=1)
+            ax_bar.fill_between(
+                time_points, y_position, trace_scaled, color=color, alpha=0.3
+            )
+
+        # Style bar axis
+        ax_bar.set_xlim(0, 1)
+        ax_bar.set_ylim(0, 1)
+        ax_bar.set_xlabel("Time (normalized)")
+        ax_bar.set_title("Moving Bar Response")
+        ax_bar.spines["top"].set_visible(False)
+        ax_bar.spines["right"].set_visible(False)
+        ax_bar.set_yticks([])
+
+    def _plot_cluster_histograms(self, fig, gs, artifact: BadenBerens):
+        """Plot individual histograms for each cluster's metrics."""
+        from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+
+        metrics_info = [
+            ("rf_cdia_um", "RF Diameter (μm)", (0, 400)),
+            ("bar_ds_index", "DS Index", (0, 1)),
+            ("bar_os_index", "OS Index", (0, 1)),
+        ]
+
+        # Get overall distributions for background
+        all_rf = []
+        all_ds = []
+        all_os = []
+
+        # Convert assignments to numpy for indexing
+        assignments_np = np.array(artifact.cluster_assignments)
+
+        for idx in range(len(assignments_np)):
+            if idx < len(self.raw_df):
+                if not pd.isna(self.raw_df["rf_cdia_um"].iloc[idx]):
+                    all_rf.append(self.raw_df["rf_cdia_um"].iloc[idx])
+                if not pd.isna(self.raw_df["bar_ds_index"].iloc[idx]):
+                    all_ds.append(self.raw_df["bar_ds_index"].iloc[idx])
+                if not pd.isna(self.raw_df["bar_os_index"].iloc[idx]):
+                    all_os.append(self.raw_df["bar_os_index"].iloc[idx])
+
+        all_distributions = [all_rf, all_ds, all_os]
+
+        # Create histograms for each cluster
+        for i, cluster_idx in enumerate(artifact.cluster_order):
+            cluster_idx = int(cluster_idx)
+            color = tuple(float(c) for c in artifact.cluster_colors[cluster_idx])
+
+            # Get cells in this cluster
+            cluster_mask = assignments_np == cluster_idx
+            cluster_indices = np.where(cluster_mask)[0]
+
+            # Create ONE subplot per cluster that spans the entire cell
+            ax = fig.add_subplot(gs[i, 3])
+
+            # Create three inset axes HORIZONTALLY arranged
+            n_metrics = len(metrics_info)
+            inset_width = 0.28  # Width of each histogram (leave space between)
+            inset_height = 0.8  # Height of histograms
+            inset_spacing = 0.04  # Space between histograms
+
+            for j, (metric_name, label, xlim) in enumerate(metrics_info):
+                # Position histograms horizontally
+                inset_left = j * (inset_width + inset_spacing) + 0.02
+
+                # Create inset axes
+                ax_inset = inset_axes(
+                    ax,
+                    width=f"{inset_width * 100}%",
+                    height=f"{inset_height * 100}%",
+                    loc="center left",
+                    bbox_to_anchor=(inset_left, 0.1, inset_width, inset_height),
+                    bbox_transform=ax.transAxes,
+                    borderpad=0,
+                )
+
+                # Get cluster-specific data
+                cluster_data = []
+                for idx in cluster_indices:
+                    if idx < len(self.raw_df) and not pd.isna(
+                        self.raw_df[metric_name].iloc[idx]
+                    ):
+                        cluster_data.append(self.raw_df[metric_name].iloc[idx])
+
+                if cluster_data and all_distributions[j]:
+                    # Plot background distribution in gray
+                    bins = np.linspace(
+                        xlim[0], xlim[1], 15
+                    )  # Fewer bins for smaller plots
+
+                    # Background histogram
+                    n_bg, _, _ = ax_inset.hist(
+                        all_distributions[j],
+                        bins=bins,
+                        density=True,
+                        alpha=0.3,
+                        color="gray",
+                        edgecolor="none",
+                    )
+
+                    # Cluster histogram
+                    n_cl, _, _ = ax_inset.hist(
+                        cluster_data,
+                        bins=bins,
+                        density=True,
+                        alpha=0.8,
+                        color=color,
+                        edgecolor="none",
+                    )
+
+                    # Set y limit based on maximum values
+                    max_y = (
+                        max(
+                            np.max(n_bg) if len(n_bg) > 0 else 0,
+                            np.max(n_cl) if len(n_cl) > 0 else 0,
+                        )
+                        * 1.1
+                    )
+                    ax_inset.set_ylim(0, max_y)
+
+                # Style the inset
+                ax_inset.set_xlim(xlim)
+                ax_inset.spines["top"].set_visible(False)
+                ax_inset.spines["right"].set_visible(False)
+
+                # Minimize visual clutter
+                if j == 0:  # RF diameter
+                    ax_inset.set_xticks([0, 400])
+                    ax_inset.set_xticklabels(["0", "400"], fontsize=5)
+                else:  # DS/OS indices
+                    ax_inset.set_xticks([0, 1])
+                    ax_inset.set_xticklabels(["0", "1"], fontsize=5)
+
+                ax_inset.set_yticks([])
+
+                # Only show labels on bottom row
+                if i == len(artifact.cluster_order) - 1:
+                    ax_inset.set_xlabel(label.split()[0], fontsize=6)  # Just first word
+
+                # Add panel label to first cluster, first metric
+                if i == 0 and j == 0:
+                    ax_inset.text(
+                        -0.5,
+                        1.2,
+                        "c",
+                        transform=ax_inset.transAxes,
+                        fontsize=20,
+                        fontweight="bold",
+                    )
+
+            # Turn off the main axes frame
+            ax.axis("off")
+
+    def _extract_cluster_metric(
+        self, assignments: Array, n_clusters: int, metric_name: str
+    ) -> Array:
+        """Extract average metric value for each cluster."""
+        values = []
+        # Convert assignments to numpy for indexing
+        assignments_np = np.array(assignments)
+
+        # Store both mean and all values for histogram plotting
+        for i in range(n_clusters):
+            mask = assignments_np == i
+            if np.sum(mask) > 0:
+                cluster_indices = np.where(mask)[0]
+                metric_data = []
+                for idx in cluster_indices:
+                    if idx < len(self.raw_df) and not pd.isna(
+                        self.raw_df[metric_name].iloc[idx]
+                    ):
+                        metric_data.append(self.raw_df[metric_name].iloc[idx])
+
+                if metric_data:
+                    avg_value = np.mean(metric_data)
+                else:
+                    avg_value = np.nan
+            else:
+                avg_value = np.nan
+            values.append(avg_value)
+
+        return jnp.array(values)
+
+    def _plot_response_metrics(self, ax_rf, ax_dsi, ax_osi, artifact: BadenBerens):
+        """Plot histograms of response metrics."""
+        metrics = [
+            (ax_rf, artifact.cluster_rf_diameter, "RF Diameter (μm)", (0, 400)),
+            (ax_dsi, artifact.cluster_ds_index, "DS Index", (0, 1)),
+            (ax_osi, artifact.cluster_os_index, "OS Index", (0, 1)),
+        ]
+
+        for ax, values, title, xlim in metrics:
+            # Create histogram for each cluster
+            valid_mask = ~jnp.isnan(values)
+
+            if jnp.sum(valid_mask) > 0:
+                for i, cluster_idx in enumerate(artifact.cluster_order):
+                    cluster_idx = int(cluster_idx)
+                    if valid_mask[cluster_idx]:
+                        ax.bar(
+                            i,  # Use position in ordering, not cluster index
+                            values[cluster_idx],
+                            color=tuple(
+                                float(c) for c in artifact.cluster_colors[cluster_idx]
+                            ),  # Convert to floats
+                            width=0.8,
+                        )
+
+            ax.set_xlim(-1, len(values))
+            ax.set_ylim(xlim)
+            ax.set_xlabel("Cluster")
+            ax.set_ylabel(title)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
 
     @override
     def metrics(self, artifact: BadenBerens) -> MetricDict:
-        """Return comparison metrics."""
+        """Return quality metrics."""
         return {
-            "Comparison/ARI Score": (jnp.array(0), jnp.array(artifact.ari_score)),
-            "Comparison/NMI Score": (jnp.array(0), jnp.array(artifact.nmi_score)),
-            "Comparison/Mean Cluster Size": (
+            "BadenBerens/ARI Score": (jnp.array(0), jnp.array(artifact.ari_score)),
+            "BadenBerens/NMI Score": (jnp.array(0), jnp.array(artifact.nmi_score)),
+            "BadenBerens/Mean Cluster Size": (
                 jnp.array(0),
                 jnp.mean(artifact.cluster_sizes),
             ),
+            "BadenBerens/Active Clusters": (
+                jnp.array(0),
+                jnp.sum(artifact.cluster_sizes > 0),
+            ),
         }
-
-    def _order_clusters_by_response(self, artifact: BadenBerens) -> list[int]:
-        """Order clusters by response properties for visualization."""
-        # Simple ordering by ON/OFF index - you can make this more sophisticated
-        on_off_indices = []
-        for i in range(len(artifact.cluster_chirp_responses)):
-            chirp = artifact.cluster_chirp_responses[i]
-            # Simple ON/OFF calculation based on response polarity
-            on_off_index = np.mean(chirp[100:150]) - np.mean(chirp[50:100])
-            on_off_indices.append(on_off_index)
-
-        # Sort from OFF (negative) to ON (positive)
-        return list(np.argsort(on_off_indices))
-
-    def _get_cluster_color(self, cluster_id: int, artifact: BadenBerens) -> str:
-        """Assign color based on cluster properties."""
-        # This is a simplified version - you might want to base this on
-        # dominant cell type or response properties
-        chirp = artifact.cluster_chirp_responses[cluster_id]
-        on_off_index = np.mean(chirp[100:150]) - np.mean(chirp[50:100])
-
-        if on_off_index < -0.5:
-            return "red"  # OFF
-        if on_off_index > 0.5:
-            return "blue"  # ON
-        return "green"  # ON-OFF
-
-    def _plot_metric_histogram(
-        self,
-        ax,
-        values: Array,
-        title: str,
-        cluster_order: list[int],
-        artifact: BadenBerens,
-    ):
-        """Plot histogram of metric values colored by cluster."""
-        # Implementation for metric histograms
-        pass
-
-    def _plot_confusion_summary(self, ax, artifact: BadenBerens):
-        """Plot confusion matrix summary."""
-        # Normalize by columns (cell types)
-        confusion_norm = artifact.confusion_matrix / np.sum(
-            artifact.confusion_matrix, axis=0
-        )
-
-        # Show top clusters for each cell type
-        sns.heatmap(
-            confusion_norm, ax=ax, cmap="YlOrRd", cbar_kws={"label": "Fraction"}
-        )
-        ax.set_xlabel("Cell Type")
-        ax.set_ylabel("Cluster")

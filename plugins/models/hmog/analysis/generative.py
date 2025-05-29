@@ -20,7 +20,7 @@ from apps.plugins import (
     Analysis,
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact
+from apps.runtime.handler import Artifact, RunHandler
 
 from ..base import HMoG
 
@@ -124,10 +124,12 @@ class GenerativeExamplesAnalysis(Analysis[ClusteringDataset, HMoG, GenerativeExa
     @override
     def generate(
         self,
-        model: HMoG,
-        params: Array,
-        dataset: ClusteringDataset,
         key: Array,
+        handler: RunHandler,
+        dataset: ClusteringDataset,
+        model: HMoG,
+        epoch: int,
+        params: Array,
     ) -> GenerativeExamples:
         """Generate collection of clusters with their members."""
         # Convert array to typed point for the model

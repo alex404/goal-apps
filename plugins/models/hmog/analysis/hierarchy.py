@@ -24,7 +24,7 @@ from apps.plugins import (
     Analysis,
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact
+from apps.runtime.handler import Artifact, RunHandler
 
 from ..base import HMoG
 from .base import cluster_probabilities, get_component_prototypes, symmetric_kl_matrix
@@ -121,7 +121,7 @@ class CoAssignmentClusterHierarchy(ClusterHierarchy):
     """Co-assignment probability-based clustering hierarchy."""
 
 
-def get_cluster_hierarchy[M: HMoG, C: ClusterHierarchy](
+def generate_cluster_hierarchy[M: HMoG, C: ClusterHierarchy](
     model: M,
     params: Point[Natural, M],
     hierarchy_type: type[C],
@@ -288,13 +288,15 @@ class HierarchyAnalysis[T: ClusterHierarchy](Analysis[ClusteringDataset, HMoG, T
     @override
     def generate(
         self,
-        model: HMoG,
-        params: Array,
+        key: Array,
+        handler: RunHandler,
         dataset: ClusteringDataset,
-        key: Array | None = None,
+        model: HMoG,
+        epoch: int,
+        params: Array,
     ) -> T:
         typed_params = model.natural_point(params)
-        return get_cluster_hierarchy(
+        return generate_cluster_hierarchy(
             model, typed_params, self.artifact_type, dataset.train_data
         )
 

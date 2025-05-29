@@ -100,10 +100,12 @@ class Analysis[D: Dataset, M, T: Artifact](ABC):
     @abstractmethod
     def generate(
         self,
-        model: M,
-        params: Array,
-        dataset: D,
         key: Array,
+        handler: RunHandler,
+        dataset: D,
+        model: M,
+        epoch: int,
+        params: Array,
     ) -> T:
         """Generate the analysis artifact from model parameters."""
 
@@ -122,17 +124,17 @@ class Analysis[D: Dataset, M, T: Artifact](ABC):
 
     def process(
         self,
+        key: Array,
         handler: RunHandler,
         dataset: D,
-        logger: JaxLogger,
         model: M,
+        logger: JaxLogger,
         epoch: int,
-        key: Array,
         params: Array | None = None,
     ) -> None:
         """Process the analysis: generate or load artifact, then visualize and log."""
         if params is not None:
-            artifact = self.generate(model, params, dataset, key)
+            artifact = self.generate(key, handler, dataset, model, epoch, params)
         else:
             artifact = handler.load_artifact(epoch, self.artifact_type)
 
@@ -215,6 +217,14 @@ class ClusteringExperiment(Experiment[ClusteringDataset], ABC):
         """Assign data points to clusters."""
 
     @abstractmethod
+    def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> Array:
+        """Get prototype/centroid for each cluster.
+
+        Returns:
+            Array of shape (n_clusters, data_dim) containing cluster prototypes
+        """
+
+    @abstractmethod
     @override
     def train(
         self,
@@ -224,3 +234,15 @@ class ClusteringExperiment(Experiment[ClusteringDataset], ABC):
         logger: JaxLogger,
     ) -> None:
         """Evaluate model on dataset."""
+
+
+class HierarchicalClusteringExperiment(ClusteringExperiment, ABC):
+    """Clustering experiment that supports hierarchical analysis."""
+
+    @abstractmethod
+    def get_cluster_hierarchy(self, handler: RunHandler, epoch: int) -> Array:
+        """Get hierarchical clustering of clusters.
+
+        Returns:
+            linkage_matrix: Scipy-compatible linkage matrix
+        """

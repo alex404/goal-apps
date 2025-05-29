@@ -23,7 +23,7 @@ from apps.plugins import (
     Analysis,
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact, MetricDict
+from apps.runtime.handler import Artifact, MetricDict, RunHandler
 
 from ..base import HMoG
 from .base import (
@@ -35,7 +35,6 @@ from .base import (
 from .hierarchy import (
     CoAssignmentClusterHierarchy,
     KLClusterHierarchy,
-    get_cluster_hierarchy,
 )
 
 ### Analyses ###
@@ -200,10 +199,12 @@ class OptimalMergeResults(MergeResults):
     """Optimal assignment merge results."""
 
 
-def get_merge_results[M: HMoG, MR: MergeResults](
-    model: M,
-    params: Point[Natural, M],
+def generate_merge_results[M: HMoG, MR: MergeResults](
+    handler: RunHandler,
     dataset: ClusteringDataset,
+    model: M,
+    epoch: int,
+    params: Point[Natural, M],
     merge_type: type[MR],
     filter_empty_clusters: bool = True,
     min_cluster_size: float = 0.0005,
@@ -248,9 +249,7 @@ def get_merge_results[M: HMoG, MR: MergeResults](
     # Determine similarity type and compute mapping for valid clusters only
     if merge_type == KLMergeResults:
         # Get the KL-based hierarchy
-        kl_hierarchy = get_cluster_hierarchy(
-            model, params, KLClusterHierarchy, dataset.train_data
-        )
+        kl_hierarchy = handler.load_artifact(epoch, KLClusterHierarchy)
         full_sim_matrix = np.array(kl_hierarchy.similarity_matrix)
 
         # Extract submatrix for valid clusters
@@ -284,9 +283,7 @@ def get_merge_results[M: HMoG, MR: MergeResults](
 
     elif merge_type == CoAssignmentMergeResults:
         # Get the co-assignment hierarchy
-        coassign_hierarchy = get_cluster_hierarchy(
-            model, params, CoAssignmentClusterHierarchy, dataset.train_data
-        )
+        coassign_hierarchy = handler.load_artifact(epoch, CoAssignmentClusterHierarchy)
         full_sim_matrix = np.array(coassign_hierarchy.similarity_matrix)
 
         # Extract submatrix for valid clusters
@@ -449,16 +446,20 @@ class MergeAnalysis[T: MergeResults](Analysis[ClusteringDataset, HMoG, T], ABC):
     @override
     def generate(
         self,
-        model: HMoG,
-        params: Array,
+        key: Array,
+        handler: RunHandler,
         dataset: ClusteringDataset,
-        key: Array | None = None,
+        model: HMoG,
+        epoch: int,
+        params: Array,
     ) -> T:
         typed_params = model.natural_point(params)
-        return get_merge_results(
-            model,
-            typed_params,
+        return generate_merge_results(
+            handler,
             dataset,
+            model,
+            epoch,
+            typed_params,
             self.artifact_type,
             self.filter_empty_clusters,
             self.min_cluster_size,

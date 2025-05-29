@@ -31,6 +31,18 @@ from .base import (
     clustering_nmi,
     update_stats,
 )
+from .clusters import ClusterStatisticsAnalysis
+from .generative import GenerativeExamplesAnalysis
+from .hierarchy import (
+    CoAssignmentHierarchyAnalysis,
+    KLHierarchyAnalysis,
+)
+from .loadings import LoadingMatrixAnalysis
+from .merge import (
+    CoAssignmentMergeAnalysis,
+    KLMergeAnalysis,
+    OptimalMergeAnalysis,
+)
 
 # Start logger
 log = logging.getLogger(__name__)
@@ -410,31 +422,31 @@ def log_artifacts[M: HMoG](
     # Convert params to array if provided
     params_array = params.array if params is not None else None
 
-    # analyses = [
-    #     ClusterStatisticsAnalysis(),
-    #     KLHierarchyAnalysis(),
-    #     CoAssignmentHierarchyAnalysis(),
-    #     GenerativeExamplesAnalysis(n_samples=1000),
-    #     LoadingMatrixAnalysis(),
-    # ]
-    #
-    # for analysis in analyses:
-    #     analysis.process(handler, dataset, logger, model, epoch, key, params_array)
-    #
-    # # Conditional analyses for labeled datasets
-    # if dataset.has_labels:
-    #     merge_analyses = [
-    #         KLMergeAnalysis(True, 0.0005),
-    #         CoAssignmentMergeAnalysis(True, 0.0005),
-    #         OptimalMergeAnalysis(True, 0.0005),
-    #     ]
-    #
-    #     for analysis in merge_analyses:
-    #         analysis.process(handler, dataset, logger, model, epoch, key, params_array)
-    #
+    analyses = [
+        ClusterStatisticsAnalysis(),
+        KLHierarchyAnalysis(),
+        CoAssignmentHierarchyAnalysis(),
+        GenerativeExamplesAnalysis(n_samples=1000),
+        LoadingMatrixAnalysis(),
+    ]
+
+    for analysis in analyses:
+        analysis.process(key, handler, dataset, model, logger, epoch, params_array)
+
+    # Conditional analyses for labeled datasets
+    if dataset.has_labels:
+        merge_analyses = [
+            KLMergeAnalysis(True, 0.0005),
+            CoAssignmentMergeAnalysis(True, 0.0005),
+            OptimalMergeAnalysis(True, 0.0005),
+        ]
+
+        for analysis in merge_analyses:
+            analysis.process(key, handler, dataset, model, logger, epoch, params_array)
+
     # Dataset-specific analyses
     specialized_analyses = dataset.get_dataset_analyses()
     for name, analysis in specialized_analyses.items():
         # For dataset-specific analyses, we might need to pass cluster assignments
         # This would be handled through the dataset's interface
-        analysis.process(handler, dataset, logger, experiment, epoch, key, params_array)
+        analysis.process(key, handler, dataset, experiment, logger, epoch, params_array)

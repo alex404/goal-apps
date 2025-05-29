@@ -7,6 +7,7 @@ from abc import ABC
 from typing import override
 
 import jax
+import jax.numpy as jnp
 import optax
 from goal.geometry import (
     Diagonal,
@@ -21,12 +22,14 @@ from jax import Array
 
 from apps.plugins import (
     ClusteringDataset,
-    ClusteringExperiment,
+    HierarchicalClusteringExperiment,
 )
 from apps.runtime.handler import RunHandler
 from apps.runtime.logger import JaxLogger
 
 from .analysis.base import cluster_assignments as hmog_cluster_assignments
+from .analysis.clusters import ClusterStatistics
+from .analysis.hierarchy import CoAssignmentClusterHierarchy
 from .analysis.logging import AnalysisArgs, log_artifacts
 from .trainers import (
     FullGradientTrainer,
@@ -43,7 +46,7 @@ log = logging.getLogger(__name__)
 ### HMog Experiment ###
 
 
-class HMoGExperiment(ClusteringExperiment, ABC):
+class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
     """Experiment framework for HMoGs."""
 
     # Training configuration
@@ -334,3 +337,16 @@ class HMoGExperiment(ClusteringExperiment, ABC):
             log_artifacts(handler, dataset, logger, self, self.model, epoch, params)
 
             log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")
+
+    @override
+    def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> Array:
+        """Get cluster prototypes by loading from ClusterStatistics artifact."""
+        # First try to load from file
+        stats = handler.load_artifact(epoch, ClusterStatistics)
+        return jnp.stack(stats.prototypes)
+
+    @override
+    def get_cluster_hierarchy(self, handler: RunHandler, epoch: int) -> Array:
+        """Get co-assignment based hierarchy by loading from artifact."""
+        hierarchy = handler.load_artifact(epoch, CoAssignmentClusterHierarchy)
+        return jnp.array(hierarchy.linkage_matrix)

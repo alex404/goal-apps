@@ -21,10 +21,13 @@ from apps.plugins import (
     Analysis,
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact
+from apps.runtime.handler import Artifact, RunHandler
 
 from ..base import HMoG
 from .base import cluster_assignments, get_component_prototypes
+
+### Helpers ###
+
 
 ### Cluster Statistics ###
 
@@ -46,11 +49,17 @@ class ClusterStatistics(Artifact):
 
         # Save each prototype
         for i, proto in enumerate(self.prototypes):
-            proto_group.create_dataset(f"{i}", data=np.array(proto))
+            proto_group.create_dataset(
+                f"{i}", data=np.array(proto, dtype=np.float32), compression="gzip"
+            )
 
         # Save each member array
         for i, member_array in enumerate(self.members):
-            members_group.create_dataset(f"{i}", data=np.array(member_array))
+            members_group.create_dataset(
+                f"{i}",
+                data=np.array(member_array, dtype=np.float32),
+                compression="gzip",
+            )
 
     @classmethod
     @override
@@ -73,7 +82,7 @@ class ClusterStatistics(Artifact):
         return cls(prototypes=prototypes, members=members)
 
 
-def get_cluster_statistics[
+def generate_cluster_statistics[
     M: HMoG,
 ](
     model: M,
@@ -93,8 +102,6 @@ def get_cluster_statistics[
         # Get members for this cluster
         cluster_mask = assignments == i
         members = train_data[cluster_mask]
-
-        # Limit number of members if needed
         cluster_members.append(members)
 
     return ClusterStatistics(
@@ -154,15 +161,17 @@ class ClusterStatisticsAnalysis(Analysis[ClusteringDataset, HMoG, ClusterStatist
     @override
     def generate(
         self,
-        model: HMoG,
-        params: Array,
+        key: Array,
+        handler: RunHandler,
         dataset: ClusteringDataset,
-        key: Array | None = None,
+        model: HMoG,
+        epoch: int,
+        params: Array,
     ) -> ClusterStatistics:
         """Generate collection of clusters with their members."""
         # Convert array to typed point for the model
         typed_params = model.natural_point(params)
-        return get_cluster_statistics(model, dataset, typed_params)
+        return generate_cluster_statistics(model, dataset, typed_params)
 
     @override
     def plot(self, artifact: ClusterStatistics, dataset: ClusteringDataset) -> Figure:
