@@ -15,13 +15,11 @@ from goal.geometry import (
 )
 from jax import Array
 
-from apps.configs import STATS_NUM
-from apps.plugins import (
+from apps.interface import (
     ClusteringDataset,
     ClusteringExperiment,
 )
-from apps.runtime.handler import MetricDict, RunHandler
-from apps.runtime.logger import JaxLogger
+from apps.runtime import STATS_NUM, JaxLogger, MetricDict, RunHandler
 
 from ..base import LGM, HMoG
 from .base import (
@@ -430,8 +428,8 @@ def log_artifacts[M: HMoG](
         LoadingMatrixAnalysis(),
     ]
 
-    # for analysis in analyses:
-    #     analysis.process(key, handler, dataset, model, logger, epoch, params_array)
+    for analysis in analyses:
+        analysis.process(key, handler, dataset, model, logger, epoch, params_array)
 
     # Conditional analyses for labeled datasets
     if dataset.has_labels:
@@ -441,8 +439,8 @@ def log_artifacts[M: HMoG](
             OptimalMergeAnalysis(True, 0.0005),
         ]
 
-        # for analysis in merge_analyses:
-        #     analysis.process(key, handler, dataset, model, logger, epoch, params_array)
+        for analysis in merge_analyses:
+            analysis.process(key, handler, dataset, model, logger, epoch, params_array)
 
     # Dataset-specific analyses
     specialized_analyses = dataset.get_dataset_analyses()

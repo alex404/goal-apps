@@ -20,12 +20,11 @@ from goal.models import (
 )
 from jax import Array
 
-from apps.plugins import (
+from apps.interface import (
     ClusteringDataset,
     HierarchicalClusteringExperiment,
 )
-from apps.runtime.handler import RunHandler
-from apps.runtime.logger import JaxLogger
+from apps.runtime import JaxLogger, RunHandler
 
 from .analysis.base import cluster_assignments as hmog_cluster_assignments
 from .analysis.clusters import ClusterStatistics

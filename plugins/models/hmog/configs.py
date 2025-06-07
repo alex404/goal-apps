@@ -8,7 +8,7 @@ from typing import Any
 from hydra.core.config_store import ConfigStore
 from omegaconf import MISSING
 
-from apps.configs import ClusteringExperimentConfig
+from apps.interface import ClusteringExperimentConfig
 
 ### Gradient Trainer Configs ###
 

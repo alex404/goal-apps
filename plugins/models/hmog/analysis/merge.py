@@ -19,11 +19,11 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from numpy.typing import NDArray
 
-from apps.plugins import (
+from apps.interface import (
     Analysis,
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact, MetricDict, RunHandler
+from apps.runtime import Artifact, MetricDict, RunHandler
 
 from ..base import HMoG
 from .base import (

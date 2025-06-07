@@ -15,8 +15,8 @@ from plugins import register_plugins
 from rich import print as rprint
 from rich.table import Table
 
-from .configs import ClusteringRunConfig
-from .runtime.initialize import initialize_run
+from .config import ClusteringRunConfig
+from .initialize import initialize_run
 from .util import (
     create_sweep_config,
     format_config_table,

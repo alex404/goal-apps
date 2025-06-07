@@ -16,11 +16,10 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
 
-from ..configs import LogLevel, RunConfig
-from ..plugins import Dataset, Experiment
-from ..util import print_config_tree
-from .handler import RunHandler
-from .logger import JaxLogger
+from ..interface import Dataset, Experiment
+from ..runtime import JaxLogger, LogLevel, RunHandler
+from .config import RunConfig
+from .util import print_config_tree
 
 ### Python Logging ###
 
@@ -135,16 +134,22 @@ def initialize_run(
     ):
         cfg = hydra.compose(config_name="config", overrides=overrides)
 
+    # Initialize run handler
+    handler = RunHandler(name=cfg.run_name, project_root=proot)
+
+    saved_config_path = handler.run_dir / "config.yaml"
+
+    if saved_config_path.exists():
+        OmegaConf.load(saved_config_path)
+        override_config = OmegaConf.from_dotlist(overrides)
+        cfg = OmegaConf.merge(cfg, override_config)
+
+    OmegaConf.save(cfg, saved_config_path)
+
     print_config_tree(OmegaConf.to_container(cfg, resolve=True))
 
     # Initialize JAX
     setup_jax(device=cfg.device, disable_jit=not cfg.jit)
-
-    # Initialize run handler
-    handler = RunHandler(name=cfg.run_name, project_root=proot)
-
-    # Save config to run directory
-    OmegaConf.save(cfg, handler.run_dir / "config.yaml")
 
     setup_matplotlib_style()
 

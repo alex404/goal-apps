@@ -21,9 +21,13 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
-from apps.configs import ClusteringDatasetConfig
-from apps.plugins import Analysis, ClusteringDataset, HierarchicalClusteringExperiment
-from apps.runtime.handler import Artifact, MetricDict, RunHandler
+from apps.interface import (
+    Analysis,
+    ClusteringDataset,
+    ClusteringDatasetConfig,
+    HierarchicalClusteringExperiment,
+)
+from apps.runtime import Artifact, MetricDict, RunHandler
 
 
 @dataclass

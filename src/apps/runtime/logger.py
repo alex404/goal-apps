@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,6 +22,21 @@ from .handler import Artifact, MetricDict, MetricHistory, RunHandler
 ## Preamble ###
 
 log = logging.getLogger(__name__)
+
+
+# Define a custom level
+STATS_NUM = 15  # Between INFO (20) and DEBUG (10)
+logging.addLevelName(STATS_NUM, "STATS")
+
+
+class LogLevel(Enum):
+    DEBUG = logging.DEBUG
+    INFO = logging.INFO
+    STATS = STATS_NUM
+    WARNING = logging.WARNING
+    ERROR = logging.ERROR
+    CRITICAL = logging.CRITICAL
+
 
 ### Helpers ###
 

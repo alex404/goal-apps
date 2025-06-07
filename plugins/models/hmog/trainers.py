@@ -25,12 +25,10 @@ from goal.models import (
 )
 from jax import Array
 
-from apps.configs import STATS_NUM
-from apps.plugins import (
+from apps.interface import (
     ClusteringDataset,
 )
-from apps.runtime.handler import MetricDict, RunHandler
-from apps.runtime.logger import JaxLogger
+from apps.runtime import STATS_NUM, JaxLogger, MetricDict, RunHandler
 
 from .analysis.logging import log_epoch_metrics, pre_log_epoch_metrics
 from .base import LGM, HMoG, Mixture, fori

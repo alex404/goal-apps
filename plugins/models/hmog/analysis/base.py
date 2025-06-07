@@ -17,8 +17,7 @@ from goal.models import (
 )
 from jax import Array
 
-from apps.configs import STATS_NUM
-from apps.runtime.handler import MetricDict
+from apps.runtime import STATS_NUM, MetricDict
 
 from ..base import HMoG
 

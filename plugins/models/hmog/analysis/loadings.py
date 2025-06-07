@@ -18,11 +18,11 @@ from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 
-from apps.plugins import (
+from apps.interface import (
     Analysis,
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact, RunHandler
+from apps.runtime import Artifact, RunHandler
 
 from ..base import HMoG
 

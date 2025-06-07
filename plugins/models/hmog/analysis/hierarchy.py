@@ -21,11 +21,11 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from numpy.typing import NDArray
 
-from apps.plugins import (
+from apps.interface import (
     Analysis,
     ClusteringDataset,
 )
-from apps.runtime.handler import Artifact, RunHandler
+from apps.runtime import Artifact, RunHandler
 
 from ..base import HMoG
 from .base import cluster_probabilities, get_component_prototypes, symmetric_kl_matrix

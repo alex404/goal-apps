@@ -1,7 +1,6 @@
 ### Imports ###
 
 import logging
-import re
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
@@ -11,16 +10,6 @@ from rich.table import Table
 from rich.tree import Tree
 
 log = logging.getLogger(__name__)
-
-### Really Util ###
-
-
-def to_snake_case(name: str) -> str:
-    """Convert CamelCase to snake_case."""
-    name = re.sub("([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
-    name = re.sub("([a-z])([A-Z])", r"\1_\2", name)
-    return name.lower()
-
 
 ### Sweep Management ###
 

@@ -15,8 +15,7 @@ from matplotlib.figure import Figure
 from numpy.typing import NDArray
 from torchvision import datasets, transforms
 
-from apps.configs import ClusteringDatasetConfig
-from apps.plugins import ClusteringDataset
+from apps.interface import ClusteringDataset, ClusteringDatasetConfig
 
 N_ROWS = 28
 N_COLS = 28

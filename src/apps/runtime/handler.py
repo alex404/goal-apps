@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,10 +16,18 @@ from jax import Array
 from jax import numpy as jnp
 from matplotlib.figure import Figure
 
-from ..util import to_snake_case
-
 type MetricDict = dict[str, tuple[Array, Array]]  # Single snapshot
 type MetricHistory = dict[str, list[tuple[int, float]]]  # Time series
+
+### Util ###
+
+
+def to_snake_case(name: str) -> str:
+    """Convert CamelCase to snake_case."""
+    name = re.sub("([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
+    name = re.sub("([a-z])([A-Z])", r"\1_\2", name)
+    return name.lower()
+
 
 ### Artifacts ###
 

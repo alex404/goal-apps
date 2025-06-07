@@ -14,8 +14,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from torchvision import datasets, transforms
 
-from apps.configs import ClusteringDatasetConfig
-from apps.plugins import ClusteringDataset
+from apps.interface import ClusteringDataset, ClusteringDatasetConfig
 
 # SVHN is 32x32 RGB images
 N_ROWS = 32

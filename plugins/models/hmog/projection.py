@@ -21,12 +21,11 @@ from goal.geometry import (
 from goal.models import AnalyticMixture, FactorAnalysis, Normal, analytic_hmog
 from jax import Array
 
-from apps.plugins import (
+from apps.interface import (
     ClusteringDataset,
     ClusteringExperiment,
 )
-from apps.runtime.handler import RunHandler
-from apps.runtime.logger import JaxLogger
+from apps.runtime import JaxLogger, RunHandler
 
 from .analysis.logging import AnalysisArgs, log_artifacts, log_epoch_metrics
 from .base import HMoG, Mixture, fori
