@@ -23,6 +23,9 @@ class RunConfig:
     project: str
     group: str | None
     job_type: str | None
+    sweep_id: str | None = None
+    from_epoch: int = 0
+    from_scratch: bool = False
 
 
 defaults: list[Any] = [
@@ -35,6 +38,6 @@ defaults: list[Any] = [
 class ClusteringRunConfig(RunConfig):
     """Base configuration for clustering simulations."""
 
-    dataset: ClusteringDatasetConfig
-    model: ClusteringExperimentConfig
+    dataset: ClusteringDatasetConfig = MISSING
+    model: ClusteringExperimentConfig = MISSING
     defaults: list[Any] = field(default_factory=lambda: defaults)
