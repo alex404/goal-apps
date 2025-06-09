@@ -427,7 +427,6 @@ def merge_results_plotter(
         title += f"Using {len(results.valid_clusters)}/{n_clusters} valid clusters"
 
         fig.suptitle(title, fontsize=14)
-        plt.tight_layout()
         return fig
 
     return plot_merge_results

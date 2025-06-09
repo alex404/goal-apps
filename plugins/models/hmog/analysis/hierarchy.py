@@ -270,8 +270,6 @@ def hierarchy_plotter(
         for i, leaf_idx in enumerate(leaf_order):
             prototype_ax = fig.add_subplot(gs[i, 1])
             dataset.paint_observable(hierarchy.prototypes[leaf_idx], prototype_ax)
-
-        plt.tight_layout(rect=[0, 0, 1, 0.95])  # pyright: ignore[reportArgumentType]
         return fig
 
     return plot_cluster_hierarchy
