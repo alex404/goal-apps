@@ -1,12 +1,14 @@
 """Shared utilities for GOAL examples."""
 
 import logging
+import os
 import sys
 import traceback
 from pathlib import Path
 from types import TracebackType
 
 import hydra
+import hydra_zen
 import jax
 import matplotlib.pyplot as plt
 from hydra.core.config_store import ConfigStore
@@ -41,6 +43,11 @@ THEME = Theme(
 )
 
 ### Initialization Helpers ###
+
+
+def filter_group_defaults(config_dir: str, overrides: list[str]):
+    groups = {d.name for d in Path(config_dir).iterdir() if d.is_dir()}
+    return [o for o in overrides if "=" not in o or o.split("=", 1)[0] not in groups]
 
 
 def setup_matplotlib_style() -> None:
@@ -116,6 +123,20 @@ def setup_jax(device: str = "cpu", disable_jit: bool = False) -> None:
         jax.config.update("jax_disable_jit", True)
 
 
+def make_run_dir(
+    project_root: Path, run_name: str, sweep_id: str | None = None
+) -> Path:
+    # Compute run_dir at init
+    base = project_root / "runs"
+    if sweep_id is None:
+        sweep_id = os.environ.get("WANDB_SWEEP_ID")
+    run_dir = (
+        base / "sweep" / sweep_id / run_name if sweep_id else base / "single" / run_name
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
 ### Core Initialization Function ###
 
 
@@ -127,12 +148,27 @@ def initialize_run(
     cs = ConfigStore.instance()
     cs.store(name="config_schema", node=run_type)
     proot = Path(__file__).parents[3]
+    config_dir = str(proot / "config" / "hydra")
 
     # Initialize hydra config
-    with hydra.initialize_config_dir(
-        version_base="1.3", config_dir=str(proot / "config" / "hydra")
-    ):
+    with hydra.initialize_config_dir(version_base="1.3", config_dir=config_dir):
         cfg = hydra.compose(config_name="config", overrides=overrides)
+
+        run_dir = make_run_dir(
+            project_root=proot, run_name=cfg.run_name, sweep_id=cfg.sweep_id
+        )
+
+        saved_config_path = run_dir / "config.yaml"
+
+        if saved_config_path.exists():
+            saved_dict = hydra_zen.load_from_yaml(saved_config_path)
+            filtered_overrides = filter_group_defaults(config_dir, overrides)
+            override_config = OmegaConf.from_dotlist(filtered_overrides)
+            cfg = OmegaConf.merge(cfg, saved_dict, override_config)
+
+        hydra_zen.save_as_yaml(cfg, saved_config_path)
+
+        print_config_tree(hydra_zen.to_yaml(cfg, resolve=True))
 
     # Initialize run handler
     handler = RunHandler(
@@ -142,28 +178,6 @@ def initialize_run(
         requested_epoch=cfg.epoch,
         sweep_id=cfg.sweep_id,
     )
-    saved_config_path = handler.run_dir / "config.yaml"
-
-    if saved_config_path.exists():
-        resolved_epoch = handler.from_epoch
-        if resolved_epoch is None:
-            log.warning("Starting fresh run in existing directory.")
-        else:
-            log.info(f"Continuing from epoch {resolved_epoch}")
-
-        saved_dict = OmegaConf.load(saved_config_path)
-        filtered_overrides = [
-            o
-            for o in overrides
-            if not (o.startswith("dataset=") or o.startswith("model="))
-        ]
-        structured_cfg = OmegaConf.structured(run_type)
-        override_config = OmegaConf.from_dotlist(filtered_overrides)
-        cfg = OmegaConf.merge(structured_cfg, saved_dict, override_config)
-
-    OmegaConf.save(cfg, saved_config_path)
-
-    print_config_tree(OmegaConf.to_container(cfg, resolve=True))
 
     # Initialize JAX
     setup_jax(device=cfg.device, disable_jit=not cfg.jit)
