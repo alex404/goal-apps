@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import override
@@ -7,6 +8,8 @@ from omegaconf import MISSING
 
 from ..runtime import JaxLogger, RunHandler
 from .dataset import ClusteringDataset, Dataset
+
+log = logging.getLogger(__name__)
 
 ### Generic Experiments ###
 
@@ -46,6 +49,29 @@ class Experiment[D: Dataset](ABC):
     ) -> None:
         """Evaluate model on dataset."""
 
+    @abstractmethod
+    def initialize_model(self, key: Array, data: Array) -> Array:
+        """Initialize model parameters based on data dimensions and statistics."""
+
+    def prepare_model(self, key: Array, handler: RunHandler, data: Array) -> Array:
+        """Initialize fresh parameters or load from a previous epoch.
+
+        Args:
+            key: Random key for initialization
+            handler: RunHandler with from_epoch set
+            data: Training data for initialization
+
+        Returns:
+            Model parameters as Array
+        """
+        if handler.from_epoch is None:
+            # Fresh run - initialize
+            log.info("Initializing model parameters")
+            return self.initialize_model(key, data)
+        # Continuation - load
+        log.info(f"Loading parameters from epoch {handler.from_epoch}")
+        return handler.load_params()
+
 
 ### Clustering Configs ###
 
@@ -66,10 +92,6 @@ class ClusteringExperiment(Experiment[ClusteringDataset], ABC):
     @abstractmethod
     def n_clusters(self) -> int:
         """Return the number of clusters in the model."""
-
-    @abstractmethod
-    def initialize_model(self, key: Array, data: Array) -> Array:
-        """Initialize model parameters based on data dimensions and statistics."""
 
     @abstractmethod
     def generate(self, params: Array, key: Array, n_samples: int) -> Array:

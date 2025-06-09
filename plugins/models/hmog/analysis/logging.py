@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
@@ -48,17 +47,6 @@ log = logging.getLogger(__name__)
 
 STATS_LEVEL = jnp.array(STATS_NUM)
 INFO_LEVEL = jnp.array(logging.INFO)
-
-
-### Analysis Args ###
-
-
-@dataclass(frozen=True)
-class AnalysisArgs:
-    """Arguments for HMoG analysis."""
-
-    from_scratch: bool
-    epoch: int | None
 
 
 ### Helpers ###

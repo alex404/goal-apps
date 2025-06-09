@@ -135,14 +135,31 @@ def initialize_run(
         cfg = hydra.compose(config_name="config", overrides=overrides)
 
     # Initialize run handler
-    handler = RunHandler(name=cfg.run_name, project_root=proot)
-
+    handler = RunHandler(
+        name=cfg.run_name,
+        project_root=proot,
+        from_scratch=cfg.from_scratch,
+        requested_epoch=cfg.epoch,
+        sweep_id=cfg.sweep_id,
+    )
     saved_config_path = handler.run_dir / "config.yaml"
 
     if saved_config_path.exists():
-        OmegaConf.load(saved_config_path)
-        override_config = OmegaConf.from_dotlist(overrides)
-        cfg = OmegaConf.merge(cfg, override_config)
+        resolved_epoch = handler.from_epoch
+        if resolved_epoch is None:
+            log.warning("Starting fresh run in existing directory.")
+        else:
+            log.info(f"Continuing from epoch {resolved_epoch}")
+
+        saved_dict = OmegaConf.load(saved_config_path)
+        filtered_overrides = [
+            o
+            for o in overrides
+            if not (o.startswith("dataset=") or o.startswith("model="))
+        ]
+        structured_cfg = OmegaConf.structured(run_type)
+        override_config = OmegaConf.from_dotlist(filtered_overrides)
+        cfg = OmegaConf.merge(structured_cfg, saved_dict, override_config)
 
     OmegaConf.save(cfg, saved_config_path)
 

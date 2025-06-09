@@ -29,7 +29,7 @@ from apps.runtime import JaxLogger, RunHandler
 from .analysis.base import cluster_assignments as hmog_cluster_assignments
 from .analysis.clusters import ClusterStatistics
 from .analysis.hierarchy import CoAssignmentClusterHierarchy
-from .analysis.logging import AnalysisArgs, log_artifacts
+from .analysis.logging import log_artifacts
 from .trainers import (
     FullGradientTrainer,
     LGMPreTrainer,
@@ -64,8 +64,6 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
 
     pretrain: bool
 
-    analysis: AnalysisArgs
-
     def __init__(
         self,
         data_dim: int,
@@ -75,7 +73,6 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
         lgm: FullGradientTrainer,
         mix: MixtureGradientTrainer,
         full: FullGradientTrainer,
-        analysis: AnalysisArgs,
         lr_scale_init: float,
         lr_scale_final: float,
         num_cycles: int,
@@ -97,7 +94,6 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
         self.lgm = lgm
         self.mix = mix
         self.full = full
-        self.analysis = analysis
 
         log.info(f"Initialized HMoG model with dimension {self.model.dim}.")
 
@@ -203,15 +199,14 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
     ) -> None:
         """Generate analysis artifacts from saved experiment results."""
 
-        epoch = (
-            self.analysis.epoch
-            if self.analysis.epoch is not None
-            else max(handler.get_available_epochs())
-        )
+        if handler.from_epoch is None:
+            raise RuntimeError("No saved parameters found for analysis")
+        epoch = handler.from_epoch
 
-        if self.analysis.from_scratch:
+        if handler.from_scratch:
             log.info("Recomputing artifacts from scratch.")
-            params = self.model.natural_point(handler.load_params(epoch))
+            params_array = self.prepare_model(key, handler, dataset.train_data)
+            params = self.model.natural_point(params_array)
             log_artifacts(handler, dataset, logger, self, self.model, epoch, params)
         else:
             log.info("Loading existing artifacts.")
@@ -229,15 +224,14 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
         # Split PRNG key for different training phases
         init_key, pre_key, *cycle_keys = jax.random.split(key, self.num_cycles + 2)
 
+        params_array = self.prepare_model(init_key, handler, dataset.train_data)
         # Initialize model
-        params = self.model.natural_point(
-            self.initialize_model(init_key, dataset.train_data)
-        )
+        params = self.model.natural_point(params_array)
 
         # Track total epochs
-        epoch = 0
+        epoch = handler.from_epoch or 0
 
-        if self.pretrain or self.pre.n_epochs > 0:
+        if self.pre.n_epochs > epoch:
             obs_params, int_params, lat_params = self.model.split_params(params)
             lat_obs_params, lat_int_params, cat_params = (
                 self.model.upr_hrm.split_params(lat_params)
@@ -246,29 +240,23 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
             lgm_params = lgm.join_params(obs_params, int_params, lat_obs_params)
             # Construct path to the pretrained file
 
-            if self.pretrain:
-                new_lgm_array = handler.load_params(name="pretrain")
-                lgm_params = lgm.natural_point(new_lgm_array)
-
-            elif self.pre.n_epochs > 0:
-                log.info("Pretraining LGM parameters")
-                log.info(f"Learning rate: {self.pre.lr:.2e}")
-                lgm_params = self.pre.train(
-                    pre_key,
-                    handler,
-                    dataset,
-                    lgm,
-                    logger,
-                    epoch,
-                    lgm_params,
-                )
+            log.info("Pretraining LGM parameters")
+            log.info(f"Learning rate: {self.pre.lr:.2e}")
+            lgm_params = self.pre.train(
+                pre_key,
+                handler,
+                dataset,
+                lgm,
+                logger,
+                epoch,
+                lgm_params,
+            )
             obs_params, int_params, lat_obs_params = lgm.split_params(lgm_params)
             lat_params = self.model.upr_hrm.join_params(
                 lat_obs_params, lat_int_params, cat_params
             )
             params = self.model.join_params(obs_params, int_params, lat_params)
-            epoch += self.pre.n_epochs
-            handler.save_params(lgm_params.array, name="pretrain")
+            epoch = self.pre.n_epochs
 
         # cosine lr schedule
         multiplier_schedule = optax.cosine_onecycle_schedule(

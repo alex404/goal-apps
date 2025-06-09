@@ -23,8 +23,8 @@ class RunConfig:
     project: str
     group: str | None
     job_type: str | None
+    epoch: int | None = None
     sweep_id: str | None = None
-    from_epoch: int = 0
     from_scratch: bool = False
 
 

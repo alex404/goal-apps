@@ -97,18 +97,6 @@ class MixtureGradientTrainerConfig:
     lwr_prs_reg: float = 1e-3
 
 
-### Analysis Config ###
-
-
-@dataclass
-class AnalysisConfig:
-    """Configuration for analysis of trained model."""
-
-    _target_: str = "plugins.models.hmog.analysis.logging.AnalysisArgs"
-    from_scratch: bool = False
-    epoch: int | None = None
-
-
 ### Main Configuration ###
 
 cycle_defaults: list[Any] = [
@@ -134,7 +122,6 @@ class HMoGConfig(ClusteringExperimentConfig):
     lgm: GradientTrainerConfig = field(default=MISSING)
     mix: MixtureGradientTrainerConfig = field(default=MISSING)
     full: GradientTrainerConfig = field(default=MISSING)
-    analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
 
 
 @dataclass
@@ -182,7 +169,6 @@ class ProjectionHMoGConfig(ClusteringExperimentConfig):
     # Training configuration
     pre: PreTrainerConfig = field(default=MISSING)
     pro: ProjectionTrainerConfig = field(default_factory=ProjectionTrainerConfig)
-    analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
 
 
 ### Config Registration ###

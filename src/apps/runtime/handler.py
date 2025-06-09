@@ -55,18 +55,43 @@ class RunHandler:
     name: str
     project_root: Path
     run_dir: Path
+    from_epoch: int | None  # None for fresh run
+    from_scratch: bool
 
-    def __init__(self, name: str, project_root: Path):
+    def __init__(
+        self,
+        name: str,
+        project_root: Path,
+        requested_epoch: int | None,
+        from_scratch: bool,
+        sweep_id: str | None,
+    ):
         self.name = name
         self.project_root = project_root
 
         # Compute run_dir at init
         base = project_root / "runs"
-        sweep_id = os.environ.get("WANDB_SWEEP_ID")
+        if sweep_id is None:
+            sweep_id = os.environ.get("WANDB_SWEEP_ID")
         self.run_dir = (
             base / "sweep" / sweep_id / name if sweep_id else base / "single" / name
         )
         self.run_dir.mkdir(parents=True, exist_ok=True)
+
+        # Resolve from_epoch
+        available = self.get_available_epochs()
+
+        if not available:
+            self.from_epoch = None
+
+        elif requested_epoch is None:
+            self.from_epoch = max(available)
+
+        else:
+            valid_epochs = [e for e in available if e <= requested_epoch]
+            self.from_epoch = max(valid_epochs) if valid_epochs else None
+
+        self.from_scratch = from_scratch
 
     @property
     def cache_dir(self) -> Path:
@@ -106,30 +131,30 @@ class RunHandler:
         with h5py.File(path, "r") as f:
             return artifact_class.load_from_hdf5(f)
 
-    def save_params(
-        self, params: Array, epoch: int | None = None, name: str = "params"
-    ) -> None:
+    def save_params(self, params: Array, epoch: int, name: str = "params") -> None:
         """Save parameters at a given epoch."""
-        if epoch is None:
-            path = self.run_dir / f"{name}.h5"
-        else:
-            path = self._get_epoch_dir(epoch) / f"{name}.h5"
+
+        path = self._get_epoch_dir(epoch) / f"{name}.h5"
         with h5py.File(path, "w") as f:
             # Convert JAX array to numpy for storage
             f.create_dataset("params", data=np.array(params))
 
-    def load_params(self, epoch: int | None = None, name: str = "params") -> Array:
-        """Load parameters from a specific epoch."""
-        if epoch is None:
-            path = self.run_dir / f"{name}.h5"
-        else:
-            path = self._get_epoch_dir(epoch, create=False) / f"{name}.h5"
+    def load_params(self, name: str = "params") -> Array:
+        """Load parameters from the resolved epoch.
+
+        Raises:
+            ValueError: If from_epoch is set but no params exist at that epoch
+            RuntimeError: If from_epoch is None (shouldn't happen after resolution)
+        """
+        if self.from_epoch is None:
+            raise RuntimeError("Cannot load params: from_epoch is None (fresh run)")
+
+        path = self._get_epoch_dir(self.from_epoch, create=False) / f"{name}.h5"
+
         with h5py.File(path, "r") as f:
-            # Use .get() method which is more likely to be recognized by the type checker
             dataset = f.get("params")
             if dataset is None:
-                raise KeyError("params dataset not found in HDF5 file")
-            # Convert to numpy array first
+                raise KeyError(f"{name} dataset not found in HDF5 file")
             data = np.array(dataset)
             return jnp.array(data)
 
