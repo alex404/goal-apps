@@ -8,7 +8,6 @@ from pathlib import Path
 from types import TracebackType
 
 import hydra
-import hydra_zen
 import jax
 import matplotlib.pyplot as plt
 from hydra.core.config_store import ConfigStore
@@ -160,15 +159,12 @@ def initialize_run(
 
         saved_config_path = run_dir / "config.yaml"
 
+        # overrides > saved config > defaults
         if saved_config_path.exists():
-            saved_dict = hydra_zen.load_from_yaml(saved_config_path)
+            saved_dict = OmegaConf.load(saved_config_path)
             filtered_overrides = filter_group_defaults(config_dir, overrides)
             override_config = OmegaConf.from_dotlist(filtered_overrides)
             cfg = OmegaConf.merge(cfg, saved_dict, override_config)
-
-        hydra_zen.save_as_yaml(cfg, saved_config_path)
-
-        print_config_tree(hydra_zen.to_yaml(cfg, resolve=True))
 
     # Initialize run handler
     handler = RunHandler(
@@ -179,6 +175,12 @@ def initialize_run(
         run_id=cfg.run_id,
         sweep_id=cfg.sweep_id,
     )
+
+    # update cfg with handler run_id
+    print(handler.run_id)
+    cfg.run_id = handler.run_id
+    OmegaConf.save(cfg, saved_config_path)
+    print_config_tree(OmegaConf.to_yaml(cfg, resolve=True))
 
     # Initialize JAX
     setup_jax(device=cfg.device, disable_jit=not cfg.jit)
