@@ -176,6 +176,7 @@ def initialize_run(
         project_root=proot,
         from_scratch=cfg.from_scratch,
         requested_epoch=cfg.from_epoch,
+        run_id=cfg.run_id,
         sweep_id=cfg.sweep_id,
     )
 
