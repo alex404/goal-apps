@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC
-from typing import override
+from typing import Any, override
 
 import jax
 import jax.numpy as jnp
@@ -21,15 +21,26 @@ from goal.models import (
 from jax import Array
 
 from apps.interface import (
+    Analysis,
     ClusteringDataset,
     HierarchicalClusteringExperiment,
 )
 from apps.runtime import JaxLogger, RunHandler
 
 from .analysis.base import cluster_assignments as hmog_cluster_assignments
-from .analysis.clusters import ClusterStatistics
-from .analysis.hierarchy import CoAssignmentClusterHierarchy
-from .analysis.logging import log_artifacts
+from .analysis.clusters import ClusterStatistics, ClusterStatisticsAnalysis
+from .analysis.generative import GenerativeExamplesAnalysis
+from .analysis.hierarchy import (
+    CoAssignmentClusterHierarchy,
+    CoAssignmentHierarchyAnalysis,
+    KLHierarchyAnalysis,
+)
+from .analysis.loadings import LoadingMatrixAnalysis
+from .analysis.merge import (
+    CoAssignmentMergeAnalysis,
+    KLMergeAnalysis,
+    OptimalMergeAnalysis,
+)
 from .trainers import (
     FullGradientTrainer,
     LGMPreTrainer,
@@ -95,7 +106,7 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
         self.mix = mix
         self.full = full
 
-        log.info(f"Initialized HMoG model with dimension {self.model.dim}.")
+        log.info(f"Loaded HMoG model with dimension {self.model.dim}.")
 
         self.num_cycles = num_cycles
         self.lr_scale_init = lr_scale_init
@@ -174,6 +185,32 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
         return self.model.average_log_observable_density(params, data)
 
     @override
+    def get_analyses(
+        self, dataset: ClusteringDataset
+    ) -> list[Analysis[ClusteringDataset, DifferentiableHMoG[Diagonal, Diagonal], Any]]:
+        analyses: list[
+            Analysis[ClusteringDataset, DifferentiableHMoG[Diagonal, Diagonal], Any]
+        ] = [
+            ClusterStatisticsAnalysis(),
+            KLHierarchyAnalysis(),
+            CoAssignmentHierarchyAnalysis(),
+            GenerativeExamplesAnalysis(n_samples=1000),
+            LoadingMatrixAnalysis(),
+        ]
+
+        if dataset.has_labels:
+            analyses.extend(
+                [
+                    KLMergeAnalysis(True, 0.0005),
+                    CoAssignmentMergeAnalysis(True, 0.0005),
+                    OptimalMergeAnalysis(True, 0.0005),
+                ]
+            )
+
+        specialized_analyses = dataset.get_dataset_analyses()
+        return analyses + list(specialized_analyses.values())
+
+    @override
     def generate(
         self,
         params: Array,
@@ -203,14 +240,17 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
             raise RuntimeError("No saved parameters found for analysis")
         epoch = handler.from_epoch
 
+        analyses = self.get_analyses(dataset)
+
         if handler.from_scratch:
             log.info("Recomputing artifacts from scratch.")
             params_array = self.prepare_model(key, handler, dataset.train_data)
-            params = self.model.natural_point(params_array)
-            log_artifacts(handler, dataset, logger, self, self.model, epoch, params)
+            self.process_checkpoint(
+                key, handler, logger, dataset, self.model, epoch, params_array
+            )
         else:
             log.info("Loading existing artifacts.")
-            log_artifacts(handler, dataset, logger, self, self.model, epoch)
+            self.process_checkpoint(key, handler, logger, dataset, self.model, epoch)
 
     @override
     def train(
@@ -321,7 +361,9 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
                 )
                 epoch += self.full.n_epochs
 
-            log_artifacts(handler, dataset, logger, self, self.model, epoch, params)
+            self.process_checkpoint(
+                key, handler, logger, dataset, self.model, epoch, params_array
+            )
 
             log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")
 

@@ -5,14 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, override
 
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from goal.geometry import (
     Natural,
     Point,
 )
-from h5py import File, Group
 from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
@@ -38,48 +36,6 @@ class ClusterStatistics(Artifact):
 
     prototypes: list[Array]  # list of prototypes
     members: list[Array]  # list of (n_members, data_dim)
-
-    @override
-    def save_to_hdf5(self, file: File) -> None:
-        """Save cluster collection to HDF5 file."""
-
-        # Create groups for prototypes and members
-        proto_group = file.create_group("prototypes")
-        members_group = file.create_group("members")
-
-        # Save each prototype
-        for i, proto in enumerate(self.prototypes):
-            proto_group.create_dataset(
-                f"{i}", data=np.array(proto, dtype=np.float32), compression="gzip"
-            )
-
-        # Save each member array
-        for i, member_array in enumerate(self.members):
-            members_group.create_dataset(
-                f"{i}",
-                data=np.array(member_array, dtype=np.float32),
-                compression="gzip",
-            )
-
-    @classmethod
-    @override
-    def load_from_hdf5(cls, file: File) -> ClusterStatistics:
-        """Load cluster collection from HDF5 file."""
-
-        # Load prototypes
-        proto_group = file["prototypes"]
-        assert isinstance(proto_group, Group)
-        n_clusters = len(proto_group)
-
-        prototypes = [jnp.array(proto_group[f"{i}"]) for i in range(n_clusters)]
-
-        # Load members
-        members_group = file["members"]
-        assert isinstance(members_group, Group)
-
-        members = [jnp.array(members_group[f"{i}"]) for i in range(n_clusters)]
-
-        return cls(prototypes=prototypes, members=members)
 
 
 def generate_cluster_statistics[

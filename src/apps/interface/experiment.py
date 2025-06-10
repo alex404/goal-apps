@@ -1,12 +1,13 @@
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import override
+from typing import Any, override
 
 from jax import Array
 from omegaconf import MISSING
 
-from ..runtime import JaxLogger, RunHandler
+from ..runtime import Artifact, JaxLogger, RunHandler
+from .analysis import Analysis
 from .dataset import ClusteringDataset, Dataset
 
 log = logging.getLogger(__name__)
@@ -71,6 +72,39 @@ class Experiment[D: Dataset](ABC):
         # Continuation - load
         log.info(f"Loading parameters from epoch {handler.from_epoch}")
         return handler.load_params()
+
+    @abstractmethod
+    def get_analyses(self, dataset: D) -> list[Analysis[D, Any, Any]]:
+        """Return a list of analyses to run after training.
+
+        Each analysis should be an instance of Analysis with the appropriate
+        dataset and model types.
+        """
+        pass
+
+    def process_checkpoint[A: Artifact](
+        self,
+        key: Array,
+        handler: RunHandler,
+        logger: JaxLogger,
+        dataset: D,
+        model: Any,
+        epoch: int,
+        params: Array | None = None,
+    ) -> None:
+        """Complete epoch checkpointing: save params, run analyses, save metrics."""
+        # 1. Save parameters
+        if params is not None:
+            handler.save_params(params, epoch)
+
+        # 2. Run each analysis (generate artifacts + log metrics)
+        for analysis in self.get_analyses(dataset):
+            analysis.process(key, handler, dataset, model, logger, epoch, params)
+
+        # 3. Save current metric state (periodic backup)
+        current_metrics = logger.get_current_metrics()
+        if current_metrics:  # Only save if we have metrics
+            handler.save_metrics(current_metrics)
 
 
 ### Clustering Configs ###

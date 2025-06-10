@@ -8,12 +8,10 @@ from typing import Callable, override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-import numpy as np
 from goal.geometry import (
     Natural,
     Point,
 )
-from h5py import File
 from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
@@ -35,20 +33,6 @@ class LoadingMatrixArtifact(Artifact):
 
     natural_loadings: Array  # Shape: (data_dim, latent_dim)
     mean_loadings: Array  # Shape: (data_dim, latent_dim)
-
-    @override
-    def save_to_hdf5(self, file: File) -> None:
-        """Save loading matrices to HDF5 file."""
-        file.create_dataset("natural_loadings", data=np.array(self.natural_loadings))
-        file.create_dataset("mean_loadings", data=np.array(self.mean_loadings))
-
-    @classmethod
-    @override
-    def load_from_hdf5(cls, file: File) -> LoadingMatrixArtifact:
-        """Load loading matrices from HDF5 file."""
-        natural_loadings = jnp.array(file["natural_loadings"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        mean_loadings = jnp.array(file["mean_loadings"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        return cls(natural_loadings=natural_loadings, mean_loadings=mean_loadings)
 
 
 def generate_loading_matrices[M: HMoG](

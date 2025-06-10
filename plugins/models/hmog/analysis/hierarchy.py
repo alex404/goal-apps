@@ -15,7 +15,6 @@ from goal.geometry import (
     Natural,
     Point,
 )
-from h5py import File, Group
 from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
@@ -77,39 +76,7 @@ class ClusterHierarchy(Artifact):
 
     prototypes: list[Array]
     linkage_matrix: NDArray[np.float64]
-    similarity_matrix: NDArray[np.float64]
-
-    @override
-    def save_to_hdf5(self, file: File) -> None:
-        """Save hierarchy data to HDF5 file."""
-        # Save prototypes
-        proto_group = file.create_group("prototypes")
-        for i, proto in enumerate(self.prototypes):
-            proto_group.create_dataset(f"{i}", data=np.array(proto))
-
-        # Save linkage matrix and similarity matrix
-        file.create_dataset("linkage_matrix", data=self.linkage_matrix)
-        file.create_dataset("similarity_matrix", data=np.array(self.similarity_matrix))
-
-    @classmethod
-    @override
-    def load_from_hdf5(cls, file: File) -> ClusterHierarchy:
-        """Load hierarchy data from HDF5 file."""
-        # Load prototypes
-        proto_group = file["prototypes"]
-        assert isinstance(proto_group, Group)
-        n_protos = len(proto_group)
-        prototypes = [jnp.array(proto_group[f"{i}"]) for i in range(n_protos)]
-
-        # Load matrices
-        linkage_matrix = np.array(file["linkage_matrix"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        similarity_matrix = np.array(file["similarity_matrix"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-
-        return cls(
-            prototypes=prototypes,
-            linkage_matrix=linkage_matrix,
-            similarity_matrix=similarity_matrix,
-        )
+    distance_matrix: NDArray[np.float64]
 
 
 @dataclass(frozen=True)
@@ -161,11 +128,10 @@ def generate_cluster_hierarchy[M: HMoG, C: ClusterHierarchy](
         dist_matrix = np.array(similarity_matrix, dtype=np.float64)
 
     # Ensure non-negative distances
+    # Ensure non-negative distances
     min_off_diag = np.min(dist_matrix[~np.eye(dist_matrix.shape[0], dtype=bool)])
     if min_off_diag < 0:
-        dist_matrix = dist_matrix - min_off_diag
-
-    # Ensure perfect symmetry
+        dist_matrix = dist_matrix - min_off_diag  # Ensure perfect symmetry
     dist_matrix = (dist_matrix + dist_matrix.T) / 2
 
     # Force diagonal to exactly zero
@@ -184,7 +150,7 @@ def generate_cluster_hierarchy[M: HMoG, C: ClusterHierarchy](
     return hierarchy_type(
         prototypes=prototypes,
         linkage_matrix=linkage_matrix,  # pyright: ignore[reportArgumentType]
-        similarity_matrix=similarity_matrix,
+        distance_matrix=dist_matrix,
     )
 
 

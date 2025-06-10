@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import os
 import re
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self, cast
 
-import h5py
+import joblib
 import numpy as np
-import pandas as pd
 from jax import Array
-from jax import numpy as jnp
 from matplotlib.figure import Figure
 
 type MetricDict = dict[str, tuple[Array, Array]]  # Single snapshot
@@ -35,15 +32,6 @@ def to_snake_case(name: str) -> str:
 @dataclass(frozen=True)
 class Artifact(ABC):
     """Base class for data that can be logged and visualized."""
-
-    @abstractmethod
-    def save_to_hdf5(self, file: h5py.File) -> None:
-        """Save artifact data to an open HDF5 file."""
-
-    @classmethod
-    @abstractmethod
-    def load_from_hdf5(cls, file: h5py.File) -> Self:
-        """Load artifact data from an open HDF5 file."""
 
 
 ### Run Handler ###
@@ -106,38 +94,45 @@ class RunHandler:
         return epoch_dir
 
     def _get_artifact_path[T: Artifact](
-        self, epoch: int, artifact_class: type[T], suffix: str
+        self, epoch: int, artifact_class: type[T]
     ) -> Path:
-        """Get the path for an artifact file with given suffix."""
-        epoch_dir = self._get_epoch_dir(epoch)
-        return epoch_dir / f"{to_snake_case(artifact_class.__name__)}{suffix}"
+        """Get the path for an artifact file."""
+        artifacts_dir = self._get_epoch_dir(epoch) / "artifacts"
+        artifacts_dir.mkdir(exist_ok=True)
+        return artifacts_dir / f"{to_snake_case(artifact_class.__name__)}.joblib"
+
+    def _get_plot_path[T: Artifact](self, epoch: int, artifact_class: type[T]) -> Path:
+        """Get the path for an artifact plot."""
+        plots_dir = self._get_epoch_dir(epoch) / "plots"
+        plots_dir.mkdir(exist_ok=True)
+        return plots_dir / f"{to_snake_case(artifact_class.__name__)}.png"
+
+    def _get_params_path(self, epoch: int, name: str) -> Path:
+        """Get the path for parameter files."""
+        params_dir = self._get_epoch_dir(epoch)
+        return params_dir / f"{name}.joblib"
 
     def save_artifact(self, epoch: int, artifact: Artifact) -> None:
         """Save an artifact at a given epoch."""
-        path = self._get_artifact_path(epoch, type(artifact), ".h5")
-        with h5py.File(path, "w") as f:
-            artifact.save_to_hdf5(f)
+        path = self._get_artifact_path(epoch, type(artifact))
+        joblib.dump(artifact, path, compress=3)
 
     def save_artifact_figure(
         self, epoch: int, artifact_class: type[Artifact], fig: Figure
     ) -> None:
         """Save a figure in the same epoch directory as its artifact."""
-        path = self._get_artifact_path(epoch, artifact_class, ".png")
+        path = self._get_plot_path(epoch, artifact_class)
         fig.savefig(path, bbox_inches="tight")
 
     def load_artifact[T: Artifact](self, epoch: int, artifact_class: type[T]) -> T:
         """Load an artifact from a specific epoch."""
-        path = self._get_artifact_path(epoch, artifact_class, ".h5")
-        with h5py.File(path, "r") as f:
-            return artifact_class.load_from_hdf5(f)
+        path = self._get_artifact_path(epoch, artifact_class)
+        return joblib.load(path)
 
     def save_params(self, params: Array, epoch: int, name: str = "params") -> None:
         """Save parameters at a given epoch."""
-
-        path = self._get_epoch_dir(epoch) / f"{name}.h5"
-        with h5py.File(path, "w") as f:
-            # Convert JAX array to numpy for storage
-            f.create_dataset("params", data=np.array(params))
+        path = self._get_params_path(epoch, name)
+        joblib.dump(params, path)
 
     def load_params(self, name: str = "params") -> Array:
         """Load parameters from the resolved epoch.
@@ -149,34 +144,12 @@ class RunHandler:
         if self.from_epoch is None:
             raise RuntimeError("Cannot load params: from_epoch is None (fresh run)")
 
-        path = self._get_epoch_dir(self.from_epoch, create=False) / f"{name}.h5"
-
-        with h5py.File(path, "r") as f:
-            dataset = f.get("params")
-            if dataset is None:
-                raise KeyError(f"{name} dataset not found in HDF5 file")
-            data = np.array(dataset)
-            return jnp.array(data)
+        return joblib.load(self._get_params_path(self.from_epoch, name))
 
     def save_metrics(self, metrics: MetricHistory) -> None:
-        """Save training metrics to HDF5 using pandas HDFStore."""
-        # Convert metrics to pandas DataFrame
-        rows: list[dict[str, Any]] = []
-        for metric_name, values in metrics.items():
-            for epoch, value in values:
-                rows.append(
-                    {"metric": metric_name, "epoch": int(epoch), "value": float(value)}
-                )
-
-        if not rows:
-            # Create empty DataFrame if no metrics
-            df = pd.DataFrame(columns=["metric", "epoch", "value"])
-        else:
-            df = pd.DataFrame(rows)
-
-        # Save to HDF5 using pandas
-        path = self.run_dir / "metrics.h5"
-        df.to_hdf(path, key="metrics", mode="w")
+        """Save training metrics."""
+        path = self.run_dir / "metrics.joblib"
+        joblib.dump(metrics, path)
 
     def save_metrics_figure(self, fig: Figure) -> None:
         """Save the metrics summary figure."""
@@ -184,30 +157,13 @@ class RunHandler:
         fig.savefig(path, bbox_inches="tight")
 
     def load_metrics(self) -> MetricHistory:
-        """Load training metrics from HDF5."""
-        path = self.run_dir / "metrics.h5"
+        """Load training metrics."""
+        path = self.run_dir / "metrics.joblib"
 
         if not path.exists():
             return {}
 
-        df = pd.read_hdf(path, key="metrics")
-
-        # Convert DataFrame back to MetricHistory format
-        result: MetricHistory = {}
-        for metric_name, group_df in df.groupby("metric"):
-            # Ensure metric_name is str
-            metric_str = str(metric_name)
-            # Sort and convert to list of tuples
-            sorted_df = cast(pd.DataFrame, group_df.sort_values("epoch"))  # pyright: ignore[reportCallIssue]
-            result[metric_str] = []
-
-            # Iterate through rows safely
-            for _, row in sorted_df.iterrows():
-                epoch = int(row["epoch"])
-                value = float(row["value"])
-                result[metric_str].append((epoch, value))
-
-        return result
+        return joblib.load(path)
 
     def save_debug_state(
         self,

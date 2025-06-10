@@ -5,14 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, override
 
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from goal.geometry import (
     Natural,
     Point,
 )
-from h5py import File
 from jax import Array
 from matplotlib.figure import Figure
 
@@ -32,18 +30,6 @@ class GenerativeExamples(Artifact):
     """Collection of generated samples from the model."""
 
     samples: Array  # Array of shape (n_samples, data_dim)
-
-    @override
-    def save_to_hdf5(self, file: File) -> None:
-        """Save generated samples to HDF5 file."""
-        file.create_dataset("samples", data=np.array(self.samples))
-
-    @classmethod
-    @override
-    def load_from_hdf5(cls, file: File) -> GenerativeExamples:
-        """Load generated samples from HDF5 file."""
-        samples = jnp.array(file["samples"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        return cls(samples=samples)
 
 
 def generate_examples[M: HMoG](

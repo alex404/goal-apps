@@ -122,13 +122,19 @@ class JaxLogger:
                 group=group,
                 job_type=job_type,
                 dir=self.run_dir,
+                resume="allow",
             )
             wandb.define_metric("epoch")
             wandb.define_metric("*", step_metric="epoch")
 
         if use_local:
             global _metric_buffer
-            _metric_buffer.clear()
+            if handler.from_epoch is not None:
+                # Resume: load existing metrics
+                _metric_buffer = handler.load_metrics()
+            else:
+                # Fresh run: start empty
+                _metric_buffer.clear()
 
     def monitor_params(
         self,
@@ -217,6 +223,13 @@ class JaxLogger:
             )
 
         plt.close(fig)
+
+    def get_current_metrics(self) -> MetricHistory:
+        """Get current metric state if local logging is enabled."""
+        if self.use_local:
+            global _metric_buffer
+            return _metric_buffer.copy()  # Return copy to avoid mutation issues
+        return {}
 
     def finalize(self, handler: RunHandler) -> None:
         """Finalize logging and clean up. Must be called outside of jax.jit."""
