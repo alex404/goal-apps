@@ -101,12 +101,12 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
             n_components=n_clusters,
         )
 
+        log.info(f"Created HMoG model with dimension {self.model.dim}.")
+
         self.pre = pre
         self.lgm = lgm
         self.mix = mix
         self.full = full
-
-        log.info(f"Loaded HMoG model with dimension {self.model.dim}.")
 
         self.num_cycles = num_cycles
         self.lr_scale_init = lr_scale_init
@@ -240,13 +240,13 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
             raise RuntimeError("No saved parameters found for analysis")
         epoch = handler.from_epoch
 
-        analyses = self.get_analyses(dataset)
-
         if handler.from_scratch:
             log.info("Recomputing artifacts from scratch.")
-            params_array = self.prepare_model(key, handler, dataset.train_data)
+            # This shouldn't be necessary because key_model shouldn't be used, but just in case...
+            key_check, key_model = jax.random.split(key, 2)
+            params_array = self.prepare_model(key_model, handler, dataset.train_data)
             self.process_checkpoint(
-                key, handler, logger, dataset, self.model, epoch, params_array
+                key_check, handler, logger, dataset, self.model, epoch, params_array
             )
         else:
             log.info("Loading existing artifacts.")
@@ -264,12 +264,30 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
         # Split PRNG key for different training phases
         init_key, pre_key, *cycle_keys = jax.random.split(key, self.num_cycles + 2)
 
-        params_array = self.prepare_model(init_key, handler, dataset.train_data)
-        # Initialize model
-        params = self.model.natural_point(params_array)
+        params = self.model.natural_point(
+            self.prepare_model(init_key, handler, dataset.train_data)
+        )
 
         # Track total epochs
         epoch = handler.from_epoch or 0
+
+        # Calculate training structure
+        epochs_per_cycle = self.lgm.n_epochs + self.mix.n_epochs + self.full.n_epochs
+        training_start_epoch = self.pre.n_epochs
+
+        # Determine current cycle and remaining work
+        if epoch == 0:
+            log.info("Starting training from scratch.")
+            current_cycle = 0
+
+        elif epoch < training_start_epoch:
+            current_cycle = 0
+            log.info("Continuing pretraining phase.")
+        else:
+            current_cycle = (epoch - training_start_epoch) // epochs_per_cycle
+            log.info(
+                f"Resuming from epoch {epoch}, cycle {current_cycle}/{self.num_cycles}"
+            )
 
         if self.pre.n_epochs > epoch:
             obs_params, int_params, lat_params = self.model.split_params(params)
@@ -308,7 +326,7 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
         )
 
         # Cycle between Mixture and LGM training
-        for cycle in range(self.num_cycles):
+        for cycle in range(current_cycle, self.num_cycles):
             current_lr_scale = float(multiplier_schedule(cycle))
             key_lgm, key_mix, key_full = jax.random.split(cycle_keys[cycle], 3)
             log.info("Starting training cycle %d", cycle + 1)
@@ -362,7 +380,7 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
                 epoch += self.full.n_epochs
 
             self.process_checkpoint(
-                key, handler, logger, dataset, self.model, epoch, params_array
+                key, handler, logger, dataset, self.model, epoch, params.array
             )
 
             log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")

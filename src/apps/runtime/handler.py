@@ -157,13 +157,26 @@ class RunHandler:
         fig.savefig(path, bbox_inches="tight")
 
     def load_metrics(self) -> MetricHistory:
-        """Load training metrics."""
+        """Load training metrics, automatically filtering based on resume epoch."""
         path = self.run_dir / "metrics.joblib"
 
         if not path.exists():
             return {}
 
-        return joblib.load(path)
+        full_metrics = joblib.load(path)
+
+        # If resuming, only return metrics up to the resume point
+        if self.from_epoch is not None:
+            return {
+                metric_name: [
+                    (epoch, value)
+                    for epoch, value in values
+                    if epoch <= self.from_epoch
+                ]
+                for metric_name, values in full_metrics.items()
+            }
+
+        return full_metrics
 
     def save_debug_state(
         self,

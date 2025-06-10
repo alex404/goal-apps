@@ -23,9 +23,9 @@ class RunConfig:
     project: str
     group: str | None
     job_type: str | None
-    epoch: int | None = None
-    sweep_id: str | None = None
-    from_scratch: bool = False
+    from_epoch: int | None
+    sweep_id: str | None
+    from_scratch: bool
 
 
 defaults: list[Any] = [
