@@ -6,7 +6,6 @@ import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import Any, Callable
 
 import jax
@@ -95,8 +94,6 @@ class JaxLogger:
         - finalize: For cleanup and final logging
     """
 
-    run_name: str
-    run_dir: Path
     use_wandb: bool
     use_local: bool
 
@@ -110,18 +107,16 @@ class JaxLogger:
         job_type: str | None,
     ) -> None:
         """Initialize logger with desired logging destinations."""
-        object.__setattr__(self, "run_name", handler.name)
-        object.__setattr__(self, "run_dir", handler.run_dir)
         object.__setattr__(self, "use_wandb", use_wandb)
         object.__setattr__(self, "use_local", use_local)
 
         if use_wandb:
             wandb.init(
                 project=project,
-                name=self.run_name,
+                name=handler.name,
                 group=group,
                 job_type=job_type,
-                dir=self.run_dir,
+                dir=handler.run_dir,
                 resume="allow",
             )
             wandb.define_metric("epoch")

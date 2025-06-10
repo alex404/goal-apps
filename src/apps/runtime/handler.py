@@ -45,6 +45,7 @@ class RunHandler:
     run_dir: Path
     from_epoch: int | None  # None for fresh run
     from_scratch: bool
+    run_id: str | None  # Optional run ID for resuming
 
     def __init__(
         self,
@@ -52,6 +53,7 @@ class RunHandler:
         project_root: Path,
         requested_epoch: int | None,
         from_scratch: bool,
+        run_id: str | None,
         sweep_id: str | None,
     ):
         self.name = name
@@ -65,6 +67,10 @@ class RunHandler:
             base / "sweep" / sweep_id / name if sweep_id else base / "single" / name
         )
         self.run_dir.mkdir(parents=True, exist_ok=True)
+
+        if run_id is None:
+            run_id = os.environ.get("WANDB_RUN_ID")
+        self.run_id = run_id
 
         # Resolve from_epoch
         available = self.get_available_epochs()
