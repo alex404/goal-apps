@@ -6,9 +6,11 @@ from typing import Any, override
 from jax import Array
 from omegaconf import MISSING
 
-from ..runtime import Artifact, JaxLogger, RunHandler
+from ..runtime import Artifact, Logger, RunHandler
 from .analysis import Analysis
 from .dataset import ClusteringDataset, Dataset
+
+### Logging Setup ###
 
 log = logging.getLogger(__name__)
 
@@ -35,8 +37,8 @@ class Experiment[D: Dataset](ABC):
         self,
         key: Array,
         handler: RunHandler,
+        logger: Logger,
         dataset: D,
-        logger: JaxLogger,
     ) -> None:
         """Run analysis suite based on trained model."""
 
@@ -45,8 +47,8 @@ class Experiment[D: Dataset](ABC):
         self,
         key: Array,
         handler: RunHandler,
+        logger: Logger,
         dataset: D,
-        logger: JaxLogger,
     ) -> None:
         """Evaluate model on dataset."""
 
@@ -86,7 +88,7 @@ class Experiment[D: Dataset](ABC):
         self,
         key: Array,
         handler: RunHandler,
-        logger: JaxLogger,
+        logger: Logger,
         dataset: D,
         model: Any,
         epoch: int,
@@ -99,12 +101,10 @@ class Experiment[D: Dataset](ABC):
 
         # 2. Run each analysis (generate artifacts + log metrics)
         for analysis in self.get_analyses(dataset):
-            analysis.process(key, handler, dataset, model, logger, epoch, params)
+            analysis.process(key, handler, logger, dataset, model, epoch, params)
 
         # 3. Save current metric state (periodic backup)
-        current_metrics = logger.get_current_metrics()
-        if current_metrics:  # Only save if we have metrics
-            handler.save_metrics(current_metrics)
+        handler.save_metrics()
 
 
 ### Clustering Configs ###
@@ -158,8 +158,8 @@ class ClusteringExperiment(Experiment[ClusteringDataset], ABC):
         self,
         key: Array,
         handler: RunHandler,
+        logger: Logger,
         dataset: ClusteringDataset,
-        logger: JaxLogger,
     ) -> None:
         """Evaluate model on dataset."""
 

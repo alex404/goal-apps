@@ -1,12 +1,20 @@
+"""Shared utilities for GOAL examples."""
+
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any
 
+import wandb as wandb
 from omegaconf import MISSING
 
-from ..interface import ClusteringDatasetConfig, ClusteringExperimentConfig
+from ..interface import (
+    ClusteringDatasetConfig,
+    ClusteringExperimentConfig,
+)
 from ..runtime import LogLevel
 
-### Runtime Config ###
+### Run Configs ###
 
 
 @dataclass
@@ -33,6 +41,9 @@ defaults: list[Any] = [
     {"model": MISSING},
     {"dataset": MISSING},
 ]
+
+
+### Clustering Run Configs ###
 
 
 @dataclass

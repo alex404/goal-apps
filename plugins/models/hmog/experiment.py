@@ -25,7 +25,7 @@ from apps.interface import (
     ClusteringDataset,
     HierarchicalClusteringExperiment,
 )
-from apps.runtime import JaxLogger, RunHandler
+from apps.runtime import Logger, RunHandler
 
 from .analysis.base import cluster_assignments as hmog_cluster_assignments
 from .analysis.clusters import ClusterStatistics, ClusterStatisticsAnalysis
@@ -231,8 +231,8 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
         self,
         key: Array,
         handler: RunHandler,
+        logger: Logger,
         dataset: ClusteringDataset,
-        logger: JaxLogger,
     ) -> None:
         """Generate analysis artifacts from saved experiment results."""
 
@@ -257,8 +257,8 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
         self,
         key: Array,
         handler: RunHandler,
+        logger: Logger,
         dataset: ClusteringDataset,
-        logger: JaxLogger,
     ) -> None:
         """Train HMoG model using alternating optimization."""
         # Split PRNG key for different training phases

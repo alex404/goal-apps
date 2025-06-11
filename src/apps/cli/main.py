@@ -3,7 +3,6 @@
 ### Preamable ###
 import logging
 import os
-from pathlib import Path
 from typing import Any
 
 import jax
@@ -15,21 +14,28 @@ from plugins import register_plugins
 from rich import print as rprint
 from rich.table import Table
 
-from .config import ClusteringRunConfig
+from .configs import ClusteringRunConfig
 from .initialize import initialize_run
-from .util import (
+from .sweep import (
     create_sweep_config,
+    sample_sweep_args,
+)
+from .util import (
     format_config_table,
     get_store_groups,
     print_sweep_tree,
-    sample_sweep_args,
 )
 
+### Preamble ###
+
+# Very first step: register all plugins
+register_plugins()
+
+# Set up logging
 log = logging.getLogger(__name__)
 
-package_root = Path(__file__).parents[3]
 
-register_plugins()
+### CLI ###
 
 # CLI configuration
 main = typer.Typer(
@@ -37,9 +43,6 @@ main = typer.Typer(
 )
 plugins_com = typer.Typer()
 main.add_typer(plugins_com, name="plugins", help="Commands for plugin management.")
-
-
-### Helper functions ###
 
 
 ### Commands ###
@@ -64,14 +67,14 @@ def train(overrides: list[str] = overrides, dry_run: bool = train_dry_run):
         goal clustering train run_name=my_exp dataset=mnist model=hmog
     """
 
-    handler, dataset, model, logger = initialize_run(ClusteringRunConfig, overrides)
+    handler, logger, dataset, model = initialize_run(ClusteringRunConfig, overrides)
     key = jax.random.PRNGKey(int.from_bytes(os.urandom(4), byteorder="big"))
     if dry_run:
         return
 
     # Train model
     log.info("Beginning training...")
-    model.train(key, handler, dataset, logger)
+    model.train(key, handler, logger, dataset)
 
     log.info("Training complete.")
     logger.finalize(handler)
@@ -88,12 +91,12 @@ def analyze(overrides: list[str] = overrides):
     Example:
         goal clustering analyze run_name=my_exp
     """
-    handler, dataset, model, logger = initialize_run(ClusteringRunConfig, overrides)
+    handler, logger, dataset, model = initialize_run(ClusteringRunConfig, overrides)
     key = jax.random.PRNGKey(int.from_bytes(os.urandom(4), byteorder="big"))
 
     # Run analysis
     log.info("Beginning analysis...")
-    model.analyze(key, handler, dataset, logger)
+    model.analyze(key, handler, logger, dataset)
     log.info("Analysis complete.")
 
 

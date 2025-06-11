@@ -11,15 +11,19 @@ import hydra
 import jax
 import matplotlib.pyplot as plt
 from hydra.core.config_store import ConfigStore
+from hydra.utils import instantiate
 from jax.lib import xla_bridge
 from omegaconf import OmegaConf
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
 
-from ..interface import Dataset, Experiment
-from ..runtime import JaxLogger, LogLevel, RunHandler
-from .config import RunConfig
+from ..interface import (
+    Dataset,
+    Experiment,
+)
+from ..runtime import Logger, LogLevel, RunHandler
+from .configs import RunConfig
 from .util import print_config_tree
 
 ### Python Logging ###
@@ -40,6 +44,7 @@ THEME = Theme(
         "value": "yellow",
     }
 )
+
 
 ### Initialization Helpers ###
 
@@ -127,8 +132,7 @@ def make_run_dir(
 ) -> Path:
     # Compute run_dir at init
     base = project_root / "runs"
-    if sweep_id is None:
-        sweep_id = os.environ.get("WANDB_SWEEP_ID")
+    sweep_id = sweep_id or os.environ.get("WANDB_SWEEP_ID")
     run_dir = (
         base / "sweep" / sweep_id / run_name if sweep_id else base / "single" / run_name
     )
@@ -142,7 +146,7 @@ def make_run_dir(
 def initialize_run(
     run_type: type[RunConfig],
     overrides: list[str],
-) -> tuple[RunHandler, Dataset, Experiment[Dataset], JaxLogger]:
+) -> tuple[RunHandler, Logger, Dataset, Experiment[Dataset]]:
     """Initialize a new run with hydra config and wandb logging."""
     cs = ConfigStore.instance()
     cs.store(name="config_schema", node=run_type)
@@ -168,17 +172,26 @@ def initialize_run(
 
     # Initialize run handler
     handler = RunHandler(
-        name=cfg.run_name,
+        run_name=cfg.run_name,
         project_root=proot,
+        run_dir=run_dir,
+        requested_epoch=cfg.epoch,
         from_scratch=cfg.from_scratch,
-        requested_epoch=cfg.from_epoch,
-        run_id=cfg.run_id,
-        sweep_id=cfg.sweep_id,
     )
 
+    logger = Logger(
+        handler=handler,
+        use_wandb=cfg.use_wandb,
+        use_local=cfg.use_local,
+        project=cfg.project,
+        group=cfg.group,
+        job_type=cfg.job_type,
+        run_id=cfg.run_id,
+    )
+
+    cfg.run_id = logger.run_id
+
     # update cfg with handler run_id
-    print(handler.run_id)
-    cfg.run_id = handler.run_id
     OmegaConf.save(cfg, saved_config_path)
     print_config_tree(OmegaConf.to_yaml(cfg, resolve=True))
 
@@ -189,30 +202,19 @@ def initialize_run(
 
     setup_logging(handler.run_dir, log_level=cfg.log_level)
 
-    log.info(f"Run name: {handler.name}")
+    log.info(f"Run name: {handler.run_name}")
     log.info(f"Project Root: {handler.project_root}")
     log.info(f"Available devices: {jax.devices()}")
     log.info(f"JAX backend: {xla_bridge.get_backend().platform}")
     log.info(f"with JIT: {cfg.jit}")
 
     log.info("Loading dataset...")
-    dataset: Dataset = hydra.utils.instantiate(cfg.dataset, cache_dir=handler.cache_dir)
+    dataset: Dataset = instantiate(cfg.dataset, cache_dir=handler.cache_dir)
     log.info(f"Loaded dataset with {len(dataset.train_data)} training data points.")
 
     # Instantiate model
     log.info("Loading model...")
-    model: Experiment[Dataset] = hydra.utils.instantiate(
-        cfg.model, data_dim=dataset.data_dim
-    )
-
-    logger = JaxLogger(
-        handler=handler,
-        use_wandb=cfg.use_wandb,
-        use_local=cfg.use_local,
-        project=cfg.project,
-        group=cfg.group,
-        job_type=cfg.job_type,
-    )
+    model: Experiment[Dataset] = instantiate(cfg.model, data_dim=dataset.data_dim)
 
     # will return logger as well
-    return handler, dataset, model, logger
+    return handler, logger, dataset, model

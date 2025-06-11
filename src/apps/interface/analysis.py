@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from jax import Array
 from matplotlib.figure import Figure
 
-from ..runtime import Artifact, JaxLogger, MetricDict, RunHandler
+from ..runtime import Artifact, Logger, MetricDict, RunHandler
 
 ### Analysis Base Class ###
 
@@ -48,15 +48,16 @@ class Analysis[D, M, T: Artifact](ABC):
 
     def metrics(self, artifact: T) -> MetricDict:
         """Return metrics collected during the analysis."""
+        artifact = artifact
         return {}
 
     def process(
         self,
         key: Array,
         handler: RunHandler,
+        logger: Logger,
         dataset: D,
         model: M,
-        logger: JaxLogger,
         epoch: int,
         params: Array | None = None,
     ) -> None:
@@ -68,5 +69,5 @@ class Analysis[D, M, T: Artifact](ABC):
 
         metrics = self.metrics(artifact)
 
-        logger.log_metrics(metrics, jnp.array(epoch))
+        logger.log_metrics(handler, metrics, jnp.array(epoch))
         logger.log_artifact(handler, epoch, artifact, lambda a: self.plot(a, dataset))

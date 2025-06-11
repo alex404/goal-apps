@@ -3,84 +3,28 @@
 from __future__ import annotations
 
 import logging
-import math
-from dataclasses import dataclass
-from enum import Enum
+import os
 from typing import Any, Callable
 
 import jax
 import matplotlib.pyplot as plt
-import wandb as wandb
+import wandb
 from jax import Array
 from jax import numpy as jnp
 from jax.experimental import io_callback
 from matplotlib.figure import Figure
 
-from .handler import Artifact, MetricDict, MetricHistory, RunHandler
+from .handler import RunHandler
+from .util import Artifact, MetricDict, plot_metrics
 
-## Preamble ###
+## Logging ###
 
 log = logging.getLogger(__name__)
 
-
-# Define a custom level
-STATS_NUM = 15  # Between INFO (20) and DEBUG (10)
-logging.addLevelName(STATS_NUM, "STATS")
+### Artifacts ###
 
 
-class LogLevel(Enum):
-    DEBUG = logging.DEBUG
-    INFO = logging.INFO
-    STATS = STATS_NUM
-    WARNING = logging.WARNING
-    ERROR = logging.ERROR
-    CRITICAL = logging.CRITICAL
-
-
-### Helpers ###
-
-
-def plot_metrics(metrics: MetricHistory) -> Figure:
-    """Create a summary plot of all metrics over training.
-
-    Args:
-        metrics: Dictionary mapping metric names to lists of (epoch, value) pairs
-
-    Returns:
-        Figure containing subplots for each metric
-    """
-    # Create figure
-    n_metrics = len(metrics)
-    side_length = math.ceil(math.sqrt(n_metrics))
-    fig, axes = plt.subplots(
-        side_length, side_length, figsize=(6 * side_length, 4 * side_length)
-    )
-
-    axes = axes.ravel()
-
-    # Plot each metric
-    for ax, (name, values) in zip(axes, metrics.items()):
-        epochs, metric_values = zip(*values)
-        ax.plot(epochs, metric_values)
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel(name)
-        ax.grid(True)
-
-    for idx in range(n_metrics, len(axes)):
-        axes[idx].set_visible(False)
-
-    plt.tight_layout()
-    return fig
-
-
-### Jit-Compatible Loggers ###
-
-# Global buffer for metrics
-_metric_buffer: MetricHistory = {}
-
-
-@dataclass(frozen=True)
-class JaxLogger:
+class Logger:
     """Logger supporting both local and wandb logging.
 
     This logger provides methods for logging both metrics and figures, with
@@ -94,8 +38,11 @@ class JaxLogger:
         - finalize: For cleanup and final logging
     """
 
-    use_wandb: bool
     use_local: bool
+    use_wandb: bool
+
+    # wandb
+    run_id: str | None
 
     def __init__(
         self,
@@ -105,63 +52,36 @@ class JaxLogger:
         project: str,
         group: str | None,
         job_type: str | None,
+        run_id: str | None,
     ) -> None:
         """Initialize logger with desired logging destinations."""
-        object.__setattr__(self, "use_wandb", use_wandb)
-        object.__setattr__(self, "use_local", use_local)
+        self.use_wandb = use_wandb
+        self.use_local = use_local
 
+        # Initialize wandb
         if use_wandb:
             wandb.init(
                 project=project,
-                name=handler.name,
+                name=handler.run_name,
                 group=group,
                 job_type=job_type,
                 dir=handler.run_dir,
+                id=run_id,
                 resume="allow",
             )
             wandb.define_metric("epoch")
             wandb.define_metric("*", step_metric="epoch")
 
-        if use_local:
-            global _metric_buffer
-            if handler.from_epoch is not None:
-                # Resume: load existing metrics
-                _metric_buffer = handler.load_metrics()
-            else:
-                # Fresh run: start empty
-                _metric_buffer.clear()
+        self.run_id = run_id or os.environ.get("WANDB_RUN_ID")
 
-    def monitor_params(
-        self,
-        param_dict: dict[str, Array],
-        handler: RunHandler,
-        context: str = "update",
+    def log_metrics(
+        self, handler: RunHandler, metrics: MetricDict, epoch: Array
     ) -> None:
-        """Monitor parameters for NaNs and save state if found."""
-        # Check for NaNs using vectorized JAX operations
-        has_any_nans = False
-        for p in param_dict.values():
-            has_any_nans = jnp.logical_or(has_any_nans, jnp.any(jnp.isnan(p)))
-
-        # Define the IO callback function
-        def save_debug(params: dict[str, Array]) -> None:
-            handler.save_debug_state(params, context)
-            log.error(f"NaNs detected in {context}")
-            raise ValueError(f"NaN values detected in {context}")
-
-        # Function for no-op case
-        def no_op(_: None) -> None:
-            pass
-
-        # Only execute the IO callback if NaNs exist
-        def call_io(_: Any) -> None:
-            io_callback(save_debug, None, param_dict)
-
-        # Use JAX conditional to only execute callback when needed
-        jax.lax.cond(has_any_nans, call_io, no_op, None)
-
-    def log_metrics(self, metrics: MetricDict, epoch: Array) -> None:
         """Log metrics. Safe to call within jax.jit-compiled functions."""
+
+        metric_buffer = handler.metric_buffer
+        use_local = self.use_local
+        use_wandb = self.use_wandb
 
         def _log_values(metrics_dict: MetricDict, epoch_array: Array) -> None:
             epoch = int(epoch_array)
@@ -171,12 +91,11 @@ class JaxLogger:
                 for key, (level, value) in metrics_dict.items()
             }
 
-            if self.use_local:
-                global _metric_buffer
+            if use_local:
                 for key, (level, value) in float_metrics.items():
-                    if key not in _metric_buffer:
-                        _metric_buffer[key] = []
-                    _metric_buffer[key].append((int(epoch), value))
+                    if key not in metric_buffer:
+                        metric_buffer[key] = []
+                    metric_buffer[key].append((int(epoch), value))
                     log.log(
                         level,
                         "epoch %4d | %14s | %10.6f",
@@ -185,7 +104,7 @@ class JaxLogger:
                         value,
                     )
 
-            if self.use_wandb:
+            if use_wandb:
                 # Single wandb call with all metrics
                 wandb.log(
                     {
@@ -219,24 +138,42 @@ class JaxLogger:
 
         plt.close(fig)
 
-    def get_current_metrics(self) -> MetricHistory:
-        """Get current metric state if local logging is enabled."""
-        if self.use_local:
-            global _metric_buffer
-            return _metric_buffer.copy()  # Return copy to avoid mutation issues
-        return {}
-
     def finalize(self, handler: RunHandler) -> None:
         """Finalize logging and clean up. Must be called outside of jax.jit."""
         if self.use_local:
-            global _metric_buffer
-
-            handler.save_metrics(_metric_buffer)
-            fig = plot_metrics(_metric_buffer)
+            handler.save_metrics()
+            fig = plot_metrics(handler.metric_buffer)
             handler.save_metrics_figure(fig)
             plt.close(fig)
 
-            _metric_buffer.clear()
-
         if self.use_wandb:
             wandb.finish()
+
+    def monitor_params(
+        self,
+        param_dict: dict[str, Array],
+        handler: RunHandler,
+        context: str = "update",
+    ) -> None:
+        """Monitor parameters for NaNs and save state if found. Safe to call within jax.jit-compiled functions."""
+        # Check for NaNs using vectorized JAX operations
+        has_any_nans = False
+        for p in param_dict.values():
+            has_any_nans = jnp.logical_or(has_any_nans, jnp.any(jnp.isnan(p)))
+
+        # Define the IO callback function
+        def save_debug(params: dict[str, Array]) -> None:
+            handler.save_debug_state(params, context)
+            log.error(f"NaNs detected in {context}")
+            raise ValueError(f"NaN values detected in {context}")
+
+        # Function for no-op case
+        def no_op(_: None) -> None:
+            pass
+
+        # Only execute the IO callback if NaNs exist
+        def call_io(_: Any) -> None:
+            io_callback(save_debug, None, param_dict)
+
+        # Use JAX conditional to only execute callback when needed
+        jax.lax.cond(has_any_nans, call_io, no_op, None)
