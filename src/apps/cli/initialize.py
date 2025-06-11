@@ -190,6 +190,8 @@ def initialize_run(
         run_id_override=cfg.run_id,
     )
 
+    logger.set_metric_buffer(handler.load_metrics())
+
     # wandb is the authory on the run_id
     cfg.run_id = logger.run_id
 
