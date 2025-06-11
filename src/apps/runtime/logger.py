@@ -78,7 +78,7 @@ class Logger:
                 group=self.group,
                 job_type=self.job_type,
                 dir=self.run_dir,
-                id=self.run_id,
+                id=self.run_id_override,
                 resume="allow",
             )
             wandb.define_metric("epoch")
