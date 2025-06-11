@@ -18,7 +18,7 @@ from apps.interface import (
     ClusteringDataset,
     ClusteringExperiment,
 )
-from apps.runtime import STATS_NUM, JaxLogger, MetricDict, RunHandler
+from apps.runtime import STATS_NUM, Logger, MetricDict, RunHandler
 
 from ..base import LGM, HMoG
 from .base import (
@@ -55,7 +55,7 @@ INFO_LEVEL = jnp.array(logging.INFO)
 def pre_log_epoch_metrics[H: LGM](
     dataset: ClusteringDataset,
     model: H,
-    logger: JaxLogger,
+    logger: Logger,
     params: Point[Natural, H],
     epoch: Array,
     initial_metrics: MetricDict,
@@ -187,7 +187,7 @@ def pre_log_epoch_metrics[H: LGM](
 def log_epoch_metrics[H: HMoG](
     dataset: ClusteringDataset,
     model: H,
-    logger: JaxLogger,
+    logger: Logger,
     params: Point[Natural, H],
     epoch: Array,
     initial_metrics: MetricDict,
@@ -390,7 +390,7 @@ def log_epoch_metrics[H: HMoG](
 def log_artifacts[M: HMoG](
     handler: RunHandler,
     dataset: ClusteringDataset,
-    logger: JaxLogger,
+    logger: Logger,
     experiment: ClusteringExperiment,
     model: M,
     epoch: int,
@@ -417,7 +417,7 @@ def log_artifacts[M: HMoG](
     ]
 
     for analysis in analyses:
-        analysis.process(key, handler, dataset, model, logger, epoch, params_array)
+        analysis.process(key, handler, logger, dataset, model, epoch, params_array)
 
     # Conditional analyses for labeled datasets
     if dataset.has_labels:
@@ -428,11 +428,11 @@ def log_artifacts[M: HMoG](
         ]
 
         for analysis in merge_analyses:
-            analysis.process(key, handler, dataset, model, logger, epoch, params_array)
+            analysis.process(key, handler, logger, dataset, model, epoch, params_array)
 
     # Dataset-specific analyses
     specialized_analyses = dataset.get_dataset_analyses()
     for name, analysis in specialized_analyses.items():
         # For dataset-specific analyses, we might need to pass cluster assignments
         # This would be handled through the dataset's interface
-        analysis.process(key, handler, dataset, experiment, logger, epoch, params_array)
+        analysis.process(key, handler, logger, dataset, experiment, epoch, params_array)

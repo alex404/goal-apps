@@ -175,20 +175,22 @@ def initialize_run(
         run_name=cfg.run_name,
         project_root=proot,
         run_dir=run_dir,
-        requested_epoch=cfg.epoch,
+        requested_epoch=cfg.from_epoch,
         from_scratch=cfg.from_scratch,
     )
 
     logger = Logger(
-        handler=handler,
-        use_wandb=cfg.use_wandb,
+        run_name=cfg.run_name,
+        run_dir=run_dir,
         use_local=cfg.use_local,
+        use_wandb=cfg.use_wandb,
         project=cfg.project,
         group=cfg.group,
         job_type=cfg.job_type,
-        run_id=cfg.run_id,
+        run_id_override=cfg.run_id,
     )
 
+    # wandb is the authory on the run_id
     cfg.run_id = logger.run_id
 
     # update cfg with handler run_id

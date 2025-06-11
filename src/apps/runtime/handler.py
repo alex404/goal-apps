@@ -1,8 +1,7 @@
-"""Shared utilities for GOAL examples."""
-
-from __future__ import annotations
+"""Manages file IO and organization for a single run in a machine learning experiment."""
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import joblib
@@ -19,6 +18,7 @@ log = logging.getLogger(__name__)
 ### Run Handler ###
 
 
+@dataclass(frozen=True)
 class RunHandler:
     """Handles file management and organization for a single run."""
 
@@ -29,66 +29,10 @@ class RunHandler:
     """Root directory of the project."""
     run_dir: Path
     """Directory for this specific run, containing all artifacts and logs."""
-
-    from_epoch: int | None
-    """Epoch to resume from, or None for a fresh run."""
+    requested_epoch: int | None
+    """Epoch to resume from, or None for auto logic."""
     from_scratch: bool
     """Whether analysis should start from scratch or used existing artifacts."""
-
-    # Metric buffer for local runs
-    _metric_buffer: MetricHistory
-
-    def __init__(
-        self,
-        run_name: str,
-        project_root: Path,
-        run_dir: Path,
-        requested_epoch: int | None,
-        from_scratch: bool,
-    ):
-        """Initialize the run handler."""
-
-        # Simple attribute assignments
-        self.run_name = run_name
-        self.project_root = project_root
-        self.run_dir = run_dir
-        self.from_scratch = from_scratch
-
-        # Resolve from_epoch
-        if not self.available_epochs:
-            self.from_epoch = None
-            if requested_epoch is not None:
-                logging.warning(
-                    f"Requested epoch {requested_epoch} does not exist. Starting fresh run.",
-                )
-        elif requested_epoch is None:
-            self.from_epoch = max(self.available_epochs)
-
-        else:
-            valid_epochs = [e for e in self.available_epochs if e <= requested_epoch]
-            self.from_epoch = max(valid_epochs) if valid_epochs else None
-
-        # Initialize metric buffer
-        metrics_path = self.run_dir / "metrics.joblib"
-
-        if not metrics_path.exists():
-            self._metric_buffer = {}
-
-        else:
-            full_metrics = joblib.load(metrics_path)
-
-            # If resuming, only return metrics up to the resume point
-            if self.from_epoch is not None:
-                self._metric_buffer = {
-                    metric_name: [
-                        (epoch, value)
-                        for epoch, value in values
-                        if epoch <= self.from_epoch
-                    ]
-                    for metric_name, values in full_metrics.items()
-                }
-            else:
-                self._metric_buffer = {}
 
     ### Public Properties ###
 
@@ -96,6 +40,11 @@ class RunHandler:
     def cache_dir(self) -> Path:
         """Directory for cached data (e.g., datasets)."""
         return self.project_root / ".cache"
+
+    @property
+    def metrics_path(self) -> Path:
+        """Path to the metrics file for this run."""
+        return self.run_dir / "metrics.joblib"
 
     @property
     def available_epochs(self) -> list[int]:
@@ -107,18 +56,26 @@ class RunHandler:
         )
 
     @property
-    def metric_buffer(self) -> MetricHistory:
-        """Get the metric buffer for this run."""
-        return self._metric_buffer
+    def from_epoch(self) -> int | None:
+        """Verified epoch to resume from, or None if starting fresh."""
+        # Resolve from_epoch
+        if not self.available_epochs:
+            return None
+
+        if self.requested_epoch is None:
+            return max(self.available_epochs)
+
+        valid_epochs = [e for e in self.available_epochs if e <= self.requested_epoch]
+        return max(valid_epochs) if valid_epochs else None
 
     ### Public Methods ###
 
-    def save_params(self, params: Array, epoch: int, name: str = "params") -> None:
+    def save_params(self, params: Array, epoch: int) -> None:
         """Save parameters at a given epoch."""
-        path = self._get_params_path(epoch, name)
+        path = self._get_params_path(epoch)
         joblib.dump(params, path)
 
-    def load_params(self, name: str = "params") -> Array:
+    def load_params(self) -> Array:
         """Load parameters from the resolved epoch.
 
         Raises:
@@ -128,13 +85,30 @@ class RunHandler:
         if self.from_epoch is None:
             raise RuntimeError("Cannot load params: from_epoch is None (fresh run)")
 
-        return joblib.load(self._get_params_path(self.from_epoch, name))
+        return joblib.load(self._get_params_path(self.from_epoch))
 
-    def save_metrics(self) -> None:
+    def save_metrics(self, metrics: MetricHistory) -> None:
         """Save training metrics."""
-        if self._metric_buffer != {}:
-            path = self.run_dir / "metrics.joblib"
-            joblib.dump(self._metric_buffer, path)
+        path = self.run_dir / "metrics.joblib"
+        joblib.dump(metrics, path)
+
+    def load_metrics(self) -> MetricHistory:
+        if not self.metrics_path.exists():
+            return {}
+
+        full_metrics = joblib.load(self.metrics_path)
+
+        # If resuming, only return metrics up to the resume point
+        if self.from_epoch is not None:
+            return {
+                metric_name: [
+                    (epoch, value)
+                    for epoch, value in values
+                    if epoch <= self.from_epoch
+                ]
+                for metric_name, values in full_metrics.items()
+            }
+        return full_metrics
 
     def save_metrics_figure(self, fig: Figure) -> None:
         """Save the metrics summary figure."""
@@ -201,7 +175,7 @@ class RunHandler:
         plots_dir.mkdir(exist_ok=True)
         return plots_dir / f"{to_snake_case(artifact_class.__name__)}.png"
 
-    def _get_params_path(self, epoch: int, name: str) -> Path:
+    def _get_params_path(self, epoch: int) -> Path:
         """Get the path for parameter files."""
         params_dir = self._get_epoch_dir(epoch)
-        return params_dir / f"{name}.joblib"
+        return params_dir / "params.joblib"

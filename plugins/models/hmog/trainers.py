@@ -28,7 +28,7 @@ from jax import Array
 from apps.interface import (
     ClusteringDataset,
 )
-from apps.runtime import STATS_NUM, JaxLogger, MetricDict, RunHandler
+from apps.runtime import STATS_NUM, Logger, MetricDict, RunHandler
 
 from .analysis.logging import log_epoch_metrics, pre_log_epoch_metrics
 from .base import LGM, HMoG, Mixture, fori
@@ -255,7 +255,7 @@ class FullGradientTrainer:
         self,
         handler: RunHandler,
         model: HMoG,
-        logger: JaxLogger,
+        logger: Logger,
         optimizer: Optimizer[Natural, HMoG],
     ) -> Callable[
         [tuple[OptState, Point[Natural, HMoG]], Array],
@@ -341,7 +341,7 @@ class FullGradientTrainer:
         handler: RunHandler,
         dataset: ClusteringDataset,
         model: HMoG,
-        logger: JaxLogger,
+        logger: Logger,
         learning_rate_scale: float,
         epoch_offset: int,
         params0: Point[Natural, HMoG],
@@ -493,7 +493,7 @@ class LGMPreTrainer:
         self,
         handler: RunHandler,
         model: LGM,
-        logger: JaxLogger,
+        logger: Logger,
         optimizer: Optimizer[Natural, LGM],
     ) -> Callable[
         [tuple[OptState, Point[Natural, LGM]], Array],
@@ -566,7 +566,7 @@ class LGMPreTrainer:
         handler: RunHandler,
         dataset: ClusteringDataset,
         model: LGM,
-        logger: JaxLogger,
+        logger: Logger,
         epoch_offset: int,
         params0: Point[Natural, LGM],
     ) -> Point[Natural, LGM]:
@@ -795,7 +795,7 @@ class MixtureGradientTrainer:
         handler: RunHandler,
         dataset: ClusteringDataset,
         model: HMoG,
-        logger: JaxLogger,
+        logger: Logger,
         learning_rate_scale: float,
         epoch_offset: int,
         params0: Point[Natural, HMoG],

@@ -104,7 +104,7 @@ class Experiment[D: Dataset](ABC):
             analysis.process(key, handler, logger, dataset, model, epoch, params)
 
         # 3. Save current metric state (periodic backup)
-        handler.save_metrics()
+        handler.save_metrics(logger.get_metric_buffer())
 
 
 ### Clustering Configs ###

@@ -69,5 +69,5 @@ class Analysis[D, M, T: Artifact](ABC):
 
         metrics = self.metrics(artifact)
 
-        logger.log_metrics(handler, metrics, jnp.array(epoch))
+        logger.log_metrics(metrics, jnp.array(epoch))
         logger.log_artifact(handler, epoch, artifact, lambda a: self.plot(a, dataset))

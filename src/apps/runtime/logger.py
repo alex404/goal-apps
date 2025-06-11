@@ -1,9 +1,8 @@
-"""Shared utilities for GOAL examples."""
-
-from __future__ import annotations
+"""Logger for JAX-based applications. Isolates logging functionality from the main application logic, allowing for isolated inclusion of logging frameworks like e.g. Weight and Biases."""
 
 import logging
-import os
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 import jax
@@ -15,15 +14,19 @@ from jax.experimental import io_callback
 from matplotlib.figure import Figure
 
 from .handler import RunHandler
-from .util import Artifact, MetricDict, plot_metrics
+from .util import Artifact, MetricDict, MetricHistory, plot_metrics
 
 ## Logging ###
 
 log = logging.getLogger(__name__)
 
+# Global metric buffer
+_metric_buffer: MetricHistory = {}
+
 ### Artifacts ###
 
 
+@dataclass(frozen=True)
 class Logger:
     """Logger supporting both local and wandb logging.
 
@@ -38,52 +41,73 @@ class Logger:
         - finalize: For cleanup and final logging
     """
 
+    run_name: str
+    """Name of the run, used for wandb and local logging."""
+    run_dir: Path
+    """Directory for this specific run, containing all artifacts and logs."""
     use_local: bool
-    use_wandb: bool
+    """Whether to log metrics and figures locally."""
 
     # wandb
-    run_id: str | None
+    use_wandb: bool
+    """Whether to log metrics and figures to Weights & Biases."""
+    run_id_override: str | None
+    """Override for the run ID, if provided."""
+    project: str
+    """Weights & Biases project name."""
+    group: str | None
+    """Weights & Biases group name for organizing runs."""
+    job_type: str | None
+    """Weights & Biases job type for categorizing runs."""
 
-    def __init__(
-        self,
-        handler: RunHandler,
-        use_wandb: bool,
-        use_local: bool,
-        project: str,
-        group: str | None,
-        job_type: str | None,
-        run_id: str | None,
-    ) -> None:
+    def __post_init__(self) -> None:
         """Initialize logger with desired logging destinations."""
-        self.use_wandb = use_wandb
-        self.use_local = use_local
+        global _metric_buffer
+
+        # Clear or load metric buffer based on whether we're resuming
+        if self.use_local:
+            # Since Logger doesn't have direct access to handler.from_epoch,
+            # we'll let the handler load metrics and call set_metric_buffer
+            _metric_buffer.clear()
 
         # Initialize wandb
-        if use_wandb:
+        if self.use_wandb:
             wandb.init(
-                project=project,
-                name=handler.run_name,
-                group=group,
-                job_type=job_type,
-                dir=handler.run_dir,
-                id=run_id,
+                project=self.project,
+                name=self.run_name,
+                group=self.group,
+                job_type=self.job_type,
+                dir=self.run_dir,
+                id=self.run_id,
                 resume="allow",
             )
             wandb.define_metric("epoch")
             wandb.define_metric("*", step_metric="epoch")
 
-        self.run_id = run_id or os.environ.get("WANDB_RUN_ID")
+    @property
+    def run_id(self) -> str | None:
+        """Get run ID from override or environment."""
+        return wandb.run.id if wandb.run else None  # pyright: ignore[reportUnknownVariableType]
 
-    def log_metrics(
-        self, handler: RunHandler, metrics: MetricDict, epoch: Array
-    ) -> None:
+    @staticmethod
+    def set_metric_buffer(metrics: MetricHistory) -> None:
+        """Set the global metric buffer (used when resuming)."""
+        global _metric_buffer
+        _metric_buffer = metrics.copy()
+
+    @staticmethod
+    def get_metric_buffer() -> MetricHistory:
+        """Get a copy of the current metric buffer."""
+        return _metric_buffer.copy()
+
+    def log_metrics(self, metrics: MetricDict, epoch: Array) -> None:
         """Log metrics. Safe to call within jax.jit-compiled functions."""
-
-        metric_buffer = handler.metric_buffer
+        # Capture variables for closure
         use_local = self.use_local
         use_wandb = self.use_wandb
 
         def _log_values(metrics_dict: MetricDict, epoch_array: Array) -> None:
+            global _metric_buffer
             epoch = int(epoch_array)
             # Convert arrays to floats
             float_metrics = {
@@ -93,9 +117,9 @@ class Logger:
 
             if use_local:
                 for key, (level, value) in float_metrics.items():
-                    if key not in metric_buffer:
-                        metric_buffer[key] = []
-                    metric_buffer[key].append((int(epoch), value))
+                    if key not in _metric_buffer:
+                        _metric_buffer[key] = []
+                    _metric_buffer[key].append((int(epoch), value))
                     log.log(
                         level,
                         "epoch %4d | %14s | %10.6f",
@@ -138,17 +162,6 @@ class Logger:
 
         plt.close(fig)
 
-    def finalize(self, handler: RunHandler) -> None:
-        """Finalize logging and clean up. Must be called outside of jax.jit."""
-        if self.use_local:
-            handler.save_metrics()
-            fig = plot_metrics(handler.metric_buffer)
-            handler.save_metrics_figure(fig)
-            plt.close(fig)
-
-        if self.use_wandb:
-            wandb.finish()
-
     def monitor_params(
         self,
         param_dict: dict[str, Array],
@@ -177,3 +190,20 @@ class Logger:
 
         # Use JAX conditional to only execute callback when needed
         jax.lax.cond(has_any_nans, call_io, no_op, None)
+
+    def finalize(self, handler: RunHandler) -> None:
+        """Finalize logging and clean up. Must be called outside of jax.jit."""
+        global _metric_buffer
+
+        if self.use_local:
+            # Save current buffer state
+            handler.save_metrics(_metric_buffer)
+            fig = plot_metrics(_metric_buffer)
+            handler.save_metrics_figure(fig)
+            plt.close(fig)
+
+        if self.use_wandb:
+            wandb.finish()
+
+        # Clear buffer after finalization
+        _metric_buffer.clear()
