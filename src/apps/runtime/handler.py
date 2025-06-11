@@ -93,6 +93,7 @@ class RunHandler:
         joblib.dump(metrics, path)
 
     def load_metrics(self) -> MetricHistory:
+        """Load training metrics from the run directory, up to the resolved epoch."""
         if not self.metrics_path.exists():
             return {}
 
