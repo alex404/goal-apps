@@ -115,7 +115,6 @@ class HMoGConfig(ClusteringExperimentConfig):
     n_clusters: int = 10
     lgm_noise_scale: float = 0.01
     mix_noise_scale: float = 0.01
-    pretrain: bool = False
 
     # Training configuration
     pre: PreTrainerConfig = field(default=MISSING)
@@ -130,8 +129,7 @@ class DifferentiableHMoGConfig(HMoGConfig):
 
     _target_: str = "plugins.models.hmog.experiment.HMoGExperiment"
     num_cycles: int = 10
-    lr_scale_init: float = 0.1
-    lr_scale_final: float = 0.1
+    lr_scales: list[float] = field(default_factory=lambda: [])
     defaults: list[Any] = field(default_factory=lambda: cycle_defaults)
 
 
@@ -159,7 +157,6 @@ class ProjectionHMoGConfig(ClusteringExperimentConfig):
     _target_: str = "plugins.models.hmog.projection.ProjectionHMoGExperiment"
 
     # Experiment architecture
-    pretrain: bool = False
     data_dim: int = MISSING
     latent_dim: int = 10
     n_clusters: int = 10

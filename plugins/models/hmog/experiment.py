@@ -8,7 +8,7 @@ from typing import Any, override
 
 import jax
 import jax.numpy as jnp
-import optax
+import numpy as np
 from goal.geometry import (
     Diagonal,
     Natural,
@@ -52,6 +52,28 @@ from .trainers import (
 # Start logger
 log = logging.getLogger(__name__)
 
+# Helpers
+
+
+def cycle_lr_schedule(keypoints: list[float], num_cycles: int) -> list[float]:
+    """Return a list of `num_cycles` learning rate multipliers by interpolating keypoints."""
+    n = len(keypoints)
+
+    if n == 0:
+        return [1.0] * num_cycles
+    if n == 1:
+        return [keypoints[0]] * num_cycles
+
+    if num_cycles < n:
+        log.warning(f"Too many keypoints ({n}) for {num_cycles} cycles. Subsampling.")
+        indices = np.linspace(0, n - 1, num=num_cycles).round().astype(int)
+        return [keypoints[i] for i in indices]
+
+    x_keypoints = np.linspace(0, num_cycles - 1, num=n)
+    x_full = np.arange(num_cycles)
+    schedule = np.interp(x_full, x_keypoints, keypoints)
+    return schedule.tolist()
+
 
 ### HMog Experiment ###
 
@@ -73,8 +95,6 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
     lgm_noise_scale: float
     mix_noise_scale: float
 
-    pretrain: bool
-
     def __init__(
         self,
         data_dim: int,
@@ -84,12 +104,10 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
         lgm: FullGradientTrainer,
         mix: MixtureGradientTrainer,
         full: FullGradientTrainer,
-        lr_scale_init: float,
-        lr_scale_final: float,
+        lr_scales: list[float],
         num_cycles: int,
         lgm_noise_scale: float,
         mix_noise_scale: float,
-        pretrain: bool,
     ) -> None:
         super().__init__()
 
@@ -109,13 +127,10 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
         self.full = full
 
         self.num_cycles = num_cycles
-        self.lr_scale_init = lr_scale_init
-        self.lr_scale_final = lr_scale_final
+        self.lr_schedule = cycle_lr_schedule(lr_scales, num_cycles)
 
         self.lgm_noise_scale = lgm_noise_scale
         self.mix_noise_scale = mix_noise_scale
-
-        self.pretrain = pretrain
 
     # Properties
 
@@ -316,21 +331,12 @@ class HMoGExperiment(HierarchicalClusteringExperiment, ABC):
             params = self.model.join_params(obs_params, int_params, lat_params)
             epoch = self.pre.n_epochs
 
-        # cosine lr schedule
-        multiplier_schedule = optax.cosine_onecycle_schedule(
-            transition_steps=self.num_cycles,
-            peak_value=1.0,  # Maximum multiplier value
-            pct_start=0.2,  # 30% of steps for warmup
-            div_factor=1 / self.lr_scale_init,
-            final_div_factor=1 / self.lr_scale_final,
-        )
-
         # Cycle between Mixture and LGM training
         for cycle in range(current_cycle, self.num_cycles):
-            current_lr_scale = float(multiplier_schedule(cycle))
+            current_lr_scale = self.lr_schedule[cycle]
             key_lgm, key_mix, key_full = jax.random.split(cycle_keys[cycle], 3)
             log.info("Starting training cycle %d", cycle + 1)
-            log.info(f"Learning rate scale: {current_lr_scale:.2e}")
+            log.info(f"Learning rate scale: {current_lr_scale:.3f}")
 
             # Train LGM (mixture params fixed)
             if self.lgm.n_epochs > 0:
