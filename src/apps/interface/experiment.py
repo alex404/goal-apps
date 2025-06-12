@@ -106,6 +106,8 @@ class Experiment[D: Dataset](ABC):
         # 3. Save current metric state (periodic backup)
         handler.save_metrics(logger.get_metric_buffer())
 
+        log.info(f"Epoch {epoch} checkpoint complete.")
+
 
 ### Clustering Configs ###
 

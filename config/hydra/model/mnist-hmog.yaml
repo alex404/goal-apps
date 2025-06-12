@@ -34,7 +34,7 @@ mix:
   l2_reg: ${model.pre.l2_reg}
 
 full:
-  lr: 3e-4
+  lr: 1e-3
   n_epochs: 100
   batch_steps: 1000
   grad_clip: 1
