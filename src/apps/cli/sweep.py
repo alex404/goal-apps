@@ -53,7 +53,7 @@ def create_sweep_config(overrides: list[str]) -> dict[str, Any]:
             "${env}",
             "${interpreter}",
             "-m",
-            "apps.cli",
+            "apps.cli.main",
             "train",
             "${args_no_hyphens}",
         ],

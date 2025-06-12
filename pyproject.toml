@@ -11,7 +11,7 @@ dependencies = [
     "wandb",
     "typer",
     "pandas",
-    "h5py",
+    "joblib",
     "tables",
 ]
 
