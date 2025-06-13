@@ -3,9 +3,9 @@ defaults:
   - _self_
 
 latent_dim: 50
-n_clusters: 400
+n_clusters: 200
 
-lr_scales: [0.2,1,0.1]
+lr_scales: [1,0.2,0.1]
 num_cycles: 3
 
 pre:
@@ -18,7 +18,7 @@ mix:
   n_epochs: 0
 
 full:
-  lr: 1e-3
+  lr: 3e-4
   n_epochs: 100
   batch_steps: 1000
   grad_clip: 1

@@ -192,13 +192,6 @@ def initialize_run(
 
     logger.set_metric_buffer(handler.load_metrics())
 
-    # wandb is the authory on the run_id
-    cfg.run_id = logger.run_id
-
-    # update cfg with handler run_id
-    OmegaConf.save(cfg, saved_config_path)
-    print_config_tree(OmegaConf.to_yaml(cfg, resolve=True))
-
     # Initialize JAX
     setup_jax(device=cfg.device, disable_jit=not cfg.jit)
 
@@ -219,6 +212,14 @@ def initialize_run(
     # Instantiate model
     log.info("Loading model...")
     model: Model[Dataset] = instantiate(cfg.model, data_dim=dataset.data_dim)
+
+    # update cfg with handler run_id
+
+    # wandb is the authory on the run_id
+    cfg.model.data_dim = dataset.data_dim
+
+    logger.log_config(OmegaConf.to_container(cfg, resolve=True))  # pyright: ignore[reportArgumentType]
+    print_config_tree(OmegaConf.to_yaml(cfg, resolve=True))
 
     # will return logger as well
     return handler, logger, dataset, model
