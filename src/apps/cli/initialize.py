@@ -20,7 +20,7 @@ from rich.theme import Theme
 
 from ..interface import (
     Dataset,
-    Experiment,
+    Model,
 )
 from ..runtime import Logger, LogLevel, RunHandler
 from .configs import RunConfig
@@ -146,7 +146,7 @@ def make_run_dir(
 def initialize_run(
     run_type: type[RunConfig],
     overrides: list[str],
-) -> tuple[RunHandler, Logger, Dataset, Experiment[Dataset]]:
+) -> tuple[RunHandler, Logger, Dataset, Model[Dataset]]:
     """Initialize a new run with hydra config and wandb logging."""
     cs = ConfigStore.instance()
     cs.store(name="config_schema", node=run_type)
@@ -218,7 +218,7 @@ def initialize_run(
 
     # Instantiate model
     log.info("Loading model...")
-    model: Experiment[Dataset] = instantiate(cfg.model, data_dim=dataset.data_dim)
+    model: Model[Dataset] = instantiate(cfg.model, data_dim=dataset.data_dim)
 
     # will return logger as well
     return handler, logger, dataset, model

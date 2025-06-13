@@ -25,7 +25,7 @@ from apps.interface import (
     Analysis,
     ClusteringDataset,
     ClusteringDatasetConfig,
-    HierarchicalClusteringExperiment,
+    HierarchicalClusteringModel,
 )
 from apps.runtime import Artifact, MetricDict, RunHandler
 
@@ -528,7 +528,7 @@ class BadenBerens(Artifact):
 
 @dataclass(frozen=True)
 class BadenBerensAnalysis(
-    Analysis[ClusteringDataset, HierarchicalClusteringExperiment, BadenBerens]
+    Analysis[ClusteringDataset, HierarchicalClusteringModel, BadenBerens]
 ):
     """Baden-Berens style analysis comparing clustering with ground truth cell types."""
 
@@ -545,7 +545,7 @@ class BadenBerensAnalysis(
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: HierarchicalClusteringExperiment,
+        model: HierarchicalClusteringModel,
         epoch: int,
         params: Array,
     ) -> BadenBerens:

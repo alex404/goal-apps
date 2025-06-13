@@ -30,7 +30,7 @@ from apps.interface import (
 )
 from apps.runtime import STATS_NUM, Logger, MetricDict, RunHandler
 
-from .analysis.logging import log_epoch_metrics, pre_log_epoch_metrics
+from .analysis.metrics import log_epoch_metrics, pre_log_epoch_metrics
 from .base import LGM, HMoG, Mixture, fori
 
 ### Constants ###

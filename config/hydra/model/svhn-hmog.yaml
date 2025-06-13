@@ -2,24 +2,23 @@ defaults:
   - hmog_diff
   - _self_
 
-latent_dim: 100
-n_clusters: 100
+latent_dim: 20
+n_clusters: 20
 
-lr_scale_init: 1
-lr_scale_final: 1
+lr_scales: [1]
 num_cycles: 10
 
 lgm_noise_scale: 0.01
-mix_noise_scale: 0.01
+mix_noise_scale: 0.000001
 
 pre:
-  lr: 1e-5
-  n_epochs: 50000
+  lr: 1e-6
+  n_epochs: 5000
   batch_steps: 1000
   l1_reg: 1e-3
-  l2_reg: 0
+  l2_reg: 1e-4
   grad_clip: 1
-  min_var: 1e-5
+  min_var: 1e-3
   jitter_var: 0
 
 lgm:
@@ -27,19 +26,19 @@ lgm:
 
 mix:
   lr: 1e-5
-  n_epochs: 0
+  n_epochs: 500
   batch_steps: 1000
   grad_clip: 1
   min_prob: 1e-4
-  lat_min_var: 1e-3
-  upr_prs_reg: 1e-3
-  lwr_prs_reg: 1e-3
+  lat_min_var: 1e-6
+  upr_prs_reg: 1e-4
+  lwr_prs_reg: 1e-4
   l1_reg: ${model.pre.l1_reg}
   l2_reg: ${model.pre.l2_reg}
 
 full:
-  lr: 3e-6
-  n_epochs: 1000
+  lr: 1e-5
+  n_epochs: 500
   batch_steps: 1000
   grad_clip: 1
   min_prob: ${model.mix.min_prob}

@@ -23,11 +23,11 @@ from jax import Array
 
 from apps.interface import (
     ClusteringDataset,
-    ClusteringExperiment,
+    ClusteringModel,
 )
 from apps.runtime import JaxLogger, RunHandler
 
-from .analysis.logging import AnalysisArgs, log_artifacts, log_epoch_metrics
+from .analysis.metrics import log_epoch_metrics
 from .base import HMoG, Mixture, fori
 from .trainers import LGMPreTrainer
 
@@ -282,8 +282,8 @@ class ProjectionTrainer:
         return params_final
 
 
-class ProjectionHMoGExperiment(ClusteringExperiment):
-    """Experiment framework for projection-based HMoG training.
+class ProjectionHMoGModel(ClusteringModel):
+    """Model framework for projection-based HMoG training.
 
     This approach trains a model in two phases:
     1. Use PreTrainer to learn a Linear Gaussian Model (LGM)
@@ -302,7 +302,6 @@ class ProjectionHMoGExperiment(ClusteringExperiment):
         n_clusters: int,
         pre: LGMPreTrainer,
         pro: ProjectionTrainer,
-        analysis: AnalysisArgs,
         lgm_noise_scale: float,
         mix_noise_scale: float,
         pretrain: bool,

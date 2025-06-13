@@ -16,9 +16,8 @@ from jax import Array
 
 from apps.interface import (
     ClusteringDataset,
-    ClusteringExperiment,
 )
-from apps.runtime import STATS_NUM, Logger, MetricDict, RunHandler
+from apps.runtime import STATS_NUM, Logger, MetricDict
 
 from ..base import LGM, HMoG
 from .base import (
@@ -27,18 +26,6 @@ from .base import (
     cluster_assignments,
     clustering_nmi,
     update_stats,
-)
-from .clusters import ClusterStatisticsAnalysis
-from .generative import GenerativeExamplesAnalysis
-from .hierarchy import (
-    CoAssignmentHierarchyAnalysis,
-    KLHierarchyAnalysis,
-)
-from .loadings import LoadingMatrixAnalysis
-from .merge import (
-    CoAssignmentMergeAnalysis,
-    KLMergeAnalysis,
-    OptimalMergeAnalysis,
 )
 
 # Start logger
@@ -379,60 +366,3 @@ def log_epoch_metrics[H: HMoG](
         return None
 
     jax.lax.cond(epoch % log_freq == 0, compute_metrics, no_op)
-
-
-### Log Artifacts ###
-
-
-# In plugins/models/hmog/analysis/logging.py
-
-
-def log_artifacts[M: HMoG](
-    handler: RunHandler,
-    dataset: ClusteringDataset,
-    logger: Logger,
-    experiment: ClusteringExperiment,
-    model: M,
-    epoch: int,
-    params: Point[Natural, M] | None = None,
-    key: Array | None = None,
-) -> None:
-    """Generate and save plots from artifacts."""
-
-    if key is None:
-        key = jax.random.PRNGKey(42)
-
-    if params is not None:
-        handler.save_params(params.array, epoch)
-
-    # Convert params to array if provided
-    params_array = params.array if params is not None else None
-
-    analyses = [
-        ClusterStatisticsAnalysis(),
-        KLHierarchyAnalysis(),
-        CoAssignmentHierarchyAnalysis(),
-        GenerativeExamplesAnalysis(n_samples=1000),
-        LoadingMatrixAnalysis(),
-    ]
-
-    for analysis in analyses:
-        analysis.process(key, handler, logger, dataset, model, epoch, params_array)
-
-    # Conditional analyses for labeled datasets
-    if dataset.has_labels:
-        merge_analyses = [
-            KLMergeAnalysis(True, 0.0005),
-            CoAssignmentMergeAnalysis(True, 0.0005),
-            OptimalMergeAnalysis(True, 0.0005),
-        ]
-
-        for analysis in merge_analyses:
-            analysis.process(key, handler, logger, dataset, model, epoch, params_array)
-
-    # Dataset-specific analyses
-    specialized_analyses = dataset.get_dataset_analyses()
-    for name, analysis in specialized_analyses.items():
-        # For dataset-specific analyses, we might need to pass cluster assignments
-        # This would be handled through the dataset's interface
-        analysis.process(key, handler, logger, dataset, experiment, epoch, params_array)

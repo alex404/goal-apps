@@ -5,23 +5,23 @@ from .dataset import (
     Dataset,
     DatasetConfig,
 )
-from .experiment import (
-    ClusteringExperiment,
-    ClusteringExperimentConfig,
-    Experiment,
-    ExperimentConfig,
-    HierarchicalClusteringExperiment,
+from .model import (
+    ClusteringModel,
+    ClusteringModelConfig,
+    HierarchicalClusteringModel,
+    Model,
+    ModelConfig,
 )
 
 __all__ = [
     "Analysis",
     "ClusteringDataset",
     "ClusteringDatasetConfig",
-    "ClusteringExperiment",
-    "ClusteringExperimentConfig",
+    "ClusteringModel",
+    "ClusteringModelConfig",
     "Dataset",
     "DatasetConfig",
-    "Experiment",
-    "ExperimentConfig",
-    "HierarchicalClusteringExperiment",
+    "HierarchicalClusteringModel",
+    "Model",
+    "ModelConfig",
 ]

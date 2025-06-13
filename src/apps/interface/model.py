@@ -14,18 +14,22 @@ from .dataset import ClusteringDataset, Dataset
 
 log = logging.getLogger(__name__)
 
-### Generic Experiments ###
+### Generic Models ###
 
 
 @dataclass
-class ExperimentConfig:
+class ModelConfig:
     """Base configuration for models."""
 
     _target_: str
 
 
-class Experiment[D: Dataset](ABC):
-    """Root class for all models."""
+class Model[D: Dataset](ABC):
+    """
+    Base class for statistical models with their training procedures.
+
+    In this library, a 'model' encompasses more than just the statistical model itself, but also the training algorithm optimized for that model's structure, and analysis methods specific to the model.
+    """
 
     @property
     @abstractmethod
@@ -50,7 +54,7 @@ class Experiment[D: Dataset](ABC):
         logger: Logger,
         dataset: D,
     ) -> None:
-        """Evaluate model on dataset."""
+        """Train model on dataset."""
 
     @abstractmethod
     def initialize_model(self, key: Array, data: Array) -> Array:
@@ -65,7 +69,7 @@ class Experiment[D: Dataset](ABC):
             data: Training data for initialization
 
         Returns:
-            Model parameters as Array
+            Model parameters
         """
         if handler.from_epoch is None:
             # Fresh run - initialize
@@ -79,8 +83,7 @@ class Experiment[D: Dataset](ABC):
     def get_analyses(self, dataset: D) -> list[Analysis[D, Any, Any]]:
         """Return a list of analyses to run after training.
 
-        Each analysis should be an instance of Analysis with the appropriate
-        dataset and model types.
+        Each analysis should be an instance of Analysis with the appropriate dataset and model types.
         """
         pass
 
@@ -113,7 +116,7 @@ class Experiment[D: Dataset](ABC):
 
 
 @dataclass
-class ClusteringExperimentConfig(ExperimentConfig):
+class ClusteringModelConfig(ModelConfig):
     """Base configuration for clustering models."""
 
     _target_: str
@@ -121,7 +124,7 @@ class ClusteringExperimentConfig(ExperimentConfig):
     n_clusters: int = MISSING
 
 
-class ClusteringExperiment(Experiment[ClusteringDataset], ABC):
+class ClusteringModel(Model[ClusteringDataset], ABC):
     """Abstract base class for all unsupervised models."""
 
     @property
@@ -166,8 +169,8 @@ class ClusteringExperiment(Experiment[ClusteringDataset], ABC):
         """Evaluate model on dataset."""
 
 
-class HierarchicalClusteringExperiment(ClusteringExperiment, ABC):
-    """Clustering experiment that supports hierarchical analysis."""
+class HierarchicalClusteringModel(ClusteringModel, ABC):
+    """Clustering model that supports hierarchical analysis."""
 
     @abstractmethod
     def get_cluster_hierarchy(self, handler: RunHandler, epoch: int) -> Array:

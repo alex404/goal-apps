@@ -10,7 +10,7 @@ from omegaconf import MISSING
 
 from ..interface import (
     ClusteringDatasetConfig,
-    ClusteringExperimentConfig,
+    ClusteringModelConfig,
 )
 from ..runtime import LogLevel
 
@@ -51,5 +51,5 @@ class ClusteringRunConfig(RunConfig):
     """Base configuration for clustering simulations."""
 
     dataset: ClusteringDatasetConfig = MISSING
-    model: ClusteringExperimentConfig = MISSING
+    model: ClusteringModelConfig = MISSING
     defaults: list[Any] = field(default_factory=lambda: defaults)

@@ -8,7 +8,7 @@ from typing import Any
 from hydra.core.config_store import ConfigStore
 from omegaconf import MISSING
 
-from apps.interface import ClusteringExperimentConfig
+from apps.interface import ClusteringModelConfig
 
 ### Gradient Trainer Configs ###
 
@@ -108,8 +108,8 @@ cycle_defaults: list[Any] = [
 
 
 @dataclass
-class HMoGConfig(ClusteringExperimentConfig):
-    # Experiment architecture
+class HMoGConfig(ClusteringModelConfig):
+    # Model architecture
     data_dim: int = MISSING
     latent_dim: int = 10
     n_clusters: int = 10
@@ -127,7 +127,7 @@ class HMoGConfig(ClusteringExperimentConfig):
 class DifferentiableHMoGConfig(HMoGConfig):
     """HMoG configuration with cyclic training."""
 
-    _target_: str = "plugins.models.hmog.experiment.HMoGExperiment"
+    _target_: str = "plugins.models.hmog.model.HMoGModel"
     num_cycles: int = 10
     lr_scales: list[float] = field(default_factory=lambda: [])
     defaults: list[Any] = field(default_factory=lambda: cycle_defaults)
@@ -151,12 +151,12 @@ class ProjectionTrainerConfig:
 
 
 @dataclass
-class ProjectionHMoGConfig(ClusteringExperimentConfig):
+class ProjectionHMoGConfig(ClusteringModelConfig):
     """Configuration for projection-based HMoG training."""
 
-    _target_: str = "plugins.models.hmog.projection.ProjectionHMoGExperiment"
+    _target_: str = "plugins.models.hmog.projection.ProjectionHMoGModel"
 
-    # Experiment architecture
+    # Model architecture
     data_dim: int = MISSING
     latent_dim: int = 10
     n_clusters: int = 10
