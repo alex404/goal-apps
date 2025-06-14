@@ -8,8 +8,8 @@ n_clusters: 20
 lr_scales: [1]
 num_cycles: 10
 
-lgm_noise_scale: 0.01
-mix_noise_scale: 0.000001
+lgm_noise_scale: 0.00001
+mix_noise_scale: 0.00001
 
 pre:
   lr: 1e-6

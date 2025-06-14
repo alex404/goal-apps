@@ -6,7 +6,10 @@ latent_dim: 50
 n_clusters: 200
 
 lr_scales: [1,0.2,0.1]
-num_cycles: 3
+num_cycles: 5
+
+lgm_noise_scale: 0.01
+mix_noise_scale: 0.01
 
 pre:
   n_epochs: 0
