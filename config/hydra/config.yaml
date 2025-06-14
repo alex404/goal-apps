@@ -12,7 +12,7 @@ log_level: INFO
 project: "goal"
 group: null
 job_type: null
-from_epoch: null
+resume_epoch: null
 sweep_id: null
 run_id: null
-from_scratch: false
+recompute_artifacts: true

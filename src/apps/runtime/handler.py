@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 import joblib
@@ -29,9 +30,9 @@ class RunHandler:
     """Root directory of the project."""
     run_dir: Path
     """Directory for this specific run, containing all artifacts and logs."""
-    requested_epoch: int | None
+    resume_epoch: int | None
     """Epoch to resume from, or None for auto logic."""
-    from_scratch: bool
+    recompute_artifacts: bool
     """Whether analysis should start from scratch or used existing artifacts."""
 
     ### Public Properties ###
@@ -55,18 +56,39 @@ class RunHandler:
             if d.is_dir()
         )
 
-    @property
-    def from_epoch(self) -> int | None:
+    @cached_property
+    def resolve_epoch(self) -> int | None:
         """Verified epoch to resume from, or None if starting fresh."""
-        # Resolve from_epoch
         if not self.available_epochs:
+            log.info("No existing checkpoints found. Starting fresh.")
             return None
 
-        if self.requested_epoch is None:
-            return max(self.available_epochs)
+        if self.resume_epoch is None:
+            latest = max(self.available_epochs)
+            log.info(
+                f"No epoch specified. Resuming from latest checkpoint: epoch {latest}"
+            )
+            return latest
 
-        valid_epochs = [e for e in self.available_epochs if e <= self.requested_epoch]
-        return max(valid_epochs) if valid_epochs else None
+        # Special case: explicit reset
+        if self.resume_epoch == 0:
+            log.info("Epoch 0 requested, starting fresh (explicit reset).")
+            return None
+
+        valid_epochs = [e for e in self.available_epochs if e <= self.resume_epoch]
+        if valid_epochs:
+            resume_epoch = max(valid_epochs)
+            if resume_epoch == self.resume_epoch:
+                log.info(f"Resuming from requested epoch {resume_epoch}")
+            else:
+                log.info(
+                    f"Resuming from epoch {resume_epoch} (latest checkpoint before requested epoch {self.resume_epoch})"
+                )
+            return resume_epoch
+        log.warning(
+            f"No checkpoint found at or before epoch {self.resume_epoch}. Available checkpoints: {sorted(self.available_epochs)}. Starting fresh."
+        )
+        return None
 
     ### Public Methods ###
 
@@ -82,10 +104,10 @@ class RunHandler:
             ValueError: If from_epoch is set but no params exist at that epoch
             RuntimeError: If from_epoch is None (shouldn't happen after resolution)
         """
-        if self.from_epoch is None:
+        if self.resolve_epoch is None:
             raise RuntimeError("Cannot load params: from_epoch is None (fresh run)")
 
-        return joblib.load(self._get_params_path(self.from_epoch))
+        return joblib.load(self._get_params_path(self.resolve_epoch))
 
     def save_metrics(self, metrics: MetricHistory) -> None:
         """Save training metrics."""
@@ -100,12 +122,12 @@ class RunHandler:
         full_metrics = joblib.load(self.metrics_path)
 
         # If resuming, only return metrics up to the resume point
-        if self.from_epoch is not None:
+        if self.resolve_epoch is not None:
             return {
                 metric_name: [
                     (epoch, value)
                     for epoch, value in values
-                    if epoch <= self.from_epoch
+                    if epoch <= self.resolve_epoch
                 ]
                 for metric_name, values in full_metrics.items()
             }

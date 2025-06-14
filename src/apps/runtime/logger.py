@@ -100,19 +100,16 @@ class Logger:
         """Get a copy of the current metric buffer."""
         return _metric_buffer.copy()
 
-    def log_config(self, config: dict[str, Any]) -> None:
+    def log_config(self) -> None:
         """Log the configuration dictionary to wandb."""
         # Save config to local file
-        config_path = self.run_dir / "config.json"
-        with open(config_path, "w") as f:
-            import json
-
-            json.dump(config, f, indent=2)
-            log.info(f"Configuration saved locally to {config_path}.")
-
         if self.use_wandb:
             # Log the entire config dictionary as a single artifact
-            wandb.save(str(config_path), base_path=self.run_dir)
+            wandb.save(
+                str(self.run_dir / "run-config.yaml"),
+                base_path=self.run_dir,
+                policy="now",
+            )
             log.info("Configuration logged to Weights & Biases.")
 
     def log_metrics(self, metrics: MetricDict, epoch: Array) -> None:

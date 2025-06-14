@@ -249,11 +249,11 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
     ) -> None:
         """Generate analysis artifacts from saved checkpoint results."""
 
-        if handler.from_epoch is None:
+        if handler.resolve_epoch is None:
             raise RuntimeError("No saved parameters found for analysis")
-        epoch = handler.from_epoch
+        epoch = handler.resolve_epoch
 
-        if handler.from_scratch:
+        if handler.recompute_artifacts:
             log.info("Recomputing artifacts from scratch.")
             # This shouldn't be necessary because key_model shouldn't be used, but just in case...
             key_check, key_model = jax.random.split(key, 2)
@@ -282,7 +282,7 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
         )
 
         # Track total epochs
-        epoch = handler.from_epoch or 0
+        epoch = handler.resolve_epoch or 0
 
         # Calculate training structure
         epochs_per_cycle = self.lgm.n_epochs + self.mix.n_epochs + self.full.n_epochs

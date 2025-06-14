@@ -60,18 +60,45 @@ def precision_regularizer(
     upr_prs_reg: float,
     lwr_prs_reg: float,
 ) -> tuple[Array, MetricDict]:
-    """Compute regularization based on log-determinant of precision matrices.
+    """Compute regularization based on precision matrix eigenvalues.
 
-    This regularization encourages components to have well-conditioned
-    precision matrices by penalizing small determinants. This improves
-    numerical stability and can prevent degenerate solutions.
+    This regularizer controls the condition number and scale of the latent
+    precision matrices by penalizing extreme eigenvalues:
+
+    R(Lambda) = upr_prs_reg * tr(Lambda) - lwr_prs_reg * log|Lambda|
+
+    where:
+    - tr(Lambda) = sum of eigenvalues (penalizes large eigenvalues)
+    - log|Lambda| = sum of log eigenvalues (penalizes small eigenvalues)
+
+    Mathematical insight: For a precision matrix with eigenvalues lambda_i,
+    the gradient of this regularizer is:
+
+        dR/dlambda_i = upr_prs_reg - lwr_prs_reg/lambda_i
+
+    Setting to zero gives the optimal eigenvalue: lambda* = lwr_prs_reg/upr_prs_reg
+
+    When upr_prs_reg = lwr_prs_reg:
+    - All eigenvalues are pushed toward 1
+    - Creates an isotropic latent space with uniform scaling
+    - This is the natural scale in information geometry
+    - Empirically gives best model performance in most cases
+
+    When upr_prs_reg != lwr_prs_reg:
+    - Eigenvalues pushed toward lwr_prs_reg/upr_prs_reg
+    - Use upr_prs_reg > lwr_prs_reg to encourage smaller eigenvalues (more regularization)
+    - Use upr_prs_reg < lwr_prs_reg to allow larger eigenvalues (less regularization)
+    - May be useful for specific domain knowledge or computational constraints
 
     Args:
         model: HMoG model
-        params: Model parameters
+        rho: Conjugation parameters
+        mix_params: Mixture parameters in natural coordinates
+        upr_prs_reg: Weight for trace penalty (controls upper bound on eigenvalues)
+        lwr_prs_reg: Weight for log-det penalty (controls lower bound on eigenvalues)
 
     Returns:
-        Regularization term (negative sum of log-determinants)
+        Tuple of (regularization_loss, metrics_dict)
     """
     con_mix_params = model.pst_lat_emb.translate(rho, mix_params)
     cmp_params, _ = model.con_upr_hrm.split_natural_mixture(con_mix_params)

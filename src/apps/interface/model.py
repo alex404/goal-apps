@@ -71,12 +71,12 @@ class Model[D: Dataset](ABC):
         Returns:
             Model parameters
         """
-        if handler.from_epoch is None:
+        if handler.resolve_epoch is None:
             # Fresh run - initialize
             log.info("Initializing model parameters")
             return self.initialize_model(key, data)
         # Continuation - load
-        log.info(f"Loading parameters from epoch {handler.from_epoch}")
+        log.info(f"Loading parameters from epoch {handler.resolve_epoch}")
         return handler.load_params()
 
     @abstractmethod

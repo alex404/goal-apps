@@ -31,10 +31,10 @@ class RunConfig:
     project: str
     group: str | None
     job_type: str | None
-    from_epoch: int | None
+    resume_epoch: int | None
     run_id: str | None
     sweep_id: str | None
-    from_scratch: bool
+    recompute_artifacts: bool
 
 
 defaults: list[Any] = [

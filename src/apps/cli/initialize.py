@@ -161,7 +161,7 @@ def initialize_run(
             project_root=proot, run_name=cfg.run_name, sweep_id=cfg.sweep_id
         )
 
-        saved_config_path = run_dir / "config.yaml"
+        saved_config_path = run_dir / "run-config.yaml"
 
         # overrides > saved config > defaults
         if saved_config_path.exists():
@@ -175,8 +175,8 @@ def initialize_run(
         run_name=cfg.run_name,
         project_root=proot,
         run_dir=run_dir,
-        requested_epoch=cfg.from_epoch,
-        from_scratch=cfg.from_scratch,
+        resume_epoch=cfg.resume_epoch,
+        recompute_artifacts=cfg.recompute_artifacts,
     )
 
     logger = Logger(
@@ -216,9 +216,12 @@ def initialize_run(
     # update cfg with handler run_id
 
     # wandb is the authory on the run_id
+    cfg.run_id = logger.run_id
     cfg.model.data_dim = dataset.data_dim
 
-    logger.log_config(OmegaConf.to_container(cfg, resolve=True))  # pyright: ignore[reportArgumentType]
+    log.info(f"Saving configuration to {saved_config_path}...")
+    OmegaConf.save(cfg, saved_config_path)
+    logger.log_config()
     print_config_tree(OmegaConf.to_yaml(cfg, resolve=True))
 
     # will return logger as well
