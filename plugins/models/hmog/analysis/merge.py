@@ -142,15 +142,16 @@ def distance_matrix_to_mapping(
 
 def _compute_metrics(
     mapping: Array, probs: Array, labels: Array
-) -> tuple[Array, float]:
-    """Compute accuracy and NMI for given mapping."""
-    from sklearn.metrics import normalized_mutual_info_score
+) -> tuple[Array, float, float]:
+    """Compute accuracy, NMI, and ARI for given mapping."""
+    from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
     merged_probs = jnp.matmul(probs, mapping)
     merged_assignments = jnp.argmax(merged_probs, axis=1)
     accuracy = cluster_accuracy(labels, merged_assignments)
     nmi = normalized_mutual_info_score(np.array(labels), np.array(merged_assignments))
-    return accuracy, float(nmi)
+    ari = adjusted_rand_score(np.array(labels), np.array(merged_assignments))
+    return accuracy, float(nmi), float(ari)
 
 
 ### Merge Results ###
@@ -164,8 +165,10 @@ class MergeResults(Artifact):
     mapping: NDArray[np.int32]  # Mapping from clusters to classes
     train_accuracy: float  # Training accuracy after mapping
     train_nmi_score: float  # NMI score on training data
+    train_ari_score: float  # ARI score on training data
     test_accuracy: float  # Test accuracy after mapping
     test_nmi_score: float  # NMI score on test data
+    test_ari_score: float  # ARI score on test data
     valid_clusters: Array  # Indices of valid clusters used in mapping
     similarity_type: str  # Similarity metric used
 
@@ -257,8 +260,10 @@ def generate_merge_results[M: HMoG, MR: MergeResults](
         mapping=np.array(full_mapping, dtype=np.int32),
         train_accuracy=float(train_metrics[0]),
         train_nmi_score=float(train_metrics[1]),
+        train_ari_score=float(train_metrics[2]),
         test_accuracy=float(test_metrics[0]),
         test_nmi_score=float(test_metrics[1]),
+        test_ari_score=float(test_metrics[2]),
         valid_clusters=valid_clusters,
         similarity_type=similarity_type,
     )
@@ -331,8 +336,8 @@ def merge_results_plotter(
 
         # Add overall title with metrics
         title = f"Merge Strategy: {results.similarity_type.capitalize()}\n"
-        title += f"Train Accuracy: {results.train_accuracy:.3f}, Train NMI: {results.train_nmi_score:.3f}\n"
-        title += f"Test Accuracy: {results.test_accuracy:.3f}, Test NMI: {results.test_nmi_score:.3f}\n"
+        title += f"Train Accuracy: {results.train_accuracy:.3f}, Train NMI: {results.train_nmi_score:.3f}, Train ARI: {results.train_ari_score:.3f}\n"
+        title += f"Test Accuracy: {results.test_accuracy:.3f}, Test NMI: {results.test_nmi_score:.3f}, Test ARI: {results.test_ari_score:.3f}\n"
         title += f"Using {len(results.valid_clusters)}/{n_clusters} valid clusters"
 
         fig.suptitle(title, fontsize=14)
@@ -398,6 +403,10 @@ class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
                 STATS_LEVEL,
                 jnp.array(artifact.train_nmi_score),
             ),
+            "Merging/Optimal Train ARI": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_ari_score),
+            ),
             "Merging/Optimal Test Accuracy": (
                 STATS_LEVEL,
                 jnp.array(artifact.test_accuracy),
@@ -405,6 +414,10 @@ class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
             "Merging/Optimal Test NMI": (
                 STATS_LEVEL,
                 jnp.array(artifact.test_nmi_score),
+            ),
+            "Merging/Optimal Test ARI": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_ari_score),
             ),
         }
 
@@ -428,6 +441,10 @@ class KLMergeAnalysis(MergeAnalysis[KLMergeResults]):
                 STATS_LEVEL,
                 jnp.array(artifact.train_nmi_score),
             ),
+            "Merging/KL Train ARI": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_ari_score),
+            ),
             "Merging/KL Test Accuracy": (
                 STATS_LEVEL,
                 jnp.array(artifact.test_accuracy),
@@ -435,6 +452,10 @@ class KLMergeAnalysis(MergeAnalysis[KLMergeResults]):
             "Merging/KL Test NMI": (
                 STATS_LEVEL,
                 jnp.array(artifact.test_nmi_score),
+            ),
+            "Merging/KL Test ARI": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_ari_score),
             ),
         }
 
@@ -458,6 +479,10 @@ class CoAssignmentMergeAnalysis(MergeAnalysis[CoAssignmentMergeResults]):
                 STATS_LEVEL,
                 jnp.array(artifact.train_nmi_score),
             ),
+            "Merging/CoAssignment Train ARI": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_ari_score),
+            ),
             "Merging/CoAssignment Test Accuracy": (
                 STATS_LEVEL,
                 jnp.array(artifact.test_accuracy),
@@ -465,5 +490,9 @@ class CoAssignmentMergeAnalysis(MergeAnalysis[CoAssignmentMergeResults]):
             "Merging/CoAssignment Test NMI": (
                 STATS_LEVEL,
                 jnp.array(artifact.test_nmi_score),
+            ),
+            "Merging/CoAssignment Test ARI": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_ari_score),
             ),
         }
