@@ -33,10 +33,12 @@ from .analysis.generative import GenerativeExamplesAnalysis
 from .analysis.hierarchy import (
     CoAssignmentClusterHierarchy,
     CoAssignmentHierarchyAnalysis,
+    KLHierarchyAnalysis,
 )
 from .analysis.loadings import LoadingMatrixAnalysis
 from .analysis.merge import (
     CoAssignmentMergeAnalysis,
+    KLMergeAnalysis,
     OptimalMergeAnalysis,
 )
 from .trainers import (
@@ -205,7 +207,7 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
             Analysis[ClusteringDataset, DifferentiableHMoG[Diagonal, Diagonal], Any]
         ] = [
             ClusterStatisticsAnalysis(),
-            # KLHierarchyAnalysis(),
+            KLHierarchyAnalysis(),
             CoAssignmentHierarchyAnalysis(),
             GenerativeExamplesAnalysis(n_samples=1000),
             LoadingMatrixAnalysis(),
@@ -214,7 +216,7 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
         if dataset.has_labels:
             analyses.extend(
                 [
-                    # KLMergeAnalysis(True, 0.0005),
+                    KLMergeAnalysis(True, 0.0005),
                     CoAssignmentMergeAnalysis(True, 0.0005),
                     OptimalMergeAnalysis(True, 0.0005),
                 ]

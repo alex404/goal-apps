@@ -324,7 +324,7 @@ def merge_results_plotter(
                 1, max_clusters_per_class, subplot_spec=gs[class_idx], wspace=0.1
             )
 
-            # Plot each cluster in this class, left-justified
+            # Plot each cluster in this class using clean paint_observable
             for i, cluster_idx in enumerate(class_clusters):
                 cluster_ax = fig.add_subplot(class_gs[0, i])
                 dataset.paint_observable(results.prototypes[cluster_idx], cluster_ax)

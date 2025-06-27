@@ -1,0 +1,47 @@
+# Tasic single-cell RNA-seq configuration for HMOG
+defaults:
+  - hmog_diff
+  - _self_
+
+# Model architecture - balanced for scRNA-seq data
+latent_dim: 60       # Higher than MNIST (50) to capture gene expression complexity
+n_clusters: 60       # Start with reasonable number, close to true 49 cell types
+
+# Training schedule - conservative approach
+lr_scales: [1, 0.5, 0.2]
+num_cycles: 8
+lgm_noise_scale: 0.001
+mix_noise_scale: 0.001
+
+# Pre-training phase - important for high-dimensional scRNA-seq
+pre:
+  lr: 1e-4
+  n_epochs: 0
+  batch_steps: 1000
+  l1_reg: 0.005      # Moderate sparsity for gene selection
+  l2_reg: 1e-4       # Light regularization
+  grad_clip: 1
+  min_var: 1e-5
+  jitter_var: 0
+
+# LGM phase - skip for now
+lgm:
+  n_epochs: 0
+
+# Mix phase - skip for now
+mix:
+  n_epochs: 0
+
+# Full training phase - main training
+full:
+  lr: 5e-5           # Conservative learning rate
+  n_epochs: 1000     # Sufficient epochs for convergence
+  batch_steps: 2000  # Larger batches for stability
+  grad_clip: 1
+  min_prob: 1e-4
+  obs_min_var: 1e-5  # Account for log-transformed data
+  lat_min_var: 1e-6
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 1e-3
+  l1_reg: 3e-3
+  l2_reg: 1e-4       # Light weight decay

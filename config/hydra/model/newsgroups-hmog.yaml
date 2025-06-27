@@ -1,0 +1,47 @@
+# 20 Newsgroups text classification configuration for HMOG
+defaults:
+  - hmog_diff
+  - _self_
+
+# Model architecture - tuned for text data
+latent_dim: 50
+n_clusters: 200
+
+# Training schedule - conservative for high-dimensional sparse text
+lr_scales: [1, 0.3]
+num_cycles: 5
+lgm_noise_scale: 0.01  # Higher noise for sparse text
+mix_noise_scale: 0.01
+
+# Pre-training phase - important for sparse text features
+pre:
+  lr: 5e-4
+  n_epochs: 0      # Moderate pre-training
+  batch_steps: 500
+  l1_reg: 0.01       # Strong L1 for text sparsity
+  l2_reg: 1e-5       # Light L2
+  grad_clip: 1
+  min_var: 1e-4      # Higher min variance for sparse data
+  jitter_var: 0
+
+# LGM phase - skip for now
+lgm:
+  n_epochs: 0
+
+# Mix phase - skip for now  
+mix:
+  n_epochs: 0
+
+# Full training phase
+full:
+  lr: 1e-4           # Conservative learning rate
+  n_epochs: 200      # Fewer epochs to start
+  batch_steps: 500   # Moderate batch size
+  grad_clip: 1
+  min_prob: 0
+  obs_min_var: 0  # Higher variance for TF-IDF data
+  lat_min_var: 0
+  upr_prs_reg: 0  # Moderate precision regularization
+  lwr_prs_reg: 0
+  l1_reg: 1e-6
+  l2_reg: 1e-6

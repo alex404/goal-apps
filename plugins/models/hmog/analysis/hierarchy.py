@@ -233,6 +233,7 @@ def hierarchy_plotter(
 
         leaf_order = leaf_order[::-1]
 
+        # Clean individual prototype visualization - scales well with compact paint_observable
         for i, leaf_idx in enumerate(leaf_order):
             prototype_ax = fig.add_subplot(gs[i, 1])
             dataset.paint_observable(hierarchy.prototypes[leaf_idx], prototype_ax)
