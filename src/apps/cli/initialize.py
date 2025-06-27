@@ -207,7 +207,9 @@ def initialize_run(
 
     log.info("Loading dataset...")
     dataset: Dataset = instantiate(cfg.dataset, cache_dir=handler.cache_dir)
-    log.info(f"Loaded dataset with {len(dataset.train_data)} training data points.")
+    log.info(
+        f"Loaded dataset with {len(dataset.train_data)} training data points of dimension {dataset.data_dim}."
+    )
 
     # Instantiate model
     log.info("Loading model...")

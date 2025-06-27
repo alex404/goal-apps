@@ -328,6 +328,10 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
             )
             params = self.manifold.join_params(obs_params, int_params, lat_params)
             epoch = self.pre.n_epochs
+            self.process_checkpoint(
+                key, handler, logger, dataset, self.manifold, epoch, params.array
+            )
+            log.info("Pretraining complete.")
 
         # Cycle between Mixture and LGM training
         for cycle in range(current_cycle, self.num_cycles):
