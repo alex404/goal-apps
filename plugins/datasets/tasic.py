@@ -135,13 +135,14 @@ def _download_tasic_data(output_path: Path) -> None:
         # Save to HDF5
         with h5py.File(output_path, "w") as f:
             f.create_dataset("expression", data=expression_data)
-            f.create_dataset("gene_names", data=[g.encode() for g in all_gene_names])
+            # Handle mixed string/integer gene names
+            f.create_dataset("gene_names", data=[str(g).encode() for g in all_gene_names])
             f.create_dataset("cell_labels", data=cell_labels)
             f.create_dataset(
-                "cell_type_names", data=[t.encode() for t in cell_type_names]
+                "cell_type_names", data=[str(t).encode() for t in cell_type_names]
             )
-            f.create_dataset("cell_ids", data=[c.encode() for c in all_cell_ids])
-            f.create_dataset("region_labels", data=[r.encode() for r in region_labels])
+            f.create_dataset("cell_ids", data=[str(c).encode() for c in all_cell_ids])
+            f.create_dataset("region_labels", data=[str(r).encode() for r in region_labels])
 
         print(f"Real Tasic dataset saved to {output_path}")
         print(

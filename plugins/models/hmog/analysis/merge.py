@@ -17,6 +17,8 @@ from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from numpy.typing import NDArray
+from scipy.optimize import linear_sum_assignment
+from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 from apps.interface import (
     Analysis,
@@ -54,8 +56,6 @@ def _compute_optimal_mapping(
     Returns:
         Binary mapping matrix (n_clusters, n_classes)
     """
-    from scipy.optimize import linear_sum_assignment
-
     # Get hard assignments
     cluster_assignments = jnp.argmax(cluster_probs, axis=1)
 
@@ -144,7 +144,6 @@ def _compute_metrics(
     mapping: Array, probs: Array, labels: Array
 ) -> tuple[Array, float, float]:
     """Compute accuracy, NMI, and ARI for given mapping."""
-    from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
     merged_probs = jnp.matmul(probs, mapping)
     merged_assignments = jnp.argmax(merged_probs, axis=1)

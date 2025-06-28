@@ -41,7 +41,7 @@ class NewsgroupsConfig(ClusteringDatasetConfig):
     )  # No removal - standard benchmarking
 
     # Feature extraction - NeurIPS standard parameters
-    max_features: int = 10000
+    max_features: int | None = None  # None for all features
     min_df: int = 5
     max_df: float = 0.95
 
@@ -81,13 +81,13 @@ class NewsgroupsDataset(ClusteringDataset):
     def load(
         cls,
         cache_dir: Path,
-        categories: list[str] | None = None,
-        remove: list[str] = [],
-        max_features: int = 10000,
-        min_df: int = 5,
-        max_df: float = 0.95,
-        random_seed: int = 42,
-        n_top_words: int = 10,
+        categories: list[str] | None,
+        remove: list[str],
+        max_features: int | None,
+        min_df: int,
+        max_df: float,
+        random_seed: int,
+        n_top_words: int,
     ) -> "NewsgroupsDataset":
         """Load 20 Newsgroups dataset using standard train/test splits.
 
@@ -95,7 +95,7 @@ class NewsgroupsDataset(ClusteringDataset):
             cache_dir: Directory for caching downloaded data
             categories: Specific categories to include
             remove: What to remove from text
-            max_features: Maximum TF-IDF features
+            max_features: Maximum TF-IDF features (None for all features)
             min_df: Minimum document frequency
             max_df: Maximum document frequency
             random_seed: Random seed
