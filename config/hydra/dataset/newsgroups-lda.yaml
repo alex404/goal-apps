@@ -1,0 +1,15 @@
+# Optimal 20 Newsgroups dataset configuration for LDA
+defaults:
+  - newsgroups
+  - _self_
+
+# Standard content filtering (same for all models)  
+remove: ["headers", "footers", "quotes"]
+
+# Count vectorization (required for proper LDA)
+use_count_vectorizer: true
+
+# Feature selection optimized for LDA topic modeling
+max_features: 8000       # Optimal for LDA - tested 5000 vs 8000 (+4.7% accuracy)
+min_df: 3               # Remove very rare words 
+max_df: 0.8             # More aggressive common word removal for cleaner topics

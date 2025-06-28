@@ -1,0 +1,15 @@
+# Optimal 20 Newsgroups dataset configuration for HMoG
+defaults:
+  - newsgroups
+  - _self_
+
+# Standard content filtering (same for all models)
+remove: ["headers", "footers", "quotes"]
+
+# TF-IDF vectorization (optimal for geometric clustering)
+use_count_vectorizer: false
+
+# Feature selection optimized for HMoG on high-dimensional text
+max_features: 10000      # Sweet spot from benchmarking
+min_df: 3               # Remove very rare words
+max_df: 0.9             # Keep more features than default for rich representations

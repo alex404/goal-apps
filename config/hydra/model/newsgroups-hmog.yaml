@@ -5,7 +5,7 @@ defaults:
 
 # Model architecture - tuned for text data
 latent_dim: 50
-n_clusters: 100
+n_clusters: 200
 
 # Training schedule - conservative for high-dimensional sparse text
 lr_scales: [1, 0.3, 0.1]

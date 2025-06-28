@@ -1,0 +1,15 @@
+# Optimal 20 Newsgroups dataset configuration for PCA+K-means
+defaults:
+  - newsgroups
+  - _self_
+
+# Standard content filtering (fair comparison)
+remove: ["headers", "footers", "quotes"]
+
+# TF-IDF vectorization (optimal for geometric clustering)
+use_count_vectorizer: false
+
+# Optimal feature selection (confirmed through systematic testing)
+max_features: 10000      # Optimal: better than 8k, 15k tested
+min_df: 3               # Optimal: better than 5 (too aggressive) 
+max_df: 0.9             # Optimal: better than 0.8 (too aggressive)

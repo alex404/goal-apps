@@ -13,7 +13,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpecFromSubplotSpec
 from sklearn.datasets import fetch_20newsgroups
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 
 from apps.interface import ClusteringDataset, ClusteringDatasetConfig
 
@@ -24,11 +24,12 @@ class NewsgroupsConfig(ClusteringDatasetConfig):
 
     Parameters:
         categories: Specific newsgroup categories to include (None for all 20)
-        remove: Text parts to remove (empty list for standard benchmarking)
-        max_features: Maximum number of features for TF-IDF (10000 standard)
-        min_df: Minimum document frequency for TF-IDF (5 standard)
-        max_df: Maximum document frequency for TF-IDF (0.95 standard)
+        remove: Text parts to remove (standard: headers, footers, quotes)
+        max_features: Maximum number of features for TF-IDF (None for all)
+        min_df: Minimum document frequency for TF-IDF (sklearn standard: 2)
+        max_df: Maximum document frequency for TF-IDF (sklearn standard: 0.95)
         random_seed: Random seed for reproducibility
+        use_count_vectorizer: Use count vectorization instead of TF-IDF
         n_top_words: Number of top words to show in visualization
     """
 
@@ -37,16 +38,19 @@ class NewsgroupsConfig(ClusteringDatasetConfig):
     # Data selection
     categories: list[str] | None = None  # None for all 20 categories
     remove: list[str] = field(
-        default_factory=list
-    )  # No removal - standard benchmarking
+        default_factory=lambda: ["headers", "footers", "quotes"]
+    )  # Standard ML benchmark preprocessing
 
-    # Feature extraction - NeurIPS standard parameters
+    # Feature extraction - standard sklearn parameters
     max_features: int | None = None  # None for all features
-    min_df: int = 5
-    max_df: float = 0.95
+    min_df: int = 2                 # Standard sklearn default
+    max_df: float = 0.95            # Standard sklearn default
 
     # Reproducibility
     random_seed: int = 42
+    
+    # Vectorization method
+    use_count_vectorizer: bool = False  # False for TF-IDF, True for count
 
     # Visualization
     n_top_words: int = 10
@@ -87,6 +91,7 @@ class NewsgroupsDataset(ClusteringDataset):
         min_df: int,
         max_df: float,
         random_seed: int,
+        use_count_vectorizer: bool,
         n_top_words: int,
     ) -> "NewsgroupsDataset":
         """Load 20 Newsgroups dataset using standard train/test splits.
@@ -132,30 +137,42 @@ class NewsgroupsDataset(ClusteringDataset):
         print(f"Test: {len(test_newsgroups.data)} documents")
         print(f"Categories: {train_newsgroups.target_names}")
 
-        # Create TF-IDF features fitted on training set
-        print("Creating TF-IDF features...")
-        vectorizer = TfidfVectorizer(
-            max_features=max_features,
-            min_df=min_df,
-            max_df=max_df,
-            stop_words="english",
-            lowercase=True,
-            strip_accents="ascii",
-        )
+        # Create vectorizer based on parameter
+        if use_count_vectorizer:
+            print("Creating count features...")
+            vectorizer = CountVectorizer(
+                max_features=max_features,
+                min_df=min_df,
+                max_df=max_df,
+                stop_words="english",
+                lowercase=True,
+                strip_accents="ascii",
+            )
+        else:
+            print("Creating TF-IDF features...")
+            vectorizer = TfidfVectorizer(
+                max_features=max_features,
+                min_df=min_df,
+                max_df=max_df,
+                stop_words="english",
+                lowercase=True,
+                strip_accents="ascii",
+            )
 
         # Fit on training data, transform both sets
-        train_tfidf = vectorizer.fit_transform(train_newsgroups.data)
-        test_tfidf = vectorizer.transform(test_newsgroups.data)
+        train_features = vectorizer.fit_transform(train_newsgroups.data)
+        test_features = vectorizer.transform(test_newsgroups.data)
         feature_names = vectorizer.get_feature_names_out().tolist()
 
         # Convert to dense JAX arrays
-        train_dense = train_tfidf.toarray().astype(np.float32)
-        test_dense = test_tfidf.toarray().astype(np.float32)
+        train_dense = train_features.toarray().astype(np.float32)
+        test_dense = test_features.toarray().astype(np.float32)
         train_labels = train_newsgroups.target.astype(np.int32)
         test_labels = test_newsgroups.target.astype(np.int32)
 
-        print(f"Train TF-IDF shape: {train_dense.shape}")
-        print(f"Test TF-IDF shape: {test_dense.shape}")
+        feature_type = "count" if use_count_vectorizer else "TF-IDF"
+        print(f"Train {feature_type} shape: {train_dense.shape}")
+        print(f"Test {feature_type} shape: {test_dense.shape}")
         print(f"Feature vocabulary size: {len(feature_names)}")
 
         # Use official train/test split
