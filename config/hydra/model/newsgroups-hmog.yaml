@@ -4,12 +4,12 @@ defaults:
   - _self_
 
 # Model architecture - tuned for text data
-latent_dim: 50
-n_clusters: 200
+latent_dim: 150
+n_clusters: 50
 
 # Training schedule - conservative for high-dimensional sparse text
 lr_scales: [1, 0.3, 0.1]
-num_cycles: 10
+num_cycles: 5
 lgm_noise_scale: 0.01  # Higher noise for sparse text
 mix_noise_scale: 0.01
 
@@ -23,7 +23,7 @@ mix:
   n_epochs: 0
 
 full:
-  lr: 3e-5
+  lr: 1e-3
   n_epochs: 200
   batch_steps: 1000
   grad_clip: 10

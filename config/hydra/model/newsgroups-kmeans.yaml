@@ -9,9 +9,9 @@ n_clusters: 20
 n_components: 150        # Optimal - tested 80, 100, 120, 130, 200
 pca_random_state: 42
 
-# Maximally optimized K-means parameters
+# Optimized K-means parameters (performance + efficiency)
 random_state: 42
-max_iter: 500           # More iterations for perfect convergence
-n_init: 30             # Many more random restarts 
-tol: 1e-6              # Very tight convergence
+max_iter: 200           # Sufficient for convergence
+n_init: 10             # Sufficient random restarts (tested vs 30)
+tol: 1e-4              # Practical convergence tolerance  
 algorithm: lloyd

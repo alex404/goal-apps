@@ -10,6 +10,6 @@ remove: ["headers", "footers", "quotes"]
 use_count_vectorizer: true
 
 # Feature selection optimized for LDA topic modeling
-max_features: 8000       # Optimal for LDA - tested 5000 vs 8000 (+4.7% accuracy)
-min_df: 3               # Remove very rare words 
-max_df: 0.8             # More aggressive common word removal for cleaner topics
+max_features: 10000      # Optimal for LDA - tested 8k/10k/12k/15k
+min_df: 2               # Optimal - tested 2 vs 3 (+5.7% accuracy to 38.5%)
+max_df: 0.9             # More aggressive common word removal for cleaner topics

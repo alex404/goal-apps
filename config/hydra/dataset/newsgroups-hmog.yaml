@@ -10,6 +10,6 @@ remove: ["headers", "footers", "quotes"]
 use_count_vectorizer: false
 
 # Feature selection optimized for HMoG on high-dimensional text
-max_features: 10000      # Sweet spot from benchmarking
-min_df: 3               # Remove very rare words
+max_features: 20000      # Sweet spot from benchmarking
+min_df: 2               # Remove very rare words
 max_df: 0.9             # Keep more features than default for rich representations
