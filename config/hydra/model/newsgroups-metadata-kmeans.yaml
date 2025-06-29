@@ -1,0 +1,17 @@
+# PCA+K-means model for 20 Newsgroups with metadata
+defaults:
+  - pca_kmeans
+  - _self_
+
+n_clusters: 20
+
+# Optimized PCA parameters for metadata-rich environment  
+n_components: 400        # Optimal - metadata allows much higher dimensionality
+pca_random_state: 42
+
+# Starting K-means parameters (to be optimized with metadata)
+random_state: 42
+max_iter: 200           # Sufficient for convergence
+n_init: 10             # Sufficient random restarts
+tol: 1e-4              # Practical convergence tolerance  
+algorithm: lloyd

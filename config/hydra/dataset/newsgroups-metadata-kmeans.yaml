@@ -1,0 +1,15 @@
+# 20 Newsgroups dataset with metadata for PCA+K-means
+defaults:
+  - newsgroups
+  - _self_
+
+# Keep all metadata for fair comparison with HMoG
+remove: []
+
+# TF-IDF vectorization (optimal for geometric clustering)
+use_count_vectorizer: false
+
+# Optimized parameters for metadata-rich environment
+max_features: 8000       # Optimal - fewer but cleaner features work better with metadata
+min_df: 2               # Starting point - may need adjustment with metadata  
+max_df: 0.9             # Starting point - may need adjustment with metadata

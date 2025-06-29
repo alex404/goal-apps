@@ -1,0 +1,16 @@
+# LDA model for 20 Newsgroups with metadata
+defaults:
+  - lda
+  - _self_
+
+# Match newsgroups categories
+n_clusters: 20           # 20 newsgroups categories
+random_state: 42
+
+# Optimized parameters for metadata-rich environment
+max_iter: 50             # Reduced for faster execution
+learning_method: batch   # Optimal learning method
+alpha: 1.0              # Optimal - high topic mixing per document 
+beta: 0.3               # Optimal - higher sparsity works better with metadata
+learning_decay: 0.7      # Standard decay rate
+perp_tol: 0.1           # Relaxed tolerance for faster convergence

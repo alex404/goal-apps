@@ -1,0 +1,15 @@
+# 20 Newsgroups dataset with metadata for LDA
+defaults:
+  - newsgroups
+  - _self_
+
+# Keep all metadata for fair comparison with HMoG
+remove: []
+
+# Count vectorization (required for proper LDA)
+use_count_vectorizer: true
+
+# Starting parameters (to be optimized with metadata)
+max_features: 10000      # Starting point - may need adjustment with metadata
+min_df: 2               # Starting point - may need adjustment with metadata  
+max_df: 0.9             # Starting point - may need adjustment with metadata
