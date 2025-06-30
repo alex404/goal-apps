@@ -4,8 +4,7 @@ defaults:
   - _self_
 
 # Standard content filtering (same for all models)
-# remove: ["headers", "footers", "quotes"]
-remove: []
+remove: ["headers", "footers", "quotes"]
 
 # TF-IDF vectorization (optimal for geometric clustering)
 use_count_vectorizer: false
