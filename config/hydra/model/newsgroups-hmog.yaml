@@ -4,8 +4,8 @@ defaults:
   - _self_
 
 # Model architecture - tuned for text data
-latent_dim: 400
-n_clusters: 400
+latent_dim: 100
+n_clusters: 200
 
 # Training schedule - conservative for high-dimensional sparse text
 lr_scales: [1, 0.3, 0.1]
@@ -25,7 +25,7 @@ mix:
 full:
   lr: 1e-4
   n_epochs: 200
-  batch_steps: 1000
+  batch_steps: 500
   grad_clip: 10
   min_prob: 0
   obs_min_var: 0
