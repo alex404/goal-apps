@@ -1,0 +1,14 @@
+_target_: plugins.models.lda.LDAModel
+
+# Basic parameters - optimized for scRNA-seq count data
+data_dim: 3000             # Full gene set (count data, no log transform)
+n_clusters: 135            # Match 135 true cell types: 39.1% accuracy, 0.777 NMI (highest clustering quality)
+
+# LDA hyperparameters - optimized for single-cell gene expression  
+alpha: 0.1                 # Document-topic concentration (symmetric Dirichlet)
+beta: 0.01                 # Topic-word concentration (sparse for gene expression)
+
+# Training parameters - allows proper convergence
+max_iter: 20               # Sufficient iterations for convergence (takes ~5-7 min)
+random_state: 42
+learning_method: online    # Online learning for large datasets

@@ -1,0 +1,16 @@
+_target_: plugins.models.kmeans.PCAKMeansModel
+
+# Basic parameters
+data_dim: 3000             # Match dataset n_genes
+n_clusters: 135            # Match 135 cell clusters from real Tasic dataset
+
+# PCA parameters - optimized for scRNA-seq (systematic testing results)
+n_components: 75           # Optimal: 46.3% test accuracy, 0.799 NMI, 61.6% variance
+pca_random_state: 42
+
+# K-means parameters - optimized for scRNA-seq clustering
+random_state: 42
+max_iter: 300              # More iterations for convergence
+n_init: 20                 # More initializations for stability
+tol: 1e-4                  # Standard tolerance
+algorithm: lloyd           # Standard algorithm

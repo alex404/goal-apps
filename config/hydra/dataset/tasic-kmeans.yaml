@@ -1,0 +1,18 @@
+_target_: plugins.datasets.tasic.TasicDataset.load
+
+# Gene selection parameters - optimized for K-means clustering
+n_genes: 3000              # Start with 3000 genes (standard for scRNA-seq)
+use_fano_selection: true   # Use Fano factor for highly variable genes
+min_expression_threshold: 0.0  # No minimum threshold initially
+
+# Preprocessing for K-means - log transform is critical for scRNA-seq
+log_transform: true        # Essential for scRNA-seq normalization
+standardize: true          # Standardize for PCA+K-means
+
+# Data splits
+test_fraction: 0.2
+random_seed: 42
+
+# Visualization parameters
+n_global_genes: 100
+n_marker_genes: 8

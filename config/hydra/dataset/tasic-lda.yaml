@@ -1,0 +1,18 @@
+_target_: plugins.datasets.tasic.TasicDataset.load
+
+# Parameters optimized for LDA 
+n_genes: 3000              # Full gene set for LDA
+use_fano_selection: true
+min_expression_threshold: 0.0
+
+# Preprocessing - LDA requires count data
+log_transform: false       # Critical: LDA needs raw counts, not log-transformed
+standardize: false         # No standardization for count data
+
+# Data splits
+test_fraction: 0.2
+random_seed: 42
+
+# Visualization
+n_global_genes: 100
+n_marker_genes: 8

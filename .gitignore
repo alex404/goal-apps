@@ -45,3 +45,6 @@ examples/.cache
 
 # Jupyter Notebook
 .ipynb_checkpoints
+
+# Claude
+CLAUDE.md

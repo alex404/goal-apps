@@ -6,7 +6,6 @@ from typing import override
 
 import jax.numpy as jnp
 import numpy as np
-import pandas as pd
 from hydra.core.config_store import ConfigStore
 from jax import Array
 from matplotlib.axes import Axes
@@ -14,143 +13,6 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpecFromSubplotSpec
 
 from apps.interface import ClusteringDataset, ClusteringDatasetConfig
-
-
-def _download_tasic_data(output_path: Path) -> None:
-    """Download Tasic et al. (2018) dataset from Allen Brain Atlas."""
-    try:
-        import json
-
-        import requests
-    except ImportError:
-        raise ImportError(
-            "requests is required to download Tasic dataset. Install with: pip install requests"
-        )
-
-    # Ensure cache directory exists
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Allen Brain Atlas API endpoint for Tasic 2018 dataset
-    # This is a simplified download - the actual API structure may be more complex
-    print("Fetching Tasic dataset from Allen Brain Atlas...")
-
-    try:
-        # Download the actual Tasic et al. 2018 dataset from Allen Brain Atlas
-        import io
-        import zipfile
-
-        import h5py
-
-        print("Downloading Tasic et al. (2018) dataset from Allen Brain Atlas...")
-
-        # Official Allen Brain Atlas URLs for Tasic 2018 dataset
-        visp_url = "https://celltypes.brain-map.org/api/v2/well_known_file_download/694413985"  # VISp
-        alm_url = "https://celltypes.brain-map.org/api/v2/well_known_file_download/694413179"  # ALM
-
-        all_expression_data = []
-        all_gene_names = None
-        all_cell_labels = []
-        all_cell_ids = []
-        region_labels = []
-
-        # Download both brain regions
-        for region_name, url in [("VISp", visp_url), ("ALM", alm_url)]:
-            print(f"Downloading {region_name} data...")
-
-            response = requests.get(url, stream=True)
-            response.raise_for_status()
-
-            # The file is a ZIP archive
-            with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-                # Find CSV files in the archive
-                csv_files = [f for f in z.namelist() if f.endswith(".csv")]
-
-                if not csv_files:
-                    raise RuntimeError(f"No CSV files found in {region_name} archive")
-
-                # Load the main expression matrix (usually the largest CSV)
-                main_csv = max(csv_files, key=lambda f: z.getinfo(f).file_size)
-                print(f"Loading {main_csv} from {region_name}...")
-
-                with z.open(main_csv) as csv_file:
-                    # Load expression data
-                    region_data = pd.read_csv(csv_file, index_col=0)
-
-                    # Genes are typically rows, cells are columns
-                    if all_gene_names is None:
-                        all_gene_names = region_data.index.tolist()
-                    else:
-                        # Ensure gene names match across regions
-                        if set(region_data.index) != set(all_gene_names):
-                            # Take intersection of genes
-                            common_genes = list(
-                                set(region_data.index) & set(all_gene_names)
-                            )
-                            region_data = region_data.loc[common_genes]
-                            if len(all_expression_data) > 0:
-                                # Filter previous data to same genes
-                                for i, prev_data in enumerate(all_expression_data):
-                                    all_expression_data[i] = prev_data[
-                                        np.isin(all_gene_names, common_genes)
-                                    ]
-                            all_gene_names = common_genes
-
-                    # Transpose to get cells × genes format
-                    region_expression = region_data.T.values.astype(np.float32)
-                    all_expression_data.append(region_expression)
-
-                    # Store cell IDs
-                    cell_ids = region_data.columns.tolist()
-                    all_cell_ids.extend(cell_ids)
-
-                    # Add region labels
-                    region_labels.extend([region_name] * len(cell_ids))
-
-                    print(
-                        f"{region_name}: {region_expression.shape[0]} cells × {region_expression.shape[1]} genes"
-                    )
-
-        # Combine data from both regions
-        expression_data = np.vstack(all_expression_data)
-
-        print(
-            f"Combined dataset: {expression_data.shape[0]} cells × {expression_data.shape[1]} genes"
-        )
-
-        # Download metadata to get cell type labels
-        print("Downloading cell metadata...")
-
-        # The metadata is available through the cell types browser
-        # We'll create basic cell type labels based on the region for now
-        # In the real implementation, you'd want to get the actual cluster assignments
-
-        # For now, assign simple region-based labels
-        # TODO: Download actual cell type metadata from the Allen Brain Atlas
-        cell_type_names = list(set(region_labels))
-        type_to_int = {t: i for i, t in enumerate(cell_type_names)}
-        cell_labels = np.array([type_to_int[region] for region in region_labels])
-
-        print(f"Found {len(cell_type_names)} regions: {cell_type_names}")
-
-        # Save to HDF5
-        with h5py.File(output_path, "w") as f:
-            f.create_dataset("expression", data=expression_data)
-            # Handle mixed string/integer gene names
-            f.create_dataset("gene_names", data=[str(g).encode() for g in all_gene_names])
-            f.create_dataset("cell_labels", data=cell_labels)
-            f.create_dataset(
-                "cell_type_names", data=[str(t).encode() for t in cell_type_names]
-            )
-            f.create_dataset("cell_ids", data=[str(c).encode() for c in all_cell_ids])
-            f.create_dataset("region_labels", data=[str(r).encode() for r in region_labels])
-
-        print(f"Real Tasic dataset saved to {output_path}")
-        print(
-            f"Dataset shape: {expression_data.shape[0]} cells × {expression_data.shape[1]} genes"
-        )
-
-    except Exception as e:
-        raise RuntimeError(f"Failed to download/create Tasic dataset: {e}") from e
 
 
 @dataclass
@@ -253,54 +115,22 @@ class TasicDataset(ClusteringDataset):
         """
         data_file = cache_dir / "tasic_data.h5"
 
-        # Download data if it doesn't exist
-        if not data_file.exists():
-            print(f"Downloading Tasic dataset to {data_file}...")
-            try:
-                _download_tasic_data(data_file)
-            except Exception as e:
-                raise RuntimeError(
-                    f"""Failed to download Tasic dataset automatically.
-                    
-You can manually download the Tasic et al. (2018) dataset and save it as:
-{data_file}
-
-The file should contain:
-- 'expression': Expression matrix (cells x genes)
-- 'gene_names': Gene names
-- 'cell_labels': Cell type labels
-- 'cell_type_names': Cell type names
-
-You can download the data from:
-https://portal.brain-map.org/atlases-and-data/rnaseq
-
-Or use the Allen Brain Atlas API to fetch the data programmatically.
-
-Original error: {e}
-"""
-                ) from e
+        # Download data
+        _download_tasic_data(data_file)
 
         # Load data from HDF5 file
-        try:
-            import h5py
+        import h5py
 
-            with h5py.File(data_file, "r") as f:
-                expression_data = f["expression"][:]  # cells x genes
-                gene_names = [
-                    g.decode() if isinstance(g, bytes) else g
-                    for g in f["gene_names"][:]
-                ]
-                cell_labels = f["cell_labels"][:]
-                cell_type_names = [
-                    c.decode() if isinstance(c, bytes) else c
-                    for c in f["cell_type_names"][:]
-                ]
-        except ImportError:
-            raise ImportError(
-                "h5py is required to load Tasic dataset. Install with: pip install h5py"
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to load Tasic dataset from {data_file}: {e}")
+        with h5py.File(data_file, "r") as f:
+            expression_data = f["expression"][:]  # cells x genes
+            gene_names = [
+                g.decode() if isinstance(g, bytes) else g for g in f["gene_names"][:]
+            ]
+            cell_labels = f["cell_labels"][:]
+            cell_type_names = [
+                c.decode() if isinstance(c, bytes) else c
+                for c in f["cell_type_names"][:]
+            ]
 
         # Convert to numpy arrays
         expression_data = np.array(expression_data, dtype=np.float32)
@@ -309,6 +139,7 @@ Original error: {e}
         print(
             f"Loaded Tasic dataset: {expression_data.shape[0]} cells, {expression_data.shape[1]} genes"
         )
+        print(f"Found {len(cell_type_names)} cell types")
 
         # Apply minimum expression threshold
         if min_expression_threshold > 0:
@@ -531,3 +362,126 @@ Original error: {e}
 
         # Adjust layout
         marker_ax.invert_yaxis()  # Highest expression at top
+
+
+def _download_tasic_data(output_path: Path) -> None:
+    """Download real Tasic et al. (2018) single-cell RNA-seq dataset from Allen Institute."""
+    from urllib.request import urlretrieve
+    from zipfile import ZipFile
+
+    import h5py
+    import pandas as pd
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Allen Institute download URL for Tasic 2018 dataset
+    ZIP_URL = (
+        "https://celltypes.brain-map.org/api/v2/well_known_file_download/694413985"
+    )
+    temp_dir = output_path.parent / "tasic_temp"
+    zip_path = temp_dir / "Tasic2018.zip"
+
+    temp_dir.mkdir(exist_ok=True)
+
+    # Download if not already present
+    if not zip_path.exists():
+        print("Downloading Tasic 2018 V1 dataset from Allen Institute...")
+        urlretrieve(ZIP_URL, str(zip_path))
+        print("Download complete.")
+
+    # Extract the data
+    print("Extracting dataset...")
+    with ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(temp_dir)
+
+    # Locate the extracted files - actual structure from Allen Institute
+    exp_path = temp_dir / "mouse_VISp_2018-06-14_exon-matrix.csv"
+    genes_path = temp_dir / "mouse_VISp_2018-06-14_genes-rows.csv"
+    samples_path = temp_dir / "mouse_VISp_2018-06-14_samples-columns.csv"
+
+    if not exp_path.exists() or not genes_path.exists() or not samples_path.exists():
+        raise FileNotFoundError(
+            f"Expected files not found after extraction. Contents: {list(temp_dir.rglob('*.csv'))}"
+        )
+
+    print("Loading expression data...")
+    expression_df = pd.read_csv(exp_path, index_col=0)
+    print("Loading gene metadata...")
+    genes_df = pd.read_csv(genes_path, index_col=0)
+    print("Loading sample metadata...")
+    samples_df = pd.read_csv(samples_path, index_col=0)
+
+    # Convert to numpy arrays
+    expression_data = expression_df.values.astype(
+        np.float32
+    )  # genes x cells, need to transpose
+    expression_data = expression_data.T  # Now cells x genes
+    gene_names = list(genes_df.index)  # Gene names from genes file
+
+    # Extract cell type labels from samples metadata
+    print("Available metadata columns:", list(samples_df.columns))
+
+    # Priority order for cell type labels (from most specific to least)
+    label_columns = [
+        "cluster",
+        "subclass",
+        "class",
+        "brain_subregion",
+        "cortical_layer_label",
+    ]
+
+    cell_labels_str = None
+    selected_column = None
+
+    for col in label_columns:
+        if col in samples_df.columns:
+            unique_count = len(samples_df[col].unique())
+            if (
+                unique_count > 1 and unique_count < len(samples_df) * 0.8
+            ):  # Not too few, not too many
+                cell_labels_str = samples_df[col].values
+                selected_column = col
+                print(f"Using {col} as cell type labels ({unique_count} unique types)")
+                break
+
+    if cell_labels_str is None:
+        # Fallback: find column with reasonable number of categories
+        categorical_cols = samples_df.select_dtypes(include=["object"]).columns
+        for col in categorical_cols:
+            unique_count = len(samples_df[col].unique())
+            if 2 <= unique_count <= 200:  # Reasonable range for cell types
+                cell_labels_str = samples_df[col].values
+                selected_column = col
+                print(f"Using {col} as cell type labels ({unique_count} unique types)")
+                break
+
+        if cell_labels_str is None:
+            raise ValueError("No suitable cell type labels found in samples metadata")
+
+    unique_cell_types = sorted(set(cell_labels_str))
+    label_to_index = {label: idx for idx, label in enumerate(unique_cell_types)}
+    cell_labels = np.array(
+        [label_to_index[label] for label in cell_labels_str], dtype=np.int32
+    )
+
+    print(
+        f"Loaded real Tasic dataset: {expression_data.shape[0]} cells, {expression_data.shape[1]} genes"
+    )
+    print(f"Found {len(unique_cell_types)} unique cell types")
+
+    # Save to HDF5 format
+    with h5py.File(output_path, "w") as f:
+        f.create_dataset("expression", data=expression_data)
+        f.create_dataset("gene_names", data=[g.encode() for g in gene_names])
+        f.create_dataset("cell_labels", data=cell_labels)
+        f.create_dataset(
+            "cell_type_names", data=[c.encode() for c in unique_cell_types]
+        )
+
+    print(f"Saved processed dataset to {output_path}")
+
+    # Cleanup temporary files
+    import shutil
+
+    shutil.rmtree(temp_dir)
+    print("Cleanup complete.")

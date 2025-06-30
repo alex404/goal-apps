@@ -113,31 +113,58 @@ class NewsgroupsDataset(ClusteringDataset):
 
         print("Loading 20 Newsgroups dataset...")
 
-        # Load both train and test sets to ensure consistent TF-IDF vocabulary
-        train_newsgroups = fetch_20newsgroups(
-            subset="train",
-            categories=categories,
-            remove=tuple(remove),
-            shuffle=True,
-            random_state=random_seed,
-            download_if_missing=True,
-            data_home=str(cache_dir),
-        )
+        # Check for cached processed data
+        cache_file = cache_dir / "newsgroups_raw.npz" 
+        
+        if cache_file.exists():
+            print("Loading cached newsgroups data...")
+            cached = np.load(cache_file, allow_pickle=True)
+            train_texts = cached['train_texts']
+            test_texts = cached['test_texts']
+            train_labels = cached['train_labels']
+            test_labels = cached['test_labels']
+            target_names = cached['target_names'].tolist()
+        else:
+            print("Downloading and caching raw newsgroups data...")
+            # Load both train and test sets
+            train_newsgroups = fetch_20newsgroups(
+                subset="train",
+                categories=categories,
+                remove=tuple(remove),
+                shuffle=True,
+                random_state=random_seed,
+                download_if_missing=True,
+                data_home=str(cache_dir),
+            )
 
-        test_newsgroups = fetch_20newsgroups(
-            subset="test",
-            categories=categories,
-            remove=tuple(remove),
-            shuffle=False,  # Keep test set deterministic
-            download_if_missing=True,
-            data_home=str(cache_dir),
-        )
+            test_newsgroups = fetch_20newsgroups(
+                subset="test",
+                categories=categories,
+                remove=tuple(remove),
+                shuffle=False,  # Keep test set deterministic
+                download_if_missing=True,
+                data_home=str(cache_dir),
+            )
+            
+            # Cache raw text data
+            np.savez(cache_file,
+                    train_texts=np.array(train_newsgroups.data, dtype=object),
+                    test_texts=np.array(test_newsgroups.data, dtype=object),
+                    train_labels=train_newsgroups.target,
+                    test_labels=test_newsgroups.target,
+                    target_names=np.array(train_newsgroups.target_names))
+            
+            train_texts = np.array(train_newsgroups.data)
+            test_texts = np.array(test_newsgroups.data)
+            train_labels = train_newsgroups.target
+            test_labels = test_newsgroups.target
+            target_names = train_newsgroups.target_names
 
-        print(f"Train: {len(train_newsgroups.data)} documents")
-        print(f"Test: {len(test_newsgroups.data)} documents")
-        print(f"Categories: {train_newsgroups.target_names}")
+        print(f"Train: {len(train_texts)} documents")
+        print(f"Test: {len(test_texts)} documents")
+        print(f"Categories: {target_names}")
 
-        # Create vectorizer based on parameter
+        # Apply preprocessing based on parameters
         if use_count_vectorizer:
             print("Creating count features...")
             vectorizer = CountVectorizer(
@@ -160,15 +187,15 @@ class NewsgroupsDataset(ClusteringDataset):
             )
 
         # Fit on training data, transform both sets
-        train_features = vectorizer.fit_transform(train_newsgroups.data)
-        test_features = vectorizer.transform(test_newsgroups.data)
+        train_features = vectorizer.fit_transform(train_texts)
+        test_features = vectorizer.transform(test_texts)
         feature_names = vectorizer.get_feature_names_out().tolist()
 
         # Convert to dense JAX arrays
         train_dense = train_features.toarray().astype(np.float32)
         test_dense = test_features.toarray().astype(np.float32)
-        train_labels = train_newsgroups.target.astype(np.int32)
-        test_labels = test_newsgroups.target.astype(np.int32)
+        train_labels = train_labels.astype(np.int32)
+        test_labels = test_labels.astype(np.int32)
 
         feature_type = "count" if use_count_vectorizer else "TF-IDF"
         print(f"Train {feature_type} shape: {train_dense.shape}")
@@ -192,7 +219,7 @@ class NewsgroupsDataset(ClusteringDataset):
             _train_labels=train_labels_final,
             _test_labels=test_labels_final,
             _feature_names=feature_names,
-            _target_names=list(train_newsgroups.target_names),
+            _target_names=list(target_names),
         )
 
     @property
