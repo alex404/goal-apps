@@ -13,8 +13,7 @@ dependencies = [
     "pandas",
     "joblib",
     "tables",
-    "h5py",           # For Tasic dataset HDF5 caching
-    "scipy",          # For Hungarian algorithm in clustering metrics
+    "scipy",          # For Hungarian algorithm in clustering metrics (core functionality)
 ]
 
 [project.scripts]
@@ -31,7 +30,8 @@ gpu = [
 ]
 
 datasets = [
-    "torchvision",
+    "torchvision",    # For vision datasets (MNIST, CIFAR, etc.)
+    "h5py",           # For Tasic dataset HDF5 caching
 ]
 
 [build-system]
