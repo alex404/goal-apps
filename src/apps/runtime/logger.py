@@ -81,6 +81,7 @@ class Logger:
                 id=self.run_id_override,
                 resume="allow",
             )
+            wandb.mark_preempting()
             wandb.define_metric("epoch")
             wandb.define_metric("*", step_metric="epoch")
 
