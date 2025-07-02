@@ -1,5 +1,6 @@
 """20 Newsgroups dataset implementation."""
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import override
@@ -13,9 +14,13 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpecFromSubplotSpec
 from sklearn.datasets import fetch_20newsgroups
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 
 from apps.interface import ClusteringDataset, ClusteringDatasetConfig
+
+### Logging ###
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,12 +48,12 @@ class NewsgroupsConfig(ClusteringDatasetConfig):
 
     # Feature extraction - standard sklearn parameters
     max_features: int | None = None  # None for all features
-    min_df: int = 2                 # Standard sklearn default
-    max_df: float = 0.95            # Standard sklearn default
+    min_df: int = 2  # Standard sklearn default
+    max_df: float = 0.95  # Standard sklearn default
 
     # Reproducibility
     random_seed: int = 42
-    
+
     # Vectorization method
     use_count_vectorizer: bool = False  # False for TF-IDF, True for count
 
@@ -111,21 +116,21 @@ class NewsgroupsDataset(ClusteringDataset):
         """
         # Use provided remove list (empty by default for standard benchmarking)
 
-        print("Loading 20 Newsgroups dataset...")
+        log.info("Loading 20 Newsgroups dataset...")
 
         # Check for cached processed data
-        cache_file = cache_dir / "newsgroups_raw.npz" 
-        
+        cache_file = cache_dir / "newsgroups_raw.npz"
+
         if cache_file.exists():
-            print("Loading cached newsgroups data...")
+            log.info("Loading cached newsgroups data...")
             cached = np.load(cache_file, allow_pickle=True)
-            train_texts = cached['train_texts']
-            test_texts = cached['test_texts']
-            train_labels = cached['train_labels']
-            test_labels = cached['test_labels']
-            target_names = cached['target_names'].tolist()
+            train_texts = cached["train_texts"]
+            test_texts = cached["test_texts"]
+            train_labels = cached["train_labels"]
+            test_labels = cached["test_labels"]
+            target_names = cached["target_names"].tolist()
         else:
-            print("Downloading and caching raw newsgroups data...")
+            log.info("Downloading and caching raw newsgroups data...")
             # Load both train and test sets
             train_newsgroups = fetch_20newsgroups(
                 subset="train",
@@ -145,28 +150,26 @@ class NewsgroupsDataset(ClusteringDataset):
                 download_if_missing=True,
                 data_home=str(cache_dir),
             )
-            
+
             # Cache raw text data
-            np.savez(cache_file,
-                    train_texts=np.array(train_newsgroups.data, dtype=object),
-                    test_texts=np.array(test_newsgroups.data, dtype=object),
-                    train_labels=train_newsgroups.target,
-                    test_labels=test_newsgroups.target,
-                    target_names=np.array(train_newsgroups.target_names))
-            
+            np.savez(
+                cache_file,
+                train_texts=np.array(train_newsgroups.data, dtype=object),
+                test_texts=np.array(test_newsgroups.data, dtype=object),
+                train_labels=train_newsgroups.target,
+                test_labels=test_newsgroups.target,
+                target_names=np.array(train_newsgroups.target_names),
+            )
+
             train_texts = np.array(train_newsgroups.data)
             test_texts = np.array(test_newsgroups.data)
             train_labels = train_newsgroups.target
             test_labels = test_newsgroups.target
             target_names = train_newsgroups.target_names
 
-        print(f"Train: {len(train_texts)} documents")
-        print(f"Test: {len(test_texts)} documents")
-        print(f"Categories: {target_names}")
-
         # Apply preprocessing based on parameters
         if use_count_vectorizer:
-            print("Creating count features...")
+            log.info("Creating count features...")
             vectorizer = CountVectorizer(
                 max_features=max_features,
                 min_df=min_df,
@@ -176,7 +179,7 @@ class NewsgroupsDataset(ClusteringDataset):
                 strip_accents="ascii",
             )
         else:
-            print("Creating TF-IDF features...")
+            log.info("Creating TF-IDF features...")
             vectorizer = TfidfVectorizer(
                 max_features=max_features,
                 min_df=min_df,
@@ -198,10 +201,6 @@ class NewsgroupsDataset(ClusteringDataset):
         test_labels = test_labels.astype(np.int32)
 
         feature_type = "count" if use_count_vectorizer else "TF-IDF"
-        print(f"Train {feature_type} shape: {train_dense.shape}")
-        print(f"Test {feature_type} shape: {test_dense.shape}")
-        print(f"Feature vocabulary size: {len(feature_names)}")
-
         # Use official train/test split
         train_data = jnp.array(train_dense)
         test_data = jnp.array(test_dense)

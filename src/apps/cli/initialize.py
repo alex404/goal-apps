@@ -2,10 +2,11 @@
 
 import logging
 import os
+import signal
 import sys
 import traceback
 from pathlib import Path
-from types import TracebackType
+from types import FrameType, TracebackType
 
 import hydra
 import jax
@@ -140,6 +141,29 @@ def make_run_dir(
     return run_dir
 
 
+### Signal Handling ###
+
+
+def setup_signal_handlers(logger: Logger) -> None:
+    """Setup signal handlers for graceful shutdown and preemption handling."""
+
+    def handle_sigterm(signum: int, frame: FrameType | None) -> None:
+        """Handle SLURM preemption - mark for requeue."""
+        del signum, frame  # Signal handler signature required but unused
+        log.info("Received SIGTERM - handling preemption")
+        logger.finish_preempted()
+
+    def handle_sigint(signum: int, frame: FrameType | None) -> None:
+        """Handle user Ctrl+C - clean exit without requeue."""
+        del signum, frame  # Signal handler signature required but unused
+        log.info("Received SIGINT - handling user interruption")
+        logger.finish_interrupted()
+
+    signal.signal(signal.SIGTERM, handle_sigterm)
+    signal.signal(signal.SIGINT, handle_sigint)
+    log.info("Signal handlers registered for SIGTERM and SIGINT")
+
+
 ### Core Initialization Function ###
 
 
@@ -225,6 +249,9 @@ def initialize_run(
     OmegaConf.save(cfg, saved_config_path)
     logger.log_config()
     print_config_tree(OmegaConf.to_yaml(cfg, resolve=True))
+
+    # Setup signal handlers for graceful shutdown
+    setup_signal_handlers(logger)
 
     # will return logger as well
     return handler, logger, dataset, model

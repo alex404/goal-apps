@@ -1,6 +1,7 @@
 """Logger for JAX-based applications. Isolates logging functionality from the main application logic, allowing for isolated inclusion of logging frameworks like e.g. Weight and Biases."""
 
 import logging
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -81,14 +82,13 @@ class Logger:
                 id=self.run_id_override,
                 resume="allow",
             )
-            wandb.mark_preempting()
             wandb.define_metric("epoch")
             wandb.define_metric("*", step_metric="epoch")
 
     @property
     def run_id(self) -> str | None:
         """Get run ID from override or environment."""
-        return wandb.run.id if wandb.run else None  # pyright: ignore[reportUnknownVariableType]
+        return wandb.run.id if wandb.run else None
 
     @staticmethod
     def set_metric_buffer(metrics: MetricHistory) -> None:
@@ -191,7 +191,10 @@ class Logger:
         def save_debug(params: dict[str, Array]) -> None:
             handler.save_debug_state(params, context)
             log.error(f"NaNs detected in {context}")
-            raise ValueError(f"NaN values detected in {context}")
+
+            if self.use_wandb and wandb.run:
+                wandb.finish(exit_code=1)
+            sys.exit(1)
 
         # Function for no-op case
         def no_op(_: None) -> None:
@@ -216,7 +219,20 @@ class Logger:
             plt.close(fig)
 
         if self.use_wandb:
-            wandb.finish()
+            wandb.finish(exit_code=0)
 
         # Clear buffer after finalization
         _metric_buffer.clear()
+
+    def finish_preempted(self) -> None:
+        """Handle SLURM preemption - mark for requeue."""
+        if self.use_wandb and wandb.run:
+            wandb.mark_preempting()  # pyright: ignore[reportAttributeAccessIssue]
+            wandb.finish(exit_code=143)
+        sys.exit(143)
+
+    def finish_interrupted(self) -> None:
+        """Handle user Ctrl+C - don't requeue."""
+        if self.use_wandb and wandb.run:
+            wandb.finish(exit_code=130)
+        sys.exit(130)

@@ -10,6 +10,6 @@ remove: []
 use_count_vectorizer: false
 
 # Optimized parameters for metadata-rich environment
-max_features: 20000       # Optimal - fewer but cleaner features work better with metadata
-min_df: 2               # Starting point - may need adjustment with metadata  
+# max_features: 20000       # Optimal - fewer but cleaner features work better with metadata
+min_df: 5               # Starting point - may need adjustment with metadata  
 max_df: 0.9             # Starting point - may need adjustment with metadata
