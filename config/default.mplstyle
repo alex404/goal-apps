@@ -36,7 +36,7 @@ legend.fancybox : True
 legend.fontsize: 10
 
 #### * FIGURE *
-figure.dpi: 150    # figure dots per inch
+figure.dpi: 120    # figure dots per inch
 figure.facecolor: white
 figure.figsize: 6,4
 
@@ -47,7 +47,7 @@ image.cmap: viridis             ## A colormap name, gray etc...
 scatter.marker : o
 
 #### * SAVING FIGURES *
-savefig.dpi: 150
+savefig.dpi: 120
 savefig.facecolor: white
 savefig.format: png
 savefig.bbox: tight
