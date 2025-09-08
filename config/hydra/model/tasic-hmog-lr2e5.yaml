@@ -1,0 +1,38 @@
+# Tasic single-cell RNA-seq configuration for HMOG - higher learning rate test
+defaults:
+  - hmog_diff
+  - _self_
+
+# Model architecture - same as stable baseline
+latent_dim: 5        # Tiny latent dimension  
+n_clusters: 5        # Stable cluster count
+
+# Training schedule - blend of MNIST efficiency and newsgroups conservatism
+lr_scales: [1, 0.3, 0.1]  # Match newsgroups pattern
+num_cycles: 5             # Match MNIST efficiency
+lgm_noise_scale: 0.01     # Match successful configs
+mix_noise_scale: 0.01
+
+# Skip pre-training like successful configs
+pre:
+  n_epochs: 0
+
+lgm:
+  n_epochs: 0
+
+mix:
+  n_epochs: 0
+
+# Full training - test slightly higher learning rate
+full:
+  lr: 2e-5           # Double the stable learning rate
+  n_epochs: 300      # More than MNIST (100), less than old tasic (1000)
+  batch_steps: 1000  # Match MNIST's successful batch size
+  grad_clip: 0.1     # Very aggressive gradient clipping
+  min_prob: 1e-2     # Higher minimum probabilities
+  obs_min_var: 1e-3  # Much higher minimum variance
+  lat_min_var: 1e-4  # Much higher minimum variance
+  upr_prs_reg: 1e-2  # Very strong regularization
+  lwr_prs_reg: 1e-2  # Very strong regularization  
+  l1_reg: 1e-5       # Very weak L1 to avoid extreme sparsity
+  l2_reg: 1e-2       # Very strong L2 regularization

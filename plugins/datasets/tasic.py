@@ -33,14 +33,14 @@ class TasicConfig(ClusteringDatasetConfig):
 
     _target_: str = "plugins.datasets.tasic.TasicDataset.load"
 
-    # Gene selection
-    n_genes: int = 3000
-    use_fano_selection: bool = True
-    min_expression_threshold: float = 0.0
+    # Gene selection - optimized for clustering performance
+    n_genes: int = 2000  # Optimal balance: enough signal, not too noisy
+    use_fano_selection: bool = True  # Select truly variable genes after normalization
+    min_expression_threshold: float = 0.1  # Filter very low-expressed genes
 
-    # Preprocessing
-    log_transform: bool = True
-    standardize: bool = False
+    # Preprocessing - critical for scRNA-seq clustering
+    log_transform: bool = True  # Essential for scRNA-seq normalization
+    standardize: bool = True  # Critical for k-means distance calculations
 
     # Data splits
     test_fraction: float = 0.2
@@ -86,9 +86,9 @@ class TasicDataset(ClusteringDataset):
     def load(
         cls,
         cache_dir: Path,
-        n_genes: int = 3000,
+        n_genes: int = 2000,
         use_fano_selection: bool = True,
-        min_expression_threshold: float = 0.0,
+        min_expression_threshold: float = 0.1,
         log_transform: bool = True,
         standardize: bool = True,
         test_fraction: float = 0.2,
@@ -115,8 +115,11 @@ class TasicDataset(ClusteringDataset):
         """
         data_file = cache_dir / "tasic_data.h5"
 
-        # Download data
-        _download_tasic_data(data_file)
+        # Download data only if cache doesn't exist
+        if not data_file.exists():
+            _download_tasic_data(data_file)
+        else:
+            print(f"Using cached Tasic dataset: {data_file}")
 
         # Load data from HDF5 file
         import h5py
@@ -148,7 +151,19 @@ class TasicDataset(ClusteringDataset):
             gene_names = [gene_names[i] for i in range(len(gene_names)) if gene_mask[i]]
             print(f"After expression filtering: {len(gene_names)} genes")
 
-        # Gene selection using Fano factor
+        # Library-size normalization (CP10k)
+        print("Applying library-size normalization (CP10k)...")
+        libsize = expression_data.sum(axis=1, keepdims=True)
+        libsize[libsize == 0] = 1.0  # Avoid division by zero
+        expression_data = (expression_data / libsize) * 1e4
+        print("Applied CP10k normalization")
+
+        # Log transformation (after normalization)
+        if log_transform:
+            expression_data = np.log1p(expression_data)  # log(1 + x)
+            print("Applied log transformation")
+
+        # Gene selection using Fano factor (on normalized/log space)
         if use_fano_selection and n_genes < expression_data.shape[1]:
             gene_means = expression_data.mean(axis=0)
             gene_vars = expression_data.var(axis=0)
@@ -156,14 +171,13 @@ class TasicDataset(ClusteringDataset):
 
             # Select top genes by Fano factor
             top_gene_indices = np.argsort(fano_factors)[-n_genes:]
+            top_gene_indices.sort()  # Deterministic ordering
             expression_data = expression_data[:, top_gene_indices]
             gene_names = [gene_names[i] for i in top_gene_indices]
             print(f"After Fano factor selection: {len(gene_names)} genes")
 
-        # Log transformation
-        if log_transform:
-            expression_data = np.log1p(expression_data)  # log(1 + x)
-            print("Applied log transformation")
+        # Keep a copy for visualization stats before standardization
+        visu_matrix = expression_data.copy()
 
         # Standardization
         if standardize:
@@ -177,25 +191,43 @@ class TasicDataset(ClusteringDataset):
         expression_data = jnp.array(expression_data)
         cell_labels = jnp.array(cell_labels)
 
-        # Create train/test split
+        # Create train/test split - try stratified first, fallback to random
         n_cells = expression_data.shape[0]
-        rng = np.random.RandomState(random_seed)
-        test_indices = rng.choice(
-            n_cells, size=int(n_cells * test_fraction), replace=False
-        )
-        train_indices = np.setdiff1d(np.arange(n_cells), test_indices)
+        
+        try:
+            # Try stratified split first
+            from sklearn.model_selection import StratifiedShuffleSplit
+            sss = StratifiedShuffleSplit(n_splits=1, test_size=test_fraction, random_state=random_seed)
+            (train_indices, test_indices), = sss.split(np.zeros(len(cell_labels)), cell_labels)
+            train_indices = np.asarray(train_indices)
+            test_indices = np.asarray(test_indices)
+            print(f"Stratified split: {len(train_indices)} train, {len(test_indices)} test cells")
+        except ValueError as e:
+            # Fallback to random split if stratified fails (some classes have <2 samples)
+            print(f"Stratified split failed ({e}), using random split instead")
+            rng = np.random.RandomState(random_seed)
+            test_indices = rng.choice(
+                n_cells, size=int(n_cells * test_fraction), replace=False
+            )
+            train_indices = np.setdiff1d(np.arange(n_cells), test_indices)
+            print(f"Random split: {len(train_indices)} train, {len(test_indices)} test cells")
 
         train_data = expression_data[train_indices]
         test_data = expression_data[test_indices]
         train_labels = cell_labels[train_indices]
         test_labels = cell_labels[test_indices]
 
-        # Compute metadata for visualization
-        gene_means = train_data.mean(axis=0)
-        gene_stds = train_data.std(axis=0)
+        # Compute metadata for visualization from pre-standardized matrix
+        train_visu = visu_matrix[train_indices]
+        gene_means = train_visu.mean(axis=0)
+        gene_stds = train_visu.std(axis=0)
 
-        # Select genes for global profile (highest variance)
+        # Select genes for global profile (highest variance from log-normalized space)
         global_gene_indices = jnp.argsort(gene_stds)[-n_global_genes:]
+        
+        # Convert visualization stats to JAX arrays
+        gene_means = jnp.array(gene_means)
+        gene_stds = jnp.array(gene_stds)
 
         return cls(
             cache_dir=cache_dir,
@@ -373,6 +405,11 @@ def _download_tasic_data(output_path: Path) -> None:
     import pandas as pd
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Skip if already processed
+    if output_path.exists():
+        print(f"Tasic dataset already exists at {output_path}")
+        return
 
     # Allen Institute download URL for Tasic 2018 dataset
     ZIP_URL = (

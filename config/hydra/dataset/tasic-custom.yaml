@@ -1,0 +1,18 @@
+_target_: plugins.datasets.tasic.TasicDataset.load
+
+# Gene selection parameters - testing 500 genes
+n_genes: 1000
+use_fano_selection: true
+min_expression_threshold: 0.0
+
+# Preprocessing for HMOG - log transform is critical for scRNA-seq
+log_transform: true
+standardize: true
+
+# Data splits
+test_fraction: 0.2
+random_seed: 42
+
+# Visualization parameters
+n_global_genes: 100
+n_marker_genes: 8

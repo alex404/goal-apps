@@ -1,11 +1,11 @@
-# Tasic single-cell RNA-seq configuration for HMOG
+# Tasic single-cell RNA-seq configuration for HMOG - 8 clusters
 defaults:
   - hmog_diff
   - _self_
 
-# Model architecture - minimal complexity for stability
-latent_dim: 200
-n_clusters: 50        # Very few clusters to start with
+# Model architecture - testing 8 clusters with stable gene count
+latent_dim: 5        # Keep tiny latent dimension
+n_clusters: 8        # Test moderate increase in clusters
 
 # Training schedule - blend of MNIST efficiency and newsgroups conservatism
 lr_scales: [1, 0.3, 0.1]  # Match newsgroups pattern
@@ -25,14 +25,14 @@ mix:
 
 # Full training - ultra-conservative for numerical stability
 full:
-  lr: 3e-6           # Much smaller learning rate
-  n_epochs: 1000      # More than MNIST (100), less than old tasic (1000)
+  lr: 1e-5           # Much smaller learning rate
+  n_epochs: 300      # More than MNIST (100), less than old tasic (1000)
   batch_steps: 1000  # Match MNIST's successful batch size
-  grad_clip: 1     # Very aggressive gradient clipping
-  min_prob: 1e-3     # Higher minimum probabilities
+  grad_clip: 0.1     # Very aggressive gradient clipping
+  min_prob: 1e-2     # Higher minimum probabilities
   obs_min_var: 1e-3  # Much higher minimum variance
   lat_min_var: 1e-4  # Much higher minimum variance
-  upr_prs_reg: 1e-3  # Very strong regularization
-  lwr_prs_reg: 1e-3  # Very strong regularization  
+  upr_prs_reg: 1e-2  # Very strong regularization
+  lwr_prs_reg: 1e-2  # Very strong regularization  
   l1_reg: 1e-5       # Very weak L1 to avoid extreme sparsity
-  l2_reg: 1e-3       # Very strong L2 regularization
+  l2_reg: 1e-2       # Very strong L2 regularization
