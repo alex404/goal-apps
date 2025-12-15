@@ -5,7 +5,7 @@ defaults:
 
 # Model architecture - minimal complexity for stability
 latent_dim: 200
-n_clusters: 50        # Very few clusters to start with
+n_clusters: 200        # Very few clusters to start with
 
 # Training schedule - blend of MNIST efficiency and newsgroups conservatism
 lr_scales: [1, 0.3, 0.1]  # Match newsgroups pattern
