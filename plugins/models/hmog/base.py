@@ -3,20 +3,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Callable
 
 import jax
 from goal.geometry import (
     Diagonal,
     PositiveDefinite,
     Scale,
-)
-from goal.models import (
-    AnalyticMixture,
-    DifferentiableHMoG,
-    DifferentiableLinearGaussianModel,
-    Normal,
 )
 from jax import Array
 
@@ -31,13 +25,6 @@ class RepresentationType(Enum):
     scale = Scale
     diagonal = Diagonal
     positive_definite = PositiveDefinite
-
-
-### HMoG Protocol ###
-
-type HMoG = DifferentiableHMoG[Any, Any]
-type LGM = DifferentiableLinearGaussianModel[Any, Any]
-type Mixture = AnalyticMixture[Normal[Any]]
 
 
 ### Helpers ###

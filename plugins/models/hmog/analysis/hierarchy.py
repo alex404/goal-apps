@@ -1,20 +1,18 @@
-"""Base class for HMoG implementations."""
+"""Base class for DifferentiableHMoG implementations."""
 
 from __future__ import annotations
 
 from abc import ABC
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, override
+from typing import override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.cluster.hierarchy
 import scipy.spatial.distance
-from goal.geometry import (
-    Natural,
-    Point,
-)
+from goal.models import DifferentiableHMoG
 from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
@@ -26,15 +24,14 @@ from apps.interface import (
 )
 from apps.runtime import Artifact, RunHandler
 
-from ..base import HMoG
 from .base import cluster_probabilities, get_component_prototypes, symmetric_kl_matrix
 
 ### Helpers ###
 
 
-def posterior_co_assignment_matrix[M: HMoG](
-    model: M,
-    params: Point[Natural, M],
+def posterior_co_assignment_matrix(
+    model: DifferentiableHMoG,
+    params: Array,
     data: Array,
 ) -> Array:
     """Compute posterior co-assignment matrix between components.
@@ -43,7 +40,7 @@ def posterior_co_assignment_matrix[M: HMoG](
     based on their posterior probabilities.
 
     Args:
-        model: HMoG model
+        model: DifferentiableHMoG model
         params: Model parameters
         data: Data points for calculating empirical similarities
 
@@ -51,7 +48,7 @@ def posterior_co_assignment_matrix[M: HMoG](
         Co-assignment similarity matrix (higher values = more similar)
     """
     # Get cluster probabilities for each data point
-    probs = cluster_probabilities(model, params.array, data)
+    probs = cluster_probabilities(model, params, data)
 
     # Compute co-assignment matrix efficiently through matrix multiplication
     # co_assignment[i,j] = sum_x p(x,i) * p(x,j)
@@ -89,16 +86,16 @@ class CoAssignmentClusterHierarchy(ClusterHierarchy):
     """Co-assignment probability-based clustering hierarchy."""
 
 
-def generate_cluster_hierarchy[M: HMoG, C: ClusterHierarchy](
-    model: M,
-    params: Point[Natural, M],
+def generate_cluster_hierarchy[C: ClusterHierarchy](
+    model: DifferentiableHMoG,
+    params: Array,
     hierarchy_type: type[C],
     data: Array,
 ) -> C:
     """Generate clustering hierarchy analysis with specified similarity metric.
 
     Args:
-        model: HMoG model
+        model: DifferentiableHMoG model
         params: Model parameters
         hierarchy_type: Type of cluster hierarchy to create
         data: Data points for calculating empirical similarities (only needed for co-assignment)
@@ -149,7 +146,7 @@ def generate_cluster_hierarchy[M: HMoG, C: ClusterHierarchy](
     # Create the hierarchy object of the requested type
     return hierarchy_type(
         prototypes=prototypes,
-        linkage_matrix=linkage_matrix,  # pyright: ignore[reportArgumentType]
+        linkage_matrix=linkage_matrix,
         distance_matrix=dist_matrix,
     )
 
@@ -246,20 +243,21 @@ def hierarchy_plotter(
 
 
 @dataclass(frozen=True)
-class HierarchyAnalysis[T: ClusterHierarchy](Analysis[ClusteringDataset, HMoG, T], ABC):
+class HierarchyAnalysis[T: ClusterHierarchy](
+    Analysis[ClusteringDataset, DifferentiableHMoG, T], ABC
+):
     @override
     def generate(
         self,
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: HMoG,
+        model: DifferentiableHMoG,
         epoch: int,
         params: Array,
     ) -> T:
-        typed_params = model.natural_point(params)
         return generate_cluster_hierarchy(
-            model, typed_params, self.artifact_type, dataset.train_data
+            model, params, self.artifact_type, dataset.train_data
         )
 
     @override

@@ -1,18 +1,16 @@
-"""Base class for HMoG implementations."""
+"""Base class for DifferentiableHMoG implementations."""
 
 from __future__ import annotations
 
 from abc import ABC
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, override
+from typing import override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
-from goal.geometry import (
-    Natural,
-    Point,
-)
+from goal.models import DifferentiableHMoG
 from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
@@ -26,7 +24,6 @@ from apps.interface import (
 )
 from apps.runtime import Artifact, MetricDict, RunHandler
 
-from ..base import HMoG
 from .base import (
     STATS_LEVEL,
     cluster_accuracy,
@@ -187,12 +184,12 @@ class OptimalMergeResults(MergeResults):
     """Optimal assignment merge results."""
 
 
-def generate_merge_results[M: HMoG, MR: MergeResults](
+def generate_merge_results[MR: MergeResults](
     handler: RunHandler,
     dataset: ClusteringDataset,
-    model: M,
+    model: DifferentiableHMoG,
     epoch: int,
-    params: Point[Natural, M],
+    params: Array,
     merge_type: type[MR],
     filter_empty_clusters: bool = True,
     min_cluster_size: float = 0.0005,
@@ -200,10 +197,10 @@ def generate_merge_results[M: HMoG, MR: MergeResults](
     """Generate merge results using specified merge strategy."""
 
     prototypes = get_component_prototypes(model, params)
-    train_probs = cluster_probabilities(model, params.array, dataset.train_data)
+    train_probs = cluster_probabilities(model, params, dataset.train_data)
     train_assignments = jnp.argmax(train_probs, axis=1)
 
-    n_clusters = model.upr_hrm.n_categories
+    n_clusters = model.pst_man.n_categories
     n_classes = dataset.n_classes
 
     # Filter empty clusters if requested
@@ -251,7 +248,7 @@ def generate_merge_results[M: HMoG, MR: MergeResults](
 
     # Compute metrics
     train_metrics = _compute_metrics(full_mapping, train_probs, dataset.train_labels)
-    test_probs = cluster_probabilities(model, params.array, dataset.test_data)
+    test_probs = cluster_probabilities(model, params, dataset.test_data)
     test_metrics = _compute_metrics(full_mapping, test_probs, dataset.test_labels)
 
     return merge_type(
@@ -349,7 +346,9 @@ def merge_results_plotter(
 
 
 @dataclass(frozen=True)
-class MergeAnalysis[T: MergeResults](Analysis[ClusteringDataset, HMoG, T], ABC):
+class MergeAnalysis[T: MergeResults](
+    Analysis[ClusteringDataset, DifferentiableHMoG, T], ABC
+):
     """KL divergence-based cluster merging analysis."""
 
     filter_empty_clusters: bool
@@ -361,17 +360,16 @@ class MergeAnalysis[T: MergeResults](Analysis[ClusteringDataset, HMoG, T], ABC):
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: HMoG,
+        model: DifferentiableHMoG,
         epoch: int,
         params: Array,
     ) -> T:
-        typed_params = model.natural_point(params)
         return generate_merge_results(
             handler,
             dataset,
             model,
             epoch,
-            typed_params,
+            params,
             self.artifact_type,
             self.filter_empty_clusters,
             self.min_cluster_size,

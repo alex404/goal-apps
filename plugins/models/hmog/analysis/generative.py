@@ -1,16 +1,14 @@
-"""Base class for HMoG implementations."""
+"""Base class for DifferentiableHMoG implementations."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, override
+from typing import override
 
 import matplotlib.pyplot as plt
 import numpy as np
-from goal.geometry import (
-    Natural,
-    Point,
-)
+from goal.models import DifferentiableHMoG
 from jax import Array
 from matplotlib.figure import Figure
 
@@ -19,8 +17,6 @@ from apps.interface import (
     ClusteringDataset,
 )
 from apps.runtime import Artifact, RunHandler
-
-from ..base import HMoG
 
 ### Generative Examples ###
 
@@ -32,16 +28,16 @@ class GenerativeExamples(Artifact):
     samples: Array  # Array of shape (n_samples, data_dim)
 
 
-def generate_examples[M: HMoG](
-    model: M,
-    params: Point[Natural, M],
+def generate_examples(
+    model: DifferentiableHMoG,
+    params: Array,
     n_samples: int,
     key: Array,
 ) -> GenerativeExamples:
     """Generate sample examples from the model.
 
     Args:
-        model: HMoG model
+        model: DifferentiableHMoG model
         params: Model parameters
         n_samples: Number of samples to generate
         key: Random key for sampling
@@ -86,7 +82,7 @@ def generative_examples_plotter(
                 else:
                     ax.axis("off")  # Hide empty plots
 
-        plt.suptitle("Generated Samples from HMoG Model", fontsize=14)
+        plt.suptitle("Generated Samples from DifferentiableHMoG Model", fontsize=14)
         plt.tight_layout()
         return fig
 
@@ -97,7 +93,9 @@ def generative_examples_plotter(
 
 
 @dataclass(frozen=True)
-class GenerativeExamplesAnalysis(Analysis[ClusteringDataset, HMoG, GenerativeExamples]):
+class GenerativeExamplesAnalysis(
+    Analysis[ClusteringDataset, DifferentiableHMoG, GenerativeExamples]
+):
     """Analysis of cluster prototypes with their members."""
 
     n_samples: int
@@ -113,14 +111,13 @@ class GenerativeExamplesAnalysis(Analysis[ClusteringDataset, HMoG, GenerativeExa
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: HMoG,
+        model: DifferentiableHMoG,
         epoch: int,
         params: Array,
     ) -> GenerativeExamples:
         """Generate collection of clusters with their members."""
         # Convert array to typed point for the model
-        typed_params = model.natural_point(params)
-        return generate_examples(model, typed_params, self.n_samples, key)
+        return generate_examples(model, params, self.n_samples, key)
 
     @override
     def plot(self, artifact: GenerativeExamples, dataset: ClusteringDataset) -> Figure:

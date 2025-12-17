@@ -1,4 +1,4 @@
-"""Configuration for HMoG implementations."""
+"""Configuration for DifferentiableHMoG implementations."""
 
 from __future__ import annotations
 
@@ -7,11 +7,9 @@ import logging
 import jax
 import jax.numpy as jnp
 from goal.geometry import (
-    Mean,
-    Natural,
-    Point,
     Replicated,
 )
+from goal.models import DifferentiableHMoG, NormalLGM
 from jax import Array
 
 from apps.interface import (
@@ -19,7 +17,6 @@ from apps.interface import (
 )
 from apps.runtime import STATS_NUM, Logger, MetricDict
 
-from ..base import LGM, HMoG
 from .base import (
     analyze_component,
     cluster_accuracy,
@@ -39,14 +36,14 @@ INFO_LEVEL = jnp.array(logging.INFO)
 ### Helpers ###
 
 
-def pre_log_epoch_metrics[H: LGM](
+def pre_log_epoch_metrics(
     dataset: ClusteringDataset,
-    model: H,
+    model: NormalLGM,
     logger: Logger,
-    params: Point[Natural, H],
+    params: Array,
     epoch: Array,
     initial_metrics: MetricDict,
-    batch_grads: None | Point[Mean, Replicated[H]] = None,
+    batch_grads: None | Array = None,
     log_freq: int = 1,
 ) -> None:
     """Log metrics for an epoch."""
@@ -76,15 +73,15 @@ def pre_log_epoch_metrics[H: LGM](
             }
         )
 
-        obs_params, int_params, lat_params = model.split_params(params)
-        obs_loc_params, obs_prs_params = model.obs_man.split_params(obs_params)
-        lat_loc_params, lat_prs_params = model.lat_man.split_params(lat_params)
+        obs_params, int_params, lat_params = model.split_coords(params)
+        obs_loc_params, obs_prs_params = model.obs_man.split_coords(obs_params)
+        lat_loc_params, lat_prs_params = model.pst_man.split_coords(lat_params)
 
-        metrics = update_stats("Params", "Obs Location", obs_loc_params.array, metrics)
-        metrics = update_stats("Params", "Obs Precision", obs_prs_params.array, metrics)
-        metrics = update_stats("Params", "Obs Interaction", int_params.array, metrics)
-        metrics = update_stats("Params", "Lat Location", lat_loc_params.array, metrics)
-        metrics = update_stats("Params", "Lat Precision", lat_prs_params.array, metrics)
+        metrics = update_stats("Params", "Obs Location", obs_loc_params, metrics)
+        metrics = update_stats("Params", "Obs Precision", obs_prs_params, metrics)
+        metrics = update_stats("Params", "Obs Interaction", int_params, metrics)
+        metrics = update_stats("Params", "Lat Location", lat_loc_params, metrics)
+        metrics = update_stats("Params", "Lat Precision", lat_prs_params, metrics)
 
         # Regularization Metrics
 
@@ -93,7 +90,7 @@ def pre_log_epoch_metrics[H: LGM](
             {
                 "Regularization/Loading Sparsity": (
                     STATS_LEVEL,
-                    jnp.mean(jnp.abs(int_params.array) < 1e-6),
+                    jnp.mean(jnp.abs(int_params) < 1e-6),
                 ),
             }
         )
@@ -101,22 +98,22 @@ def pre_log_epoch_metrics[H: LGM](
         # Prior statistics
         means = model.to_mean(params)
 
-        obs_means, lwr_int_means, lat_means = model.split_params(means)
+        obs_means, lwr_int_means, lat_means = model.split_coords(means)
         obs_mean, obs_cov = model.obs_man.split_mean_covariance(obs_means)
-        lat_mean, lat_cov = model.lat_man.split_mean_covariance(lat_means)
+        lat_mean, lat_cov = model.pst_man.split_mean_covariance(lat_means)
 
-        metrics = update_stats("Means", "Obs Mean", obs_mean.array, metrics)
-        metrics = update_stats("Means", "Obs Cov", obs_cov.array, metrics)
-        metrics = update_stats("Means", "Obs Interaction", lwr_int_means.array, metrics)
-        metrics = update_stats("Means", "Lat Mean", lat_mean.array, metrics)
-        metrics = update_stats("Means", "Lat Cov", lat_cov.array, metrics)
+        metrics = update_stats("Means", "Obs Mean", obs_mean, metrics)
+        metrics = update_stats("Means", "Obs Cov", obs_cov, metrics)
+        metrics = update_stats("Means", "Obs Interaction", lwr_int_means, metrics)
+        metrics = update_stats("Means", "Lat Mean", lat_mean, metrics)
+        metrics = update_stats("Means", "Lat Cov", lat_cov, metrics)
 
         ### Conjugation Stats ###
 
-        lkl_params = model.lkl_man.join_params(obs_params, int_params)
+        lkl_params = model.lkl_fun_man.join_coords(obs_params, int_params)
         rho = model.conjugation_parameters(lkl_params)
 
-        rho_stats = analyze_component(model.con_lat_man, rho)
+        rho_stats = analyze_component(model.prr_man, rho)
         metrics.update(
             {
                 "Conjugation/Location Norm": (STATS_LEVEL, rho_stats[0]),
@@ -130,13 +127,13 @@ def pre_log_epoch_metrics[H: LGM](
 
         ### Grad Norms ###
 
-        def norm_grads(grad: Point[Mean, H]) -> Array:
-            obs_grad, lwr_int_grad, lat_grad = model.split_params(grad)
-            obs_loc_grad, obs_prs_grad = model.obs_man.split_params(obs_grad)
-            lat_loc_grad, lat_prs_grad = model.lat_man.split_params(lat_grad)
+        def norm_grads(grad: Array) -> Array:
+            obs_grad, lwr_int_grad, lat_grad = model.split_coords(grad)
+            obs_loc_grad, obs_prs_grad = model.obs_man.split_coords(obs_grad)
+            lat_loc_grad, lat_prs_grad = model.pst_man.split_coords(lat_grad)
             return jnp.asarray(
                 [
-                    jnp.linalg.norm(grad.array)
+                    jnp.linalg.norm(grad)
                     for grad in [
                         obs_loc_grad,
                         obs_prs_grad,
@@ -148,7 +145,7 @@ def pre_log_epoch_metrics[H: LGM](
             )
 
         if batch_grads is not None:
-            batch_man: Replicated[H] = Replicated(model, batch_grads.shape[0])
+            batch_man = Replicated(model, batch_grads.shape[0])
             grad_norms = batch_man.map(norm_grads, batch_grads).T
 
             metrics = update_stats("Grad Norms", "Obs Location", grad_norms[0], metrics)
@@ -171,14 +168,14 @@ def pre_log_epoch_metrics[H: LGM](
     jax.lax.cond(epoch % log_freq == 0, compute_metrics, no_op)
 
 
-def log_epoch_metrics[H: HMoG](
+def log_epoch_metrics(
     dataset: ClusteringDataset,
-    model: H,
+    model: DifferentiableHMoG,
     logger: Logger,
-    params: Point[Natural, H],
+    params: Array,
     epoch: Array,
     initial_metrics: MetricDict,
-    batch_grads: None | Point[Mean, Replicated[H]] = None,
+    batch_grads: None | Array = None,
     log_freq: int = 1,
 ) -> None:
     """Log metrics for an epoch."""
@@ -217,15 +214,15 @@ def log_epoch_metrics[H: HMoG](
         # Clustering metrics if dataset has labels
         if dataset.has_labels:
             # Get cluster assignments using the existing function
-            train_clusters = cluster_assignments(model, params.array, train_data)
-            test_clusters = cluster_assignments(model, params.array, test_data)
+            train_clusters = cluster_assignments(model, params, train_data)
+            test_clusters = cluster_assignments(model, params, test_data)
 
             # Compute accuracy
             train_acc = cluster_accuracy(dataset.train_labels, train_clusters)
             test_acc = cluster_accuracy(dataset.test_labels, test_clusters)
 
             # Compute NMI
-            n_clusters = model.upr_hrm.n_categories
+            n_clusters = model.pst_man.n_categories
             n_classes = dataset.n_classes
 
             train_nmi = clustering_nmi(
@@ -247,29 +244,25 @@ def log_epoch_metrics[H: HMoG](
 
         # Raw Parameter Statistics
 
-        obs_params, lwr_int_params, upr_params = model.split_params(params)
-        obs_loc_params, obs_prs_params = model.obs_man.split_params(obs_params)
-        lat_params, upr_int_params, cat_params = model.upr_hrm.split_params(upr_params)
-        lat_loc_params, lat_prs_params = model.upr_hrm.obs_man.split_params(lat_params)
+        obs_params, lwr_int_params, upr_params = model.split_coords(params)
+        obs_loc_params, obs_prs_params = model.obs_man.split_coords(obs_params)
+        lat_params, upr_int_params, cat_params = model.pst_man.split_coords(upr_params)
+        lat_loc_params, lat_prs_params = model.pst_man.obs_man.split_coords(lat_params)
 
-        metrics = update_stats("Params", "Obs Location", obs_loc_params.array, metrics)
-        metrics = update_stats("Params", "Obs Precision", obs_prs_params.array, metrics)
-        metrics = update_stats(
-            "Params", "Obs Interaction", lwr_int_params.array, metrics
-        )
-        metrics = update_stats("Params", "Lat Location", lat_loc_params.array, metrics)
-        metrics = update_stats("Params", "Lat Precision", lat_prs_params.array, metrics)
-        metrics = update_stats(
-            "Params", "Lat Interaction", upr_int_params.array, metrics
-        )
-        metrics = update_stats("Params", "Categorical", cat_params.array, metrics)
+        metrics = update_stats("Params", "Obs Location", obs_loc_params, metrics)
+        metrics = update_stats("Params", "Obs Precision", obs_prs_params, metrics)
+        metrics = update_stats("Params", "Obs Interaction", lwr_int_params, metrics)
+        metrics = update_stats("Params", "Lat Location", lat_loc_params, metrics)
+        metrics = update_stats("Params", "Lat Precision", lat_prs_params, metrics)
+        metrics = update_stats("Params", "Lat Interaction", upr_int_params, metrics)
+        metrics = update_stats("Params", "Categorical", cat_params, metrics)
 
         # Add latent distribution metrics
         metrics.update(
             {
                 "Regularization/Loading Sparsity": (
                     STATS_LEVEL,
-                    jnp.mean(jnp.abs(lwr_int_params.array) < 1e-6),
+                    jnp.mean(jnp.abs(lwr_int_params) < 1e-6),
                 ),
             }
         )
@@ -278,28 +271,28 @@ def log_epoch_metrics[H: HMoG](
 
         means = model.to_mean(params)
 
-        obs_means, lwr_int_means, lat_means = model.split_params(means)
+        obs_means, lwr_int_means, lat_means = model.split_coords(means)
         obs_mean, obs_cov = model.obs_man.split_mean_covariance(obs_means)
-        lat_obs_means, lat_int_means, lat_lat_means = model.lat_man.split_params(
+        lat_obs_means, lat_int_means, lat_lat_means = model.pst_man.split_coords(
             lat_means
         )
-        lat_mean, lat_cov = model.lat_man.obs_man.split_mean_covariance(lat_obs_means)
+        lat_mean, lat_cov = model.pst_man.obs_man.split_mean_covariance(lat_obs_means)
 
-        metrics = update_stats("Means", "Obs Mean", obs_mean.array, metrics)
-        metrics = update_stats("Means", "Obs Cov", obs_cov.array, metrics)
-        metrics = update_stats("Means", "Obs Interaction", lwr_int_means.array, metrics)
-        metrics = update_stats("Means", "Lat Mean", lat_mean.array, metrics)
-        metrics = update_stats("Means", "Lat Cov", lat_cov.array, metrics)
-        metrics = update_stats("Means", "Lat Interaction", lat_int_means.array, metrics)
-        metrics = update_stats("Means", "Categorical", lat_lat_means.array, metrics)
+        metrics = update_stats("Means", "Obs Mean", obs_mean, metrics)
+        metrics = update_stats("Means", "Obs Cov", obs_cov, metrics)
+        metrics = update_stats("Means", "Obs Interaction", lwr_int_means, metrics)
+        metrics = update_stats("Means", "Lat Mean", lat_mean, metrics)
+        metrics = update_stats("Means", "Lat Cov", lat_cov, metrics)
+        metrics = update_stats("Means", "Lat Interaction", lat_int_means, metrics)
+        metrics = update_stats("Means", "Categorical", lat_lat_means, metrics)
 
         ### Conjugation and Latent Mixture statistics ###
 
         lkl_params, mix_params = model.split_conjugated(params)
         rho = model.lwr_hrm.conjugation_parameters(lkl_params)
-        cmp_params, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
+        cmp_params, _ = model.prr_man.split_natural_mixture(mix_params)
 
-        rho_stats = analyze_component(model.con_upr_hrm.obs_man, rho)
+        rho_stats = analyze_component(model.prr_man.obs_man, rho)
         metrics.update(
             {
                 "Conjugation/Location Norm": (STATS_LEVEL, rho_stats[0]),
@@ -311,8 +304,8 @@ def log_epoch_metrics[H: HMoG](
             }
         )
 
-        cmp_stats = model.con_upr_hrm.cmp_man.map(
-            lambda cmp: analyze_component(model.con_upr_hrm.obs_man, cmp), cmp_params
+        cmp_stats = model.prr_man.cmp_man.map(
+            lambda cmp: analyze_component(model.prr_man.obs_man, cmp), cmp_params
         ).T
 
         metrics = update_stats("Components", "Location Norm", cmp_stats[0], metrics)
@@ -324,11 +317,11 @@ def log_epoch_metrics[H: HMoG](
 
         ### Grad Norms ###
 
-        def norm_grads(grad: Point[Mean, H]) -> Array:
-            obs_grad, lwr_int_grad, upr_grad = model.split_params(grad)
-            obs_loc_grad, obs_prs_grad = model.obs_man.split_params(obs_grad)
-            lat_grad, upr_int_grad, cat_grad = model.upr_hrm.split_params(upr_grad)
-            lat_loc_grad, lat_prs_grad = model.upr_hrm.obs_man.split_params(lat_grad)
+        def norm_grads(grad: Array) -> Array:
+            obs_grad, lwr_int_grad, upr_grad = model.split_coords(grad)
+            obs_loc_grad, obs_prs_grad = model.obs_man.split_coords(obs_grad)
+            lat_grad, upr_int_grad, cat_grad = model.pst_man.split_coords(upr_grad)
+            lat_loc_grad, lat_prs_grad = model.pst_man.obs_man.split_coords(lat_grad)
             grads = [
                 obs_loc_grad,
                 obs_prs_grad,
@@ -338,10 +331,10 @@ def log_epoch_metrics[H: HMoG](
                 upr_int_grad,
                 cat_grad,
             ]
-            return jnp.asarray([jnp.linalg.norm(grad.array) for grad in grads])
+            return jnp.asarray([jnp.linalg.norm(grad) for grad in grads])
 
         if batch_grads is not None:
-            batch_man: Replicated[H] = Replicated(model, batch_grads.shape[0])
+            batch_man = Replicated(model, batch_grads.shape[0])
             grad_norms = batch_man.map(norm_grads, batch_grads).T
 
             metrics = update_stats("Grad Norms", "Obs Location", grad_norms[0], metrics)

@@ -10,10 +10,10 @@ from types import FrameType, TracebackType
 
 import hydra
 import jax
+import jax.extend
 import matplotlib.pyplot as plt
 from hydra.core.config_store import ConfigStore
 from hydra.utils import instantiate
-from jax.lib import xla_bridge
 from omegaconf import OmegaConf
 from rich.console import Console
 from rich.logging import RichHandler
@@ -30,6 +30,7 @@ from .util import print_config_tree
 ### Python Logging ###
 
 logging.getLogger("jax._src.xla_bridge").addFilter(lambda _: False)
+logging.getLogger("jax._src.extend.backend").addFilter(lambda _: False)
 
 log = logging.getLogger(__name__)
 
@@ -226,7 +227,7 @@ def initialize_run(
     log.info(f"Run name: {handler.run_name}")
     log.info(f"Project Root: {handler.project_root}")
     log.info(f"Available devices: {jax.devices()}")
-    log.info(f"JAX backend: {xla_bridge.get_backend().platform}")
+    log.info(f"JAX backend: {jax.extend.backend.get_backend().platform}")
     log.info(f"with JIT: {cfg.jit}")
 
     log.info("Loading dataset...")

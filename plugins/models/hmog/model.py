@@ -11,8 +11,6 @@ import jax.numpy as jnp
 import numpy as np
 from goal.geometry import (
     Diagonal,
-    Natural,
-    Point,
 )
 from goal.models import (
     DifferentiableHMoG,
@@ -82,7 +80,7 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
     """Model framework for HMoGs."""
 
     # Training configuration
-    manifold: DifferentiableHMoG[Diagonal, Diagonal]
+    manifold: DifferentiableHMoG
     pre: LGMPreTrainer
     lgm: FullGradientTrainer
     mix: MixtureGradientTrainer
@@ -112,9 +110,9 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
 
         self.manifold = differentiable_hmog(
             obs_dim=data_dim,
-            obs_rep=Diagonal,
+            obs_rep=Diagonal(),
             lat_dim=latent_dim,
-            pst_rep=Diagonal,
+            pst_rep=Diagonal(),
             n_components=n_clusters,
         )
 
@@ -143,12 +141,12 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
 
     @property
     def latent_dim(self) -> int:
-        return self.manifold.lat_man.obs_man.data_dim
+        return self.manifold.prr_man.obs_man.data_dim
 
     @property
     @override
     def n_clusters(self) -> int:
-        return self.manifold.lat_man.lat_man.dim + 1
+        return self.manifold.prr_man.lat_man.dim + 1
 
     # Methods
 
@@ -164,7 +162,7 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
         )
         obs_params = self.manifold.obs_man.to_natural(obs_means)
 
-        # with self.model.upr_hrm as uh:
+        # with self.model.pst_man as uh:
         #     cat_params = uh.lat_man.initialize(key_cat, shape=self.mix_noise_scale)
         #     key_comps = jax.random.split(key_comp, self.n_clusters)
         #     anchor = uh.obs_man.initialize(key_comps[0], shape=self.mix_noise_scale)
@@ -176,25 +174,23 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
         #         for key_compi in key_comps[1:]
         #     ]
         #     components = jnp.stack(component_list)
-        #     mix_params = uh.join_params(
+        #     mix_params = uh.join_coords(
         #         anchor, uh.int_man.point(components), cat_params
         #     )
-        mix_params = self.manifold.upr_hrm.initialize(
+        mix_params = self.manifold.pst_man.initialize(
             key_comp, shape=self.mix_noise_scale
         )
 
         int_noise = self.lgm_noise_scale * jax.random.normal(
-            key_int, self.manifold.int_man.shape
+            key_int, self.manifold.int_man.matrix_shape
         )
-        int_params = self.manifold.int_man.point(
-            self.manifold.int_man.rep.from_dense(int_noise)
-        )
+        int_params = self.manifold.int_man.rep.from_matrix(int_noise)
 
-        return self.manifold.join_params(obs_params, int_params, mix_params).array
+        return self.manifold.join_coords(obs_params, int_params, mix_params)
 
     def log_likelihood(
         self,
-        params: Point[Natural, DifferentiableHMoG[Diagonal, Diagonal]],
+        params: Array,
         data: Array,
     ) -> Array:
         return self.manifold.average_log_observable_density(params, data)
@@ -202,10 +198,8 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
     @override
     def get_analyses(
         self, dataset: ClusteringDataset
-    ) -> list[Analysis[ClusteringDataset, DifferentiableHMoG[Diagonal, Diagonal], Any]]:
-        analyses: list[
-            Analysis[ClusteringDataset, DifferentiableHMoG[Diagonal, Diagonal], Any]
-        ] = [
+    ) -> list[Analysis[ClusteringDataset, DifferentiableHMoG, Any]]:
+        analyses: list[Analysis[ClusteringDataset, DifferentiableHMoG, Any]] = [
             ClusterStatisticsAnalysis(),
             KLHierarchyAnalysis(),
             CoAssignmentHierarchyAnalysis(),
@@ -232,9 +226,7 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
         key: Array,
         n_samples: int,
     ) -> Array:
-        return self.manifold.observable_sample(
-            key, self.manifold.natural_point(params), n_samples
-        )
+        return self.manifold.observable_sample(key, params, n_samples)
 
     @override
     def cluster_assignments(self, params: Array, data: Array) -> Array:
@@ -279,9 +271,7 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
         # Split PRNG key for different training phases
         init_key, pre_key, *cycle_keys = jax.random.split(key, self.num_cycles + 2)
 
-        params = self.manifold.natural_point(
-            self.prepare_model(init_key, handler, dataset.train_data)
-        )
+        params = self.prepare_model(init_key, handler, dataset.train_data)
 
         # Track total epochs
         epoch = handler.resolve_epoch or 0
@@ -305,12 +295,12 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
             )
 
         if self.pre.n_epochs > epoch:
-            obs_params, int_params, lat_params = self.manifold.split_params(params)
+            obs_params, int_params, lat_params = self.manifold.split_coords(params)
             lat_obs_params, lat_int_params, cat_params = (
-                self.manifold.upr_hrm.split_params(lat_params)
+                self.manifold.pst_man.split_coords(lat_params)
             )
             lgm = self.manifold.lwr_hrm
-            lgm_params = lgm.join_params(obs_params, int_params, lat_obs_params)
+            lgm_params = lgm.join_coords(obs_params, int_params, lat_obs_params)
             # Construct path to the pretrained file
 
             log.info("Pretraining LGM parameters")
@@ -324,14 +314,14 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
                 epoch,
                 lgm_params,
             )
-            obs_params, int_params, lat_obs_params = lgm.split_params(lgm_params)
-            lat_params = self.manifold.upr_hrm.join_params(
+            obs_params, int_params, lat_obs_params = lgm.split_coords(lgm_params)
+            lat_params = self.manifold.pst_man.join_coords(
                 lat_obs_params, lat_int_params, cat_params
             )
-            params = self.manifold.join_params(obs_params, int_params, lat_params)
+            params = self.manifold.join_coords(obs_params, int_params, lat_params)
             epoch = self.pre.n_epochs
             self.process_checkpoint(
-                key, handler, logger, dataset, self.manifold, epoch, params.array
+                key, handler, logger, dataset, self.manifold, epoch, params
             )
             log.info("Pretraining complete.")
 
@@ -390,7 +380,7 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
                 epoch += self.full.n_epochs
 
             self.process_checkpoint(
-                key, handler, logger, dataset, self.manifold, epoch, params.array
+                key, handler, logger, dataset, self.manifold, epoch, params
             )
 
             log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")

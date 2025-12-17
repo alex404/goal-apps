@@ -1,4 +1,4 @@
-"""Configuration for HMoG implementations."""
+"""Configuration for DifferentiableHMoG implementations."""
 
 from __future__ import annotations
 
@@ -8,18 +8,15 @@ import jax
 import jax.numpy as jnp
 from goal.geometry import (
     Manifold,
-    Natural,
-    Point,
 )
 from goal.models import (
-    AnalyticLinearGaussianModel,
-    FullNormal,
+    DifferentiableHMoG,
+    Normal,
+    NormalAnalyticLGM,
 )
 from jax import Array
 
 from apps.runtime import STATS_NUM, MetricDict
-
-from ..base import HMoG
 
 # Start logger
 log = logging.getLogger(__name__)
@@ -143,11 +140,11 @@ def clustering_nmi(
     return jnp.clip(nmi, 0.0, 1.0)
 
 
-def cluster_assignments(model: HMoG, params: Array, data: Array) -> Array:
+def cluster_assignments(model: DifferentiableHMoG, params: Array, data: Array) -> Array:
     """Assign data points to clusters using the model.
 
     Args:
-        model: HMoG model
+        model: DifferentiableHMoG model
         params: Model parameters
         data: Data points to assign
 
@@ -158,14 +155,12 @@ def cluster_assignments(model: HMoG, params: Array, data: Array) -> Array:
     return jnp.argmax(probs, axis=-1)
 
 
-def symmetric_kl_matrix[
-    M: HMoG,
-](
-    model: M,
-    params: Point[Natural, M],
+def symmetric_kl_matrix(
+    model: DifferentiableHMoG,
+    params: Array,
 ) -> Array:
     mix_params = model.prior(params)
-    with model.con_upr_hrm as ch:
+    with model.prr_man as ch:
         comp_lats, _ = ch.split_natural_mixture(mix_params)
 
         def kl_div_between_components(i: Array, j: Array) -> Array:
@@ -183,22 +178,20 @@ def symmetric_kl_matrix[
     return (kl_matrix + kl_matrix.T) / 2
 
 
-def get_component_prototypes[
-    M: HMoG,
-](
-    model: M,
-    params: Point[Natural, M],
+def get_component_prototypes(
+    model: DifferentiableHMoG,
+    params: Array,
 ) -> list[Array]:
     # Split into likelihood and mixture parameters
     lkl_params, mix_params = model.split_conjugated(params)
 
     # Extract components from mixture
-    comp_lats, _ = model.con_upr_hrm.split_natural_mixture(mix_params)
+    comp_lats, _ = model.prr_man.split_natural_mixture(mix_params)
 
     # For each component, compute the observable distribution and get its mean
     prototypes: list[Array] = []
 
-    ana_lgm = AnalyticLinearGaussianModel(
+    ana_lgm = NormalAnalyticLGM(
         obs_dim=model.lwr_hrm.obs_dim,  # Original latent becomes observable
         obs_rep=model.lwr_hrm.obs_rep,
         lat_dim=model.lwr_hrm.lat_dim,  # Original observable becomes latent
@@ -206,24 +199,24 @@ def get_component_prototypes[
 
     for i in range(comp_lats.shape[0]):
         # Get latent mean for this component
-        comp_lat_params = model.con_upr_hrm.cmp_man.get_replicate(
-            comp_lats, jnp.asarray(i)
-        )
+        comp_lat_params = model.prr_man.cmp_man.get_replicate(comp_lats, jnp.asarray(i))
         lwr_hrm_params = ana_lgm.join_conjugated(lkl_params, comp_lat_params)
         lwr_hrm_means = ana_lgm.to_mean(lwr_hrm_params)
-        lwr_hrm_obs = ana_lgm.split_params(lwr_hrm_means)[0]
-        obs_means = ana_lgm.obs_man.split_mean_second_moment(lwr_hrm_obs)[0].array
+        lwr_hrm_obs = ana_lgm.split_coords(lwr_hrm_means)[0]
+        obs_means = ana_lgm.obs_man.split_mean_second_moment(lwr_hrm_obs)[0]
 
         prototypes.append(obs_means)
 
     return prototypes
 
 
-def cluster_probabilities(model: HMoG, params: Array, data: Array) -> Array:
+def cluster_probabilities(
+    model: DifferentiableHMoG, params: Array, data: Array
+) -> Array:
     """Get cluster probability distributions for each data point.
 
     Args:
-        model: HMoG model
+        model: DifferentiableHMoG model
         params: Model parameters
         data: Data points to get probabilities for
 
@@ -232,10 +225,8 @@ def cluster_probabilities(model: HMoG, params: Array, data: Array) -> Array:
     """
 
     def data_point_probs(x: Array) -> Array:
-        cat_pst = model.upr_hrm.prior(
-            model.posterior_at(model.natural_point(params), x)
-        )
-        with model.upr_hrm.lat_man as lm:
+        cat_pst = model.pst_man.prior(model.posterior_at(params, x))
+        with model.pst_man.lat_man as lm:
             return lm.to_probs(lm.to_mean(cat_pst))
 
     return jax.lax.map(data_point_probs, data, batch_size=2048)
@@ -266,16 +257,14 @@ def update_stats[M: Manifold](
     return metrics
 
 
-def analyze_component(
-    nor_man: FullNormal, nrm_params: Point[Natural, FullNormal]
-) -> Array:
+def analyze_component(nor_man: Normal, nrm_params: Array) -> Array:
     nrm_means = nor_man.to_mean(nrm_params)
     loc, prs = nor_man.split_location_precision(nrm_params)
     mean, cov = nor_man.split_mean_covariance(nrm_means)
-    dns_prs = nor_man.cov_man.to_dense(prs)
-    dns_cov = nor_man.cov_man.to_dense(cov)
-    loc_nrm = jnp.linalg.norm(loc.array)
-    mean_nrm = jnp.linalg.norm(mean.array)
+    dns_prs = nor_man.cov_man.to_matrix(prs)
+    dns_cov = nor_man.cov_man.to_matrix(cov)
+    loc_nrm = jnp.linalg.norm(loc)
+    mean_nrm = jnp.linalg.norm(mean)
     prs_cond = jnp.linalg.cond(dns_prs)
     cov_cond = jnp.linalg.cond(dns_cov)
     prs_ldet = jnp.linalg.slogdet(dns_prs)[1]

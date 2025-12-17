@@ -1,27 +1,23 @@
-"""Trainers for HMoG model components."""
+"""Trainers forDifferentiableHMoG model components."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, Callable
 
 import jax
 import jax.numpy as jnp
 import optax
 from goal.geometry import (
-    Mean,
-    Natural,
     Optimizer,
     OptState,
-    Point,
-    Replicated,
 )
 from goal.geometry.manifold.util import batched_mean
 from goal.models import (
-    FullNormal,
-    Normal,
+    DifferentiableHMoG,
+    NormalLGM,
 )
 from jax import Array
 
@@ -31,7 +27,7 @@ from apps.interface import (
 from apps.runtime import STATS_NUM, Logger, MetricDict, RunHandler
 
 from .analysis.metrics import log_epoch_metrics, pre_log_epoch_metrics
-from .base import LGM, HMoG, Mixture, fori
+from .base import fori
 
 ### Constants ###
 
@@ -54,9 +50,9 @@ INFO_LEVEL = jnp.array(logging.INFO)
 
 
 def precision_regularizer(
-    model: HMoG,
-    rho: Point[Natural, Mixture],
-    mix_params: Point[Natural, Mixture],
+    model: DifferentiableHMoG,
+    rho: Array,
+    mix_params: Array,
     upr_prs_reg: float,
     lwr_prs_reg: float,
 ) -> tuple[Array, MetricDict]:
@@ -91,7 +87,7 @@ def precision_regularizer(
     - May be useful for specific domain knowledge or computational constraints
 
     Args:
-        model: HMoG model
+        model:DifferentiableHMoG model
         rho: Conjugation parameters
         mix_params: Mixture parameters in natural coordinates
         upr_prs_reg: Weight for trace penalty (controls upper bound on eigenvalues)
@@ -100,30 +96,30 @@ def precision_regularizer(
     Returns:
         Tuple of (regularization_loss, metrics_dict)
     """
-    con_mix_params = model.pst_lat_emb.translate(rho, mix_params)
-    cmp_params, _ = model.con_upr_hrm.split_natural_mixture(con_mix_params)
+    con_mix_params = model.pst_prr_emb.translate(rho, mix_params)
+    cmp_params, _ = model.prr_man.split_natural_mixture(con_mix_params)
 
     def compute_trace(
-        nor_params: Point[Natural, FullNormal],
+        nor_params: Array,
     ) -> Array:
-        with model.con_upr_hrm as cuh:
+        with model.prr_man as cuh:
             prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
-            prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
+            prs_dense = cuh.obs_man.cov_man.to_matrix(prs_params)
             return jnp.trace(prs_dense)
 
-    traces = model.con_upr_hrm.cmp_man.map(compute_trace, cmp_params)
+    traces = model.prr_man.cmp_man.map(compute_trace, cmp_params)
     trace_sum = jnp.sum(traces)
     trace_reg = upr_prs_reg * trace_sum
 
     def compute_logdet(
-        nor_params: Point[Natural, FullNormal],
+        nor_params: Array,
     ) -> Array:
-        with model.con_upr_hrm as cuh:
+        with model.prr_man as cuh:
             prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
-            prs_dense = cuh.obs_man.cov_man.to_dense(prs_params)
+            prs_dense = cuh.obs_man.cov_man.to_matrix(prs_params)
             return -jnp.linalg.slogdet(prs_dense)[1]
 
-    logdets = model.con_upr_hrm.cmp_man.map(compute_logdet, cmp_params)
+    logdets = model.prr_man.cmp_man.map(compute_logdet, cmp_params)
     logdet_sum = jnp.sum(logdets)
     logdet_reg = lwr_prs_reg * logdet_sum
 
@@ -143,7 +139,7 @@ def precision_regularizer(
 
 @dataclass(frozen=True)
 class FullGradientTrainer:
-    """Base trainer for gradient-based training of HMoG models."""
+    """Base trainer for gradient-based training ofDifferentiableHMoG models."""
 
     # Training hyperparameters
     lr: float
@@ -168,10 +164,14 @@ class FullGradientTrainer:
     # Strategy
     mask_type: MaskingStrategy
 
-    def bound_means(self, model: HMoG, means: Point[Mean, HMoG]) -> Point[Mean, HMoG]:
+    def bound_means(
+        self,
+        model: DifferentiableHMoG,
+        means: Array,
+    ) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
         # Split posterior statistics
-        obs_means, int_means, lat_means = model.split_params(means)
+        obs_means, int_means, lat_means = model.split_coords(means)
 
         # For observable parameters, bound the variances
         bounded_obs_means = model.lwr_hrm.obs_man.regularize_covariance(
@@ -179,20 +179,20 @@ class FullGradientTrainer:
         )
 
         # Bound latent parameters
-        with model.upr_hrm as uh:
+        with model.pst_man as uh:
             # Split latent parameters
             comp_meanss, prob_means = uh.split_mean_mixture(lat_means)
-            lat_obs_means, _, _ = model.upr_hrm.split_params(lat_means)
+            lat_obs_means, _, _ = model.pst_man.split_coords(lat_means)
 
             def whiten_and_bound(
-                comp_means: Point[Mean, Normal[Any]],
-            ) -> Point[Mean, Normal[Any]]:
+                comp_means: Array,
+            ) -> Array:
                 whitened_comp_means = uh.obs_man.whiten(comp_means, lat_obs_means)
                 return uh.obs_man.regularize_covariance(
                     whitened_comp_means, self.lat_jitter_var, self.lat_min_var
                 )
 
-            bounded_comp_meanss = uh.cmp_man.man_map(whiten_and_bound, comp_meanss)
+            bounded_comp_meanss = uh.cmp_man.map(whiten_and_bound, comp_meanss)
 
             probs = uh.lat_man.to_probs(prob_means)
             bounded_probs0 = jnp.clip(probs, self.min_prob, 1.0)
@@ -203,32 +203,37 @@ class FullGradientTrainer:
                 bounded_comp_meanss, bounded_prob_means
             )
 
-            _, bounded_lat_int, bounded_lat_cat = uh.split_params(bounded_lat_means0)
+            _, bounded_lat_int, bounded_lat_cat = uh.split_coords(bounded_lat_means0)
 
             z = uh.obs_man.standard_normal()
 
-            bounded_lat_means = uh.join_params(z, bounded_lat_int, bounded_lat_cat)
+            bounded_lat_means = uh.join_coords(z, bounded_lat_int, bounded_lat_cat)
 
         # Rejoin all parameters
-        return model.join_params(bounded_obs_means, int_means, bounded_lat_means)
+        return model.join_coords(bounded_obs_means, int_means, bounded_lat_means)
 
     def make_regularizer(
-        self, model: HMoG
-    ) -> Callable[[Point[Natural, HMoG]], tuple[Point[Mean, HMoG], MetricDict]]:
+        self, model: DifferentiableHMoG
+    ) -> Callable[
+        [Array],
+        tuple[Array, MetricDict],
+    ]:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
-        def loss_with_metrics(params: Point[Natural, HMoG]) -> tuple[Array, MetricDict]:
+        def loss_with_metrics(
+            params: Array,
+        ) -> tuple[Array, MetricDict]:
             # Extract components for regularization
-            obs_params, int_params, mix_params = model.split_params(params)
-            lkl_params = model.lkl_man.join_params(obs_params, int_params)
+            obs_params, int_params, mix_params = model.split_coords(params)
+            lkl_params = model.lkl_fun_man.join_coords(obs_params, int_params)
             rho = model.conjugation_parameters(lkl_params)
 
             # L1 regularization
-            l1_norm = jnp.sum(jnp.abs(int_params.array))
+            l1_norm = jnp.sum(jnp.abs(int_params))
             l1_loss = self.l1_reg * l1_norm
 
             # L2 regularization
-            l2_norm = jnp.sum(jnp.square(params.array))
+            l2_norm = jnp.sum(jnp.square(params))
             l2_loss = self.l2_reg * l2_norm
 
             # Component precision regularization
@@ -253,27 +258,33 @@ class FullGradientTrainer:
         return jax.grad(loss_with_metrics, has_aux=True)
 
     def create_gradient_mask(
-        self, model: HMoG
-    ) -> Callable[[Point[Mean, HMoG]], Point[Mean, HMoG]]:
+        self, model: DifferentiableHMoG
+    ) -> Callable[[Array], Array]:
         """Create a function that masks gradients for specific training regimes."""
         if self.mask_type == MaskingStrategy.LGM:
             # Only update LGM parameters (obs_params and int_params)
-            def mask_fn(grad: Point[Mean, HMoG]) -> Point[Mean, HMoG]:
-                obs_grad, int_grad, lat_grad = model.split_params(grad)
-                zero_lat_grad = model.lat_man.mean_point(jnp.zeros_like(lat_grad.array))
-                return model.join_params(obs_grad, int_grad, zero_lat_grad)
+            def mask_fn(
+                grad: Array,
+            ) -> Array:
+                obs_grad, int_grad, lat_grad = model.split_coords(grad)
+                zero_lat_grad = jnp.zeros_like(lat_grad)
+                return model.join_coords(obs_grad, int_grad, zero_lat_grad)
 
         elif self.mask_type == MaskingStrategy.MIXTURE:
             # Only update mixture parameters (lat_params)
-            def mask_fn(grad: Point[Mean, HMoG]) -> Point[Mean, HMoG]:
-                obs_grad, int_grad, lat_grad = model.split_params(grad)
+            def mask_fn(
+                grad: Array,
+            ) -> Array:
+                _, _, lat_grad = model.split_coords(grad)
                 zero_obs_grad = model.obs_man.zeros()
                 zero_int_grad = model.int_man.zeros()
-                return model.join_params(zero_obs_grad, zero_int_grad, lat_grad)
+                return model.join_coords(zero_obs_grad, zero_int_grad, lat_grad)
 
         else:
             # No masking - update all parameters
-            def mask_fn(grad: Point[Mean, HMoG]) -> Point[Mean, HMoG]:
+            def mask_fn(
+                grad: Array,
+            ) -> Array:
                 return grad
 
         return mask_fn
@@ -281,12 +292,12 @@ class FullGradientTrainer:
     def make_batch_step(
         self,
         handler: RunHandler,
-        model: HMoG,
+        model: DifferentiableHMoG,
         logger: Logger,
-        optimizer: Optimizer[Natural, HMoG],
+        optimizer: Optimizer[DifferentiableHMoG],
     ) -> Callable[
-        [tuple[OptState, Point[Natural, HMoG]], Array],
-        tuple[tuple[OptState, Point[Natural, HMoG]], Array],
+        [tuple[OptState, Array], Array],
+        tuple[tuple[OptState, Array], Array],
     ]:
         """Create step function for processing a single batch.
 
@@ -296,9 +307,9 @@ class FullGradientTrainer:
         mask_gradient = self.create_gradient_mask(model)
 
         def batch_step(
-            carry: tuple[OptState, Point[Natural, HMoG]],
+            carry: tuple[OptState, Array],
             batch: Array,
-        ) -> tuple[tuple[OptState, Point[Natural, HMoG]], Array]:
+        ) -> tuple[tuple[OptState, Array], Array]:
             opt_state, params = carry
 
             # Compute posterior statistics once for this batch
@@ -310,9 +321,9 @@ class FullGradientTrainer:
 
             # Define the inner step function for scan
             def inner_step(
-                carry: tuple[OptState, Point[Natural, HMoG]],
+                carry: tuple[OptState, Array],
                 _: None,  # Dummy input since we don't need per-step inputs
-            ) -> tuple[tuple[OptState, Point[Natural, HMoG]], Array]:
+            ) -> tuple[tuple[OptState, Array], Array]:
                 current_opt_state, current_params = carry
 
                 # Compute gradient as difference between posterior and current prior
@@ -335,20 +346,20 @@ class FullGradientTrainer:
                 # Monitor parameters for debugging
                 logger.monitor_params(
                     {
-                        "original_params": current_params.array,
-                        "updated_params": new_params.array,
+                        "original_params": current_params,
+                        "updated_params": new_params,
                         "batch": batch,
-                        "posterior_stats": posterior_stats.array,
-                        "bounded_posterior_stats": bounded_posterior_stats.array,
-                        "prior_stats": prior_stats.array,
-                        "grad": grad.array,
-                        "masked_grad": masked_grad.array,
+                        "posterior_stats": posterior_stats,
+                        "bounded_posterior_stats": bounded_posterior_stats,
+                        "prior_stats": prior_stats,
+                        "grad": grad,
+                        "masked_grad": masked_grad,
                     },
                     handler,
                     context=f"{self.mask_type}",
                 )
 
-                return (new_opt_state, new_params), masked_grad.array
+                return (new_opt_state, new_params), masked_grad
 
             # Run inner steps using jax.lax.scan
             (final_opt_state, final_params), all_grads = jax.lax.scan(
@@ -367,12 +378,12 @@ class FullGradientTrainer:
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: HMoG,
+        model: DifferentiableHMoG,
         logger: Logger,
         learning_rate_scale: float,
         epoch_offset: int,
-        params0: Point[Natural, HMoG],
-    ) -> Point[Natural, HMoG]:
+        params0: Array,
+    ) -> Array:
         """Train the model with the specified gradient masking strategy."""
         n_epochs = self.n_epochs
 
@@ -386,7 +397,7 @@ class FullGradientTrainer:
 
         # Create optimizer
         optim = optax.adamw(learning_rate=self.lr * learning_rate_scale)
-        optimizer: Optimizer[Natural, HMoG] = Optimizer(optim, model)
+        optimizer: Optimizer[DifferentiableHMoG] = Optimizer(optim, model)
 
         if self.grad_clip > 0.0:
             optimizer = optimizer.with_grad_clip(self.grad_clip)
@@ -400,8 +411,8 @@ class FullGradientTrainer:
         # Create epoch step function
         def epoch_step(
             epoch: Array,
-            carry: tuple[OptState, Point[Natural, HMoG], Array],
-        ) -> tuple[OptState, Point[Natural, HMoG], Array]:
+            carry: tuple[OptState, Array, Array],
+        ) -> tuple[OptState, Array, Array]:
             opt_state, params, epoch_key = carry
 
             # Split key for shuffling
@@ -422,11 +433,7 @@ class FullGradientTrainer:
                 batch_step, (opt_state, params), batched_data
             )
             # gradss_array shape: (n_batches, n_steps, param_dim)
-            grads_array = gradss_array.reshape(-1, *gradss_array.shape[2:])
-
-            # Create batch gradients for logging
-            batch_man = Replicated(model, grads_array.shape[0])
-            batch_grads = batch_man.point(grads_array)
+            batch_grads = gradss_array.reshape(-1, *gradss_array.shape[2:])
 
             reg_fn = self.make_regularizer(model)
             metrics = reg_fn(new_params)[1]
@@ -453,7 +460,7 @@ class FullGradientTrainer:
 
 @dataclass(frozen=True)
 class LGMPreTrainer:
-    """Base trainer for gradient-based training of HMoG models."""
+    """Base trainer for gradient-based training ofDifferentiableHMoG models."""
 
     # Training hyperparameters
     lr: float
@@ -470,35 +477,35 @@ class LGMPreTrainer:
     min_var: float
     jitter_var: float
 
-    def bound_means(self, model: LGM, means: Point[Mean, LGM]) -> Point[Mean, LGM]:
+    def bound_means(self, model: NormalLGM, means: Array) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
         # Split posterior statistics
-        obs_means, int_means, lat_means = model.split_params(means)
+        obs_means, int_means, _ = model.split_coords(means)
 
         # For observable parameters, bound the variances
         bounded_obs_means = model.obs_man.regularize_covariance(
             obs_means, self.jitter_var, self.min_var
         )
-        z = model.lat_man.standard_normal()
+        z = model.pst_man.standard_normal()
 
         # Rejoin all parameters
-        return model.join_params(bounded_obs_means, int_means, z)
+        return model.join_coords(bounded_obs_means, int_means, z)
 
     def make_regularizer(
-        self, model: LGM
-    ) -> Callable[[Point[Natural, LGM]], tuple[Point[Mean, LGM], MetricDict]]:
+        self, model: NormalLGM
+    ) -> Callable[[Array], tuple[Array, MetricDict]]:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
-        def loss_with_metrics(params: Point[Natural, LGM]) -> tuple[Array, MetricDict]:
+        def loss_with_metrics(params: Array) -> tuple[Array, MetricDict]:
             # Extract components for regularization
-            _, int_params, _ = model.split_params(params)
+            _, int_params, _ = model.split_coords(params)
 
             # L1 regularization
-            l1_norm = jnp.sum(jnp.abs(int_params.array))
+            l1_norm = jnp.sum(jnp.abs(int_params))
             l1_loss = self.l1_reg * l1_norm
 
             # L2 regularization
-            l2_norm = jnp.sum(jnp.square(params.array))
+            l2_norm = jnp.sum(jnp.square(params))
             l2_loss = self.l2_reg * l2_norm
 
             # Combine into total loss and metrics
@@ -519,17 +526,17 @@ class LGMPreTrainer:
     def make_batch_step(
         self,
         handler: RunHandler,
-        model: LGM,
+        model: NormalLGM,
         logger: Logger,
-        optimizer: Optimizer[Natural, LGM],
+        optimizer: Optimizer[NormalLGM],
     ) -> Callable[
-        [tuple[OptState, Point[Natural, LGM]], Array],
-        tuple[tuple[OptState, Point[Natural, LGM]], Array],
+        [tuple[OptState, Array], Array],
+        tuple[tuple[OptState, Array], Array],
     ]:
         def batch_step(
-            carry: tuple[OptState, Point[Natural, LGM]],
+            carry: tuple[OptState, Array],
             batch: Array,
-        ) -> tuple[tuple[OptState, Point[Natural, LGM]], Array]:
+        ) -> tuple[tuple[OptState, Array], Array]:
             opt_state, params = carry
 
             # Compute posterior statistics once for this batch
@@ -541,9 +548,9 @@ class LGMPreTrainer:
 
             # Define the inner step function for scan
             def inner_step(
-                carry: tuple[OptState, Point[Natural, LGM]],
+                carry: tuple[OptState, Array],
                 _: None,  # Dummy input since we don't need per-step inputs
-            ) -> tuple[tuple[OptState, Point[Natural, LGM]], Array]:
+            ) -> tuple[tuple[OptState, Array], Array]:
                 current_opt_state, current_params = carry
 
                 # Compute gradient as difference between posterior and current prior
@@ -561,19 +568,19 @@ class LGMPreTrainer:
                 # Monitor parameters for debugging
                 logger.monitor_params(
                     {
-                        "original_params": current_params.array,
-                        "updated_params": new_params.array,
+                        "original_params": current_params,
+                        "updated_params": new_params,
                         "batch": batch,
-                        "posterior_stats": posterior_stats.array,
-                        "bounded_posterior_stats": bounded_posterior_stats.array,
-                        "prior_stats": prior_stats.array,
-                        "grad": grad.array,
+                        "posterior_stats": posterior_stats,
+                        "bounded_posterior_stats": bounded_posterior_stats,
+                        "prior_stats": prior_stats,
+                        "grad": grad,
                     },
                     handler,
                     context="PRE",
                 )
 
-                return (new_opt_state, new_params), grad.array
+                return (new_opt_state, new_params), grad
 
             # Run inner steps using jax.lax.scan
             (final_opt_state, final_params), all_grads = jax.lax.scan(
@@ -592,11 +599,11 @@ class LGMPreTrainer:
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: LGM,
+        model: NormalLGM,
         logger: Logger,
         epoch_offset: int,
-        params0: Point[Natural, LGM],
-    ) -> Point[Natural, LGM]:
+        params0: Array,
+    ) -> Array:
         """Train the model with the specified gradient masking strategy."""
         n_epochs = self.n_epochs
 
@@ -610,7 +617,7 @@ class LGMPreTrainer:
 
         # Create optimizer
         optim = optax.adamw(learning_rate=self.lr)
-        optimizer: Optimizer[Natural, LGM] = Optimizer(optim, model)
+        optimizer: Optimizer[NormalLGM] = Optimizer(optim, model)
 
         if self.grad_clip > 0.0:
             optimizer = optimizer.with_grad_clip(self.grad_clip)
@@ -624,8 +631,8 @@ class LGMPreTrainer:
         # Create epoch step function
         def epoch_step(
             epoch: Array,
-            carry: tuple[OptState, Point[Natural, LGM], Array],
-        ) -> tuple[OptState, Point[Natural, LGM], Array]:
+            carry: tuple[OptState, Array, Array],
+        ) -> tuple[OptState, Array, Array]:
             opt_state, params, epoch_key = carry
 
             # Split key for shuffling
@@ -646,11 +653,7 @@ class LGMPreTrainer:
                 batch_step, (opt_state, params), batched_data
             )
             # gradss_array shape: (n_batches, n_steps, param_dim)
-            grads_array = gradss_array.reshape(-1, *gradss_array.shape[2:])
-
-            # Create batch gradients for logging
-            batch_man = Replicated(model, grads_array.shape[0])
-            batch_grads = batch_man.point(grads_array)
+            batch_grads = gradss_array.reshape(-1, *gradss_array.shape[2:])
 
             reg_fn = self.make_regularizer(model)
             metrics = reg_fn(new_params)[1]
@@ -702,78 +705,73 @@ class MixtureGradientTrainer:
     lwr_prs_reg: float
 
     def precompute_observable_mappings(
-        self, model: HMoG, params: Point[Natural, HMoG], data: Array
-    ) -> tuple[Array, Point[Natural, Mixture]]:
+        self,
+        model: DifferentiableHMoG,
+        params: Array,
+        data: Array,
+    ) -> tuple[Array, Array]:
         log.info("Precomputing latent statistics for fixed observable training")
 
         # Get the posterior function (the affine map)
-        obs_params, int_params, _ = model.split_params(params)
-        lkl_params = model.lkl_man.join_params(obs_params, int_params)
+        obs_params, int_params, _ = model.split_coords(params)
+        lkl_params = model.lkl_fun_man.join_coords(obs_params, int_params)
         rho = model.conjugation_parameters(lkl_params)
 
-        def project_fn(x: Array) -> Array:
-            x_means = model.obs_man.loc_man.mean_point(x)
-            return model.int_man.transpose_apply(int_params, x_means).array
+        def project_fn(x_means: Array) -> Array:
+            return model.int_man.transpose_apply(int_params, x_means)
 
         return jax.vmap(project_fn)(data), rho
 
     def mean_posterior_statistics(
         self,
-        model: HMoG,
-        mix_params: Point[Natural, Mixture],
+        model: DifferentiableHMoG,
+        mix_params: Array,
         latent_locations: Array,
-    ) -> Point[Mean, Mixture]:
+    ) -> Array:
         # Get sufficient statistics of observation
 
         def posterior_statistics(
-            latent_array: Array,
+            latent_loc: Array,
         ) -> Array:
             # Get posterior statistics for this observation
-            latent_location = model.upr_hrm.obs_man.loc_man.natural_point(latent_array)
-            mix_obs, mix_int, mix_lat = model.upr_hrm.split_params(mix_params)
-            posterior_params = model.int_lat_emb.translate(mix_params, latent_location)
-            posterior_means = model.upr_hrm.to_mean(posterior_params)
-            return posterior_means.array
+            posterior_params = model.int_man.dom_emb.translate(mix_params, latent_loc)
+            return model.pst_man.to_mean(posterior_params)
 
-        return model.upr_hrm.mean_point(
-            batched_mean(posterior_statistics, latent_locations, 256)
-        )
+        return batched_mean(posterior_statistics, latent_locations, 256)
 
     def prior_statistics(
         self,
-        model: HMoG,
-        mix_params: Point[Natural, Mixture],
-        rho: Point[Natural, Mixture],
-    ) -> Point[Mean, Mixture]:
+        model: DifferentiableHMoG,
+        mix_params: Array,
+        rho: Array,
+    ) -> Array:
         # Get sufficient statistics of observation
 
         def log_partition_function(
-            params: Point[Natural, Mixture],
+            params: Array,
         ) -> Array:
             # Split parameters
-            con_params = model.pst_lat_emb.translate(rho, params)
-            return model.con_upr_hrm.log_partition_function(con_params)
+            con_params = model.pst_prr_emb.translate(rho, params)
+            return model.prr_man.log_partition_function(con_params)
 
-        return model.upr_hrm.grad(log_partition_function, mix_params)
+        return jax.grad(log_partition_function)(mix_params)
 
-    def bound_mixture_means(
-        self, model: HMoG, mix_means: Point[Mean, Mixture]
-    ) -> Point[Mean, Mixture]:
+    def bound_mixture_means(self, model: DifferentiableHMoG, mix_means: Array) -> Array:
         """Apply bounds to mixture components for numerical stability."""
-        with model.upr_hrm as uh:
+        with model.pst_man as uh:
             # Bound component means
             cmp_meanss, cat_means = uh.split_mean_mixture(mix_means)
-            lat_obs_means, _, _ = model.upr_hrm.split_params(mix_means)
+            lat_obs_means, _, _ = model.pst_man.split_coords(mix_means)
 
             def whiten_and_bound(
-                comp_means: Point[Mean, Normal[Any]],
-            ) -> Point[Mean, Normal[Any]]:
+                comp_means: Array,
+            ) -> Array:
                 whitened_comp_means = uh.obs_man.whiten(comp_means, lat_obs_means)
                 return uh.obs_man.regularize_covariance(
                     whitened_comp_means, self.lat_jitter_var, self.lat_min_var
                 )
 
-            bounded_cmp_meanss = uh.cmp_man.man_map(whiten_and_bound, cmp_meanss)
+            bounded_cmp_meanss = uh.cmp_man.map(whiten_and_bound, cmp_meanss)
 
             # Bound probabilities
             probs = uh.lat_man.to_probs(cat_means)
@@ -784,17 +782,17 @@ class MixtureGradientTrainer:
             return uh.join_mean_mixture(bounded_cmp_meanss, bounded_prob_means)
 
     def make_regularizer(
-        self, model: HMoG, rho: Point[Natural, Mixture]
-    ) -> Callable[[Point[Natural, Mixture]], tuple[Point[Mean, Mixture], MetricDict]]:
+        self, model: DifferentiableHMoG, rho: Array
+    ) -> Callable[[Array], tuple[Array, MetricDict]]:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
         def loss_with_metrics(
-            mix_params: Point[Natural, Mixture],
+            mix_params: Array,
         ) -> tuple[Array, MetricDict]:
             # Extract components for regularization
 
             # L2 regularization
-            l2_norm = jnp.sum(jnp.square(mix_params.array))
+            l2_norm = jnp.sum(jnp.square(mix_params))
             l2_loss = self.l2_reg * l2_norm
 
             # Component precision regularization
@@ -821,19 +819,19 @@ class MixtureGradientTrainer:
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: HMoG,
+        model: DifferentiableHMoG,
         logger: Logger,
         learning_rate_scale: float,
         epoch_offset: int,
-        params0: Point[Natural, HMoG],
-    ) -> Point[Natural, HMoG]:
+        params0: Array,
+    ) -> Array:
         """Train only the mixture parameters with fixed observable mapping.
 
         Args:
             key: Random key
             handler: Run handler for saving artifacts
             dataset: Dataset for training
-            model: HMoG model
+            model:DifferentiableHMoG model
             logger: Logger
             learning_rate_scale: Scale factor for learning rate
             epoch_offset: Offset for epoch numbering
@@ -846,7 +844,7 @@ class MixtureGradientTrainer:
         train_data = dataset.train_data
 
         # Extract fixed observable parameters
-        obs_params0, int_params0, mix_params0 = model.split_params(params0)
+        obs_params0, int_params0, mix_params0 = model.split_coords(params0)
 
         # Precompute all latent statistics using the fixed observable mapping
         latent_locations, rho = self.precompute_observable_mappings(
@@ -855,7 +853,7 @@ class MixtureGradientTrainer:
 
         # Setup optimizer for mixture parameters
         optim = optax.adam(learning_rate=self.lr * learning_rate_scale)
-        optimizer = Optimizer(optim, model.upr_hrm)
+        optimizer = Optimizer(optim, model.pst_man)
         if self.grad_clip > 0.0:
             optimizer = optimizer.with_grad_clip(self.grad_clip)
 
@@ -880,9 +878,9 @@ class MixtureGradientTrainer:
 
         # Define batch step function
         def batch_step(
-            carry: tuple[OptState, Point[Natural, Mixture]],
+            carry: tuple[OptState, Array],
             batch_locations: Array,
-        ) -> tuple[tuple[OptState, Point[Natural, Mixture]], Array]:
+        ) -> tuple[tuple[OptState, Array], Array]:
             opt_state, params = carry
 
             posterior_stats = self.mean_posterior_statistics(
@@ -893,9 +891,9 @@ class MixtureGradientTrainer:
 
             # Define the inner step function
             def inner_step(
-                carry: tuple[OptState, Point[Natural, Mixture]],
+                carry: tuple[OptState, Array],
                 _: None,
-            ) -> tuple[tuple[OptState, Point[Natural, Mixture]], Array]:
+            ) -> tuple[tuple[OptState, Array], Array]:
                 current_opt_state, current_params = carry
 
                 # Current parameters as means
@@ -912,31 +910,31 @@ class MixtureGradientTrainer:
                 new_opt_state, new_params = optimizer.update(
                     current_opt_state, grad, current_params
                 )
-                full_params = model.join_params(
+                full_params = model.join_coords(
                     obs_params0, int_params0, current_params
                 )
-                new_full_params = model.join_params(
+                new_full_params = model.join_coords(
                     obs_params0, int_params0, new_params
                 )
-                full_grad = model.join_params(
+                full_grad = model.join_coords(
                     model.lwr_hrm.obs_man.zeros(), model.lwr_hrm.int_man.zeros(), grad
                 )
 
                 # Monitor parameters for debugging
                 logger.monitor_params(
                     {
-                        "original_params": full_params.array,
-                        "updated_params": new_full_params.array,
-                        "mixture_stats": posterior_stats.array,
-                        "bounded_mixture_stats": bounded_posterior_stats.array,
-                        "prior_stats": prior_stats.array,
-                        "grad": full_grad.array,
+                        "original_params": full_params,
+                        "updated_params": new_full_params,
+                        "mixture_stats": posterior_stats,
+                        "bounded_mixture_stats": bounded_posterior_stats,
+                        "prior_stats": prior_stats,
+                        "grad": full_grad,
                     },
                     handler,
                     context="FIXED_OBSERVABLE",
                 )
 
-                return (new_opt_state, new_params), full_grad.array
+                return (new_opt_state, new_params), full_grad
 
             # Run inner steps
             (final_opt_state, final_params), all_grads = jax.lax.scan(
@@ -951,8 +949,8 @@ class MixtureGradientTrainer:
         # Create epoch step function
         def epoch_step(
             epoch: Array,
-            carry: tuple[OptState, Point[Natural, Mixture], Array],
-        ) -> tuple[OptState, Point[Natural, Mixture], Array]:
+            carry: tuple[OptState, Array, Array],
+        ) -> tuple[OptState, Array, Array]:
             opt_state, mix_params, epoch_key = carry
 
             # Split key for shuffling
@@ -972,14 +970,10 @@ class MixtureGradientTrainer:
                 batch_step, (opt_state, mix_params), batched_locations
             )
             # gradss_array shape: (n_batches, n_steps, param_dim)
-            grads_array = gradss_array.reshape(-1, *gradss_array.shape[2:])
-
-            # Create batch gradients for logging
-            batch_man = Replicated(model, grads_array.shape[0])
-            batch_grads = batch_man.point(grads_array)
+            batch_grads = gradss_array.reshape(-1, *gradss_array.shape[2:])
 
             # Reconstruct full model parameters for evaluation
-            full_params = model.join_params(obs_params0, int_params0, new_mix_params)
+            full_params = model.join_coords(obs_params0, int_params0, new_mix_params)
 
             reg_fn = self.make_regularizer(model, rho)
             metrics = reg_fn(new_mix_params)[1]
@@ -1004,6 +998,4 @@ class MixtureGradientTrainer:
         )
 
         # Reconstruct full parameters with updated mixture
-        params_final = model.join_params(obs_params0, int_params0, mix_params_final)
-
-        return params_final
+        return model.join_coords(obs_params0, int_params0, mix_params_final)

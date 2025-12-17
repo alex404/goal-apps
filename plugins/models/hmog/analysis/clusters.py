@@ -1,16 +1,14 @@
-"""Base class for HMoG implementations."""
+"""Base class for DifferentiableHMoG implementations."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, override
+from typing import override
 
 import matplotlib.pyplot as plt
 import numpy as np
-from goal.geometry import (
-    Natural,
-    Point,
-)
+from goal.models import DifferentiableHMoG
 from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
@@ -21,7 +19,6 @@ from apps.interface import (
 )
 from apps.runtime import Artifact, RunHandler
 
-from ..base import HMoG
 from .base import cluster_assignments, get_component_prototypes
 
 ### Helpers ###
@@ -38,23 +35,21 @@ class ClusterStatistics(Artifact):
     members: list[Array]  # list of (n_members, data_dim)
 
 
-def generate_cluster_statistics[
-    M: HMoG,
-](
-    model: M,
+def generate_cluster_statistics(
+    model: DifferentiableHMoG,
     dataset: ClusteringDataset,
-    params: Point[Natural, M],
+    params: Array,
 ) -> ClusterStatistics:
     """Generate collection of clusters with their members."""
 
     train_data = dataset.train_data
-    assignments = cluster_assignments(model, params.array, train_data)
+    assignments = cluster_assignments(model, params, train_data)
     prototypes = get_component_prototypes(model, params)
 
     # Create cluster collections
     cluster_members = []
 
-    for i in range(model.upr_hrm.n_categories):
+    for i in range(model.pst_man.n_categories):
         # Get members for this cluster
         cluster_mask = assignments == i
         members = train_data[cluster_mask]
@@ -106,7 +101,9 @@ def cluster_statistics_plotter(
 
 
 @dataclass(frozen=True)
-class ClusterStatisticsAnalysis(Analysis[ClusteringDataset, HMoG, ClusterStatistics]):
+class ClusterStatisticsAnalysis(
+    Analysis[ClusteringDataset, DifferentiableHMoG, ClusterStatistics]
+):
     """Analysis of cluster prototypes with their members."""
 
     @property
@@ -120,14 +117,13 @@ class ClusterStatisticsAnalysis(Analysis[ClusteringDataset, HMoG, ClusterStatist
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: HMoG,
+        model: DifferentiableHMoG,
         epoch: int,
         params: Array,
     ) -> ClusterStatistics:
         """Generate collection of clusters with their members."""
         # Convert array to typed point for the model
-        typed_params = model.natural_point(params)
-        return generate_cluster_statistics(model, dataset, typed_params)
+        return generate_cluster_statistics(model, dataset, params)
 
     @override
     def plot(self, artifact: ClusterStatistics, dataset: ClusteringDataset) -> Figure:

@@ -1,17 +1,15 @@
-"""Base class for HMoG implementations."""
+"""Base class for DifferentiableHMoG implementations."""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, override
+from typing import override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from goal.geometry import (
-    Natural,
-    Point,
-)
+from goal.models import DifferentiableHMoG
 from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
@@ -21,8 +19,6 @@ from apps.interface import (
     ClusteringDataset,
 )
 from apps.runtime import Artifact, RunHandler
-
-from ..base import HMoG
 
 ### Loading Matrix Artifacts ###
 
@@ -35,20 +31,20 @@ class LoadingMatrixArtifact(Artifact):
     mean_loadings: Array  # Shape: (data_dim, latent_dim)
 
 
-def generate_loading_matrices[M: HMoG](
-    model: M,
-    params: Point[Natural, M],
+def generate_loading_matrices(
+    model: DifferentiableHMoG,
+    params: Array,
 ) -> LoadingMatrixArtifact:
     """Extract loading matrices in both natural and mean parameterizations."""
     # Extract the interaction parameters
-    obs_params, int_params, _ = model.split_params(params)
+    obs_params, int_params, _ = model.split_coords(params)
 
     # Get natural loadings (directly from the parameters)
-    natural_loadings = model.int_man.to_dense(int_params)
+    natural_loadings = model.int_man.to_matrix(int_params)
 
     # Convert to mean parameterization for interpretability
-    obs_loc, obs_prs = model.obs_man.split_params(obs_params)
-    obs_prs_dense = model.obs_man.cov_man.to_dense(obs_prs)
+    obs_loc, obs_prs = model.obs_man.split_coords(obs_params)
+    obs_prs_dense = model.obs_man.cov_man.to_matrix(obs_prs)
 
     # In mean coordinates, the loading matrix is Σ_x * Λ
     obs_cov_dense = jnp.linalg.inv(obs_prs_dense)
@@ -114,7 +110,9 @@ def loading_matrix_plotter(
 
 
 @dataclass(frozen=True)
-class LoadingMatrixAnalysis(Analysis[ClusteringDataset, HMoG, LoadingMatrixArtifact]):
+class LoadingMatrixAnalysis(
+    Analysis[ClusteringDataset, DifferentiableHMoG, LoadingMatrixArtifact]
+):
     """Analysis of cluster prototypes with their members."""
 
     @property
@@ -128,14 +126,13 @@ class LoadingMatrixAnalysis(Analysis[ClusteringDataset, HMoG, LoadingMatrixArtif
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: HMoG,
+        model: DifferentiableHMoG,
         epoch: int,
         params: Array,
     ) -> LoadingMatrixArtifact:
         """Generate collection of clusters with their members."""
         # Convert array to typed point for the model
-        typed_params = model.natural_point(params)
-        return generate_loading_matrices(model, typed_params)
+        return generate_loading_matrices(model, params)
 
     @override
     def plot(

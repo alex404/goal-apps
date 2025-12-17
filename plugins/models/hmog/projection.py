@@ -1,34 +1,39 @@
-"""Base class for HMoG implementations."""
+"""Base class for DifferentiableHMoG implementations."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, override
+from typing import override
 
 import jax
 import jax.numpy as jnp
 import optax
 from goal.geometry import (
     Diagonal,
-    Mean,
-    Natural,
     Optimizer,
     OptState,
-    Point,
     PositiveDefinite,
 )
-from goal.models import AnalyticMixture, FactorAnalysis, Normal, analytic_hmog
+from goal.models import (
+    AnalyticHMoG,
+    AnalyticMixture,
+    CompleteMixture,
+    FactorAnalysis,
+    Normal,
+    analytic_hmog,
+)
 from jax import Array
 
 from apps.interface import (
     ClusteringDataset,
     ClusteringModel,
 )
-from apps.runtime import JaxLogger, RunHandler
+from apps.runtime import Logger, RunHandler
 
 from .analysis.metrics import log_epoch_metrics
-from .base import HMoG, Mixture, fori
+from .base import fori
 from .trainers import LGMPreTrainer
 
 # Start logger
@@ -37,21 +42,21 @@ log = logging.getLogger(__name__)
 
 def to_analytic(
     lgm: FactorAnalysis,
-    mix: Mixture,
-    sym: HMoG,
-    lgm_params: Point[Natural, FactorAnalysis],
-    mix_params: Point[Natural, Mixture],
-) -> Point[Natural, HMoG]:
+    mix: CompleteMixture[Normal],
+    sym: AnalyticHMoG,
+    lgm_params: Array,
+    mix_params: Array,
+) -> Array:
     lkl_params = lgm.split_conjugated(lgm_params)[0]
     cmp_params, cat_params = mix.split_natural_mixture(mix_params)
     trg_man = Normal(
         lgm.lat_dim,
-        PositiveDefinite,
+        PositiveDefinite(),
     )
-    pd_cmp_params = mix.cmp_man.man_map(
+    pd_cmp_params = mix.cmp_man.map(
         lambda p: mix.cmp_man.rep_man.embed_rep(trg_man, p), cmp_params
     )
-    pd_mix_params = sym.upr_hrm.join_natural_mixture(pd_cmp_params, cat_params)
+    pd_mix_params = sym.pst_man.join_natural_mixture(pd_cmp_params, cat_params)
     return sym.join_conjugated(lkl_params, pd_mix_params)
 
 
@@ -79,30 +84,28 @@ class ProjectionTrainer:
     lat_min_var: float = 1e-6
     lat_jitter_var: float = 0.0
 
-    def project_data(
-        self, lgm: FactorAnalysis, params: Point[Natural, FactorAnalysis], data: Array
-    ) -> Array:
+    def project_data(self, lgm: FactorAnalysis, params: Array, data: Array) -> Array:
         """Project data to the latent space using the LGM."""
 
         # Get the posterior for each data point
         def posterior_mean(x: Array) -> Array:
             prms = lgm.posterior_at(params, x)
             with lgm.lat_man as lm:
-                return lm.split_mean_covariance(lm.to_mean(prms))[0].array
+                return lm.split_mean_covariance(lm.to_mean(prms))[0]
 
         # Extract the means of the latent variables
 
         return jax.lax.map(posterior_mean, data, batch_size=256)
 
     def bound_mixture_means(
-        self, model: Mixture, means: Point[Mean, Mixture]
-    ) -> Point[Mean, Mixture]:
+        self, model: CompleteMixture[Normal], means: Array
+    ) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
         # Split the mixture parameters
         comp_means, prob_means = model.split_mean_mixture(means)
 
         # Bound component means
-        bounded_comp_means = model.cmp_man.man_map(
+        bounded_comp_means = model.cmp_man.map(
             lambda m: model.obs_man.regularize_covariance(
                 m, self.lat_jitter_var, self.lat_min_var
             ),
@@ -118,12 +121,12 @@ class ProjectionTrainer:
         # Rejoin the bounded means
         return model.join_mean_mixture(bounded_comp_means, bounded_prob_means)
 
-    def make_regularizer(self) -> Callable[[Point[Natural, Mixture]], Array]:
+    def make_regularizer(self) -> Callable[[Array], Array]:
         """Create a regularizer for the mixture model."""
 
-        def loss_fn(params: Point[Natural, Mixture]) -> Array:
+        def loss_fn(params: Array) -> Array:
             # L2 regularization
-            return self.l2_reg * jnp.sum(jnp.square(params.array))
+            return self.l2_reg * jnp.sum(jnp.square(params))
 
         return loss_fn
 
@@ -133,12 +136,12 @@ class ProjectionTrainer:
         handler: RunHandler,
         dataset: ClusteringDataset,
         lgm: FactorAnalysis,
-        projection: Point[Natural, FactorAnalysis],
-        logger: JaxLogger,
+        projection: Array,
+        logger: Logger,
         epoch_offset: int,
-        mix: Mixture,
-        params0: Point[Natural, Mixture],
-    ) -> Point[Natural, Mixture]:
+        mix: CompleteMixture[Normal],
+        params0: Array,
+    ) -> Array:
         """Train a mixture model on data projected to the latent space."""
         # Project the data to the latent space
         train_data = dataset.train_data
@@ -169,9 +172,9 @@ class ProjectionTrainer:
 
         # Define batch step function
         def batch_step(
-            carry: tuple[OptState, Point[Natural, Mixture]],
+            carry: tuple[OptState, Array],
             batch: Array,
-        ) -> tuple[tuple[OptState, Point[Natural, Mixture]], Array]:
+        ) -> tuple[tuple[OptState, Array], Array]:
             opt_state, params = carry
 
             # Compute posterior statistics for this batch
@@ -182,9 +185,9 @@ class ProjectionTrainer:
 
             # Define the inner step function
             def inner_step(
-                carry: tuple[OptState, Point[Natural, Mixture]],
+                carry: tuple[OptState, Array],
                 _: None,
-            ) -> tuple[tuple[OptState, Point[Natural, Mixture]], Array]:
+            ) -> tuple[tuple[OptState, Array], Array]:
                 current_opt_state, current_params = carry
 
                 # Compute gradient as difference between posterior and current prior
@@ -203,19 +206,19 @@ class ProjectionTrainer:
                 # Monitor parameters for debugging
                 logger.monitor_params(
                     {
-                        "original_params": current_params.array,
-                        "updated_params": new_params.array,
+                        "original_params": current_params,
+                        "updated_params": new_params,
                         "batch": batch,
-                        "posterior_stats": posterior_stats.array,
-                        "bounded_posterior_stats": bounded_posterior_stats.array,
-                        "prior_stats": prior_stats.array,
-                        "grad": grad.array,
+                        "posterior_stats": posterior_stats,
+                        "bounded_posterior_stats": bounded_posterior_stats,
+                        "prior_stats": prior_stats,
+                        "grad": grad,
                     },
                     handler,
                     context="PROJECTION",
                 )
 
-                return (new_opt_state, new_params), grad.array
+                return (new_opt_state, new_params), grad
 
             # Run inner steps
             (final_opt_state, final_params), all_grads = jax.lax.scan(
@@ -230,8 +233,8 @@ class ProjectionTrainer:
         # Create epoch step function
         def epoch_step(
             epoch: Array,
-            carry: tuple[OptState, Point[Natural, Mixture], Array],
-        ) -> tuple[OptState, Point[Natural, Mixture], Array]:
+            carry: tuple[OptState, Array, Array],
+        ) -> tuple[OptState, Array, Array]:
             opt_state, params, epoch_key = carry
 
             # Split key for shuffling
@@ -282,8 +285,8 @@ class ProjectionTrainer:
         return params_final
 
 
-class ProjectionHMoGModel(ClusteringModel):
-    """Model framework for projection-based HMoG training.
+class ProjectionDifferentiableHMoGModel(ClusteringModel):
+    """Model framework for projection-based DifferentiableHMoG training.
 
     This approach trains a model in two phases:
     1. Use PreTrainer to learn a Linear Gaussian Model (LGM)
@@ -335,7 +338,9 @@ class ProjectionHMoGModel(ClusteringModel):
         self.mix_noise_scale = mix_noise_scale
         self.pretrain = pretrain
 
-        log.info(f"Initialized Projection HMoG model with dimension {self.model.dim}.")
+        log.info(
+            f"Initialized Projection DifferentiableHMoG model with dimension {self.model.dim}."
+        )
 
     @property
     @override
@@ -350,9 +355,7 @@ class ProjectionHMoGModel(ClusteringModel):
         return self.mixture.n_categories
 
     @override
-    def initialize_model(
-        self, key: Array, data: Array
-    ) -> tuple[Point[Natural, FactorAnalysis], Point[Natural, Mixture]]:
+    def initialize_model(self, key: Array, data: Array) -> tuple[Array, Array]:
         """Initialize model parameters."""
         key_lgm, key_mix = jax.random.split(key)
 
@@ -365,7 +368,7 @@ class ProjectionHMoGModel(ClusteringModel):
         # Join to create full model parameters
         return lgm_params, mix_params
 
-    def initialize_lgm(self, key: Array, data: Array) -> Point[Natural, FactorAnalysis]:
+    def initialize_lgm(self, key: Array, data: Array) -> Array:
         """Initialize LGM parameters."""
         # Initialize observable parameters from data statistics
         obs_means = self.lgm.obs_man.average_sufficient_statistic(data)
@@ -378,15 +381,15 @@ class ProjectionHMoGModel(ClusteringModel):
         int_noise = self.lgm_noise_scale * jax.random.normal(
             key, self.lgm.int_man.shape
         )
-        int_params = self.lgm.int_man.point(self.lgm.int_man.rep.from_dense(int_noise))
+        int_params = self.lgm.int_man.point(self.lgm.int_man.rep.from_matrix(int_noise))
 
         # Initialize latent parameters with standard normal
         lat_params = self.lgm.lat_man.to_natural(self.lgm.lat_man.standard_normal())
 
         # Join all parameters
-        return self.lgm.join_params(obs_params, int_params, lat_params)
+        return self.lgm.join_coords(obs_params, int_params, lat_params)
 
-    def initialize_mixture(self, key: Array) -> Point[Natural, Mixture]:
+    def initialize_mixture(self, key: Array) -> Array:
         """Initialize mixture parameters."""
         return self.mixture.initialize(key, shape=self.mix_noise_scale)
 
@@ -408,7 +411,7 @@ class ProjectionHMoGModel(ClusteringModel):
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        logger: JaxLogger,
+        logger: Logger,
     ) -> None:
         """Generate analysis artifacts from saved experiment results."""
         raise NotImplementedError(
@@ -434,9 +437,9 @@ class ProjectionHMoGModel(ClusteringModel):
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        logger: JaxLogger,
+        logger: Logger,
     ) -> None:
-        """Train HMoG model using projection approach."""
+        """Train DifferentiableHMoG model using projection approach."""
         # Split PRNG key for different training phases
         key_init, key_pre, key_proj = jax.random.split(key, 3)
 
@@ -451,8 +454,7 @@ class ProjectionHMoGModel(ClusteringModel):
             # Construct path to the pretrained file
 
             if self.pretrain:
-                new_lgm_array = handler.load_params(name="pretrain")
-                lgm_params = self.lgm.natural_point(new_lgm_array)
+                lgm_params = handler.load_params(name="pretrain")
 
             elif self.pre.n_epochs > 0:
                 log.info("Phase 1: Training LGM for projection")
@@ -468,7 +470,7 @@ class ProjectionHMoGModel(ClusteringModel):
                 epoch += self.pre.n_epochs
 
             # Save intermediate LGM parameters
-            handler.save_params(lgm_params.array, epoch)
+            handler.save_params(lgm_params, epoch)
 
         # Phase 2: Train the mixture model on projected data
         if self.projection.n_epochs > 0:
