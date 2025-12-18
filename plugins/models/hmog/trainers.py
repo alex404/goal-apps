@@ -192,7 +192,8 @@ class FullGradientTrainer:
                     whitened_comp_means, self.lat_jitter_var, self.lat_min_var
                 )
 
-            bounded_comp_meanss = uh.cmp_man.map(whiten_and_bound, comp_meanss)
+            # map() returns 2D by default, but join_mean_mixture expects flat
+            bounded_comp_meanss = uh.cmp_man.map(whiten_and_bound, comp_meanss, flatten=True)
 
             probs = uh.lat_man.to_probs(prob_means)
             bounded_probs0 = jnp.clip(probs, self.min_prob, 1.0)
@@ -771,7 +772,8 @@ class MixtureGradientTrainer:
                     whitened_comp_means, self.lat_jitter_var, self.lat_min_var
                 )
 
-            bounded_cmp_meanss = uh.cmp_man.map(whiten_and_bound, cmp_meanss)
+            # map() returns 2D by default, but join_mean_mixture expects flat
+            bounded_cmp_meanss = uh.cmp_man.map(whiten_and_bound, cmp_meanss, flatten=True)
 
             # Bound probabilities
             probs = uh.lat_man.to_probs(cat_means)

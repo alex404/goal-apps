@@ -163,10 +163,13 @@ def symmetric_kl_matrix(
     with model.prr_man as ch:
         comp_lats, _ = ch.split_natural_mixture(mix_params)
 
+        # Convert flat components to 2D for indexing inside vmap
+        comp_lats_2d = ch.cmp_man.to_2d(comp_lats)
+
         def kl_div_between_components(i: Array, j: Array) -> Array:
-            comp_i = ch.cmp_man.get_replicate(comp_lats, i)
+            comp_i = comp_lats_2d[i]
             comp_i_mean = ch.obs_man.to_mean(comp_i)
-            comp_j = ch.cmp_man.get_replicate(comp_lats, j)
+            comp_j = comp_lats_2d[j]
             return ch.obs_man.relative_entropy(comp_i_mean, comp_j)
 
         idxs = jnp.arange(ch.n_categories)
@@ -197,9 +200,9 @@ def get_component_prototypes(
         lat_dim=model.lwr_hrm.lat_dim,  # Original observable becomes latent
     )
 
-    for i in range(comp_lats.shape[0]):
-        # Get latent mean for this component
-        comp_lat_params = model.prr_man.cmp_man.get_replicate(comp_lats, jnp.asarray(i))
+    for i in range(model.prr_man.cmp_man.n_reps):
+        # Get latent params for this component (comp_lats is flat)
+        comp_lat_params = model.prr_man.cmp_man.get_replicate(comp_lats, i)
         lwr_hrm_params = ana_lgm.join_conjugated(lkl_params, comp_lat_params)
         lwr_hrm_means = ana_lgm.to_mean(lwr_hrm_params)
         lwr_hrm_obs = ana_lgm.split_coords(lwr_hrm_means)[0]

@@ -53,8 +53,9 @@ def to_analytic(
         lgm.lat_dim,
         PositiveDefinite(),
     )
+    # map() returns 2D by default, but join_natural_mixture expects flat
     pd_cmp_params = mix.cmp_man.map(
-        lambda p: mix.cmp_man.rep_man.embed_rep(trg_man, p), cmp_params
+        lambda p: mix.cmp_man.rep_man.embed_rep(trg_man, p), cmp_params, flatten=True
     )
     pd_mix_params = sym.pst_man.join_natural_mixture(pd_cmp_params, cat_params)
     return sym.join_conjugated(lkl_params, pd_mix_params)
@@ -105,11 +106,13 @@ class ProjectionTrainer:
         comp_means, prob_means = model.split_mean_mixture(means)
 
         # Bound component means
+        # map() returns 2D by default, but join_mean_mixture expects flat
         bounded_comp_means = model.cmp_man.map(
             lambda m: model.obs_man.regularize_covariance(
                 m, self.lat_jitter_var, self.lat_min_var
             ),
             comp_means,
+            flatten=True,
         )
 
         # Bound probabilities
