@@ -9,20 +9,17 @@ from typing import Any, override
 import jax
 import jax.numpy as jnp
 import numpy as np
-from goal.geometry import (
-    Diagonal,
-)
-from goal.models import (
-    DifferentiableHMoG,
-    differentiable_hmog,
-)
+from goal.geometry import Diagonal
+from goal.models import DifferentiableHMoG, differentiable_hmog
 from jax import Array
 
-from apps.interface import (
-    Analysis,
-    ClusteringDataset,
-    HierarchicalClusteringModel,
+from apps.interface import Analysis, ClusteringDataset, ClusteringModel
+from apps.interface.clustering.protocols import (
+    HasClusterHierarchy,
+    HasClusterPrototypes,
+    HasSoftAssignments,
 )
+from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
 
 from .analysis.base import cluster_assignments as hmog_cluster_assignments
@@ -76,7 +73,15 @@ def cycle_lr_schedule(keypoints: list[float], num_cycles: int) -> list[float]:
 ### HMog Experiment ###
 
 
-class HMoGModel(HierarchicalClusteringModel, ABC):
+class HMoGModel(
+    ClusteringModel,
+    HasLogLikelihood,
+    IsGenerative,
+    HasSoftAssignments,
+    HasClusterPrototypes,
+    HasClusterHierarchy,
+    ABC,
+):
     """Model framework for HMoGs."""
 
     # Training configuration
@@ -188,12 +193,12 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
 
         return self.manifold.join_coords(obs_params, int_params, mix_params)
 
-    def log_likelihood(
-        self,
-        params: Array,
-        data: Array,
-    ) -> Array:
-        return self.manifold.average_log_observable_density(params, data)
+    def log_likelihood(self, params: Array, data: Array) -> float:
+        return float(self.manifold.average_log_observable_density(params, data))
+
+    def posterior_assignments(self, params: Array, data: Array) -> Array:
+        """Compute posterior responsibilities p(z|x) for all data."""
+        return self.manifold.posterior_assignments(params, data)
 
     @override
     def get_analyses(
@@ -219,13 +224,7 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
         specialized_analyses = dataset.get_dataset_analyses()
         return analyses + list(specialized_analyses.values())
 
-    @override
-    def generate(
-        self,
-        params: Array,
-        key: Array,
-        n_samples: int,
-    ) -> Array:
+    def generate(self, params: Array, key: Array, n_samples: int) -> Array:
         return self.manifold.observable_sample(key, params, n_samples)
 
     @override
@@ -385,20 +384,16 @@ class HMoGModel(HierarchicalClusteringModel, ABC):
 
             log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")
 
-    @override
     def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get cluster prototypes by loading from ClusterStatistics artifact."""
-        # First try to load from file
         stats = handler.load_artifact(epoch, ClusterStatistics)
         return stats.prototypes
 
-    @override
     def get_cluster_members(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get cluster members by loading from ClusterStatistics artifact."""
         stats = handler.load_artifact(epoch, ClusterStatistics)
         return stats.members
 
-    @override
     def get_cluster_hierarchy(self, handler: RunHandler, epoch: int) -> Array:
         """Get co-assignment based hierarchy by loading from artifact."""
         hierarchy = handler.load_artifact(epoch, CoAssignmentClusterHierarchy)

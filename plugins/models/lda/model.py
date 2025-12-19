@@ -211,7 +211,6 @@ class LDAModel(ClusteringModel):
         handler.save_params(jnp.array([0.0]), 0)
         log.info("LDA training completed")
 
-    @override
     def generate(self, params: Array, key: Array, n_samples: int) -> Array:
         """Generate samples from LDA topics."""
         if self._lda is None:
@@ -256,17 +255,14 @@ class LDAModel(ClusteringModel):
         assignments = np.argmax(topic_distributions, axis=1)
         return jnp.array(assignments)
 
-    @override
     def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get LDA topic-word distributions as prototypes."""
         if self._lda is None:
             raise ValueError("Model must be trained before getting prototypes")
 
-        # Return topic-word distributions (each row is a topic)
         topic_word_dist = self._lda.components_
         return [jnp.array(topic) for topic in topic_word_dist]
 
-    @override
     def get_cluster_members(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get cluster members for each topic."""
         if self._lda is None or self._train_data is None:

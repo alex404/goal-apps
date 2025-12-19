@@ -21,12 +21,14 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
-from apps.interface import (
-    Analysis,
-    ClusteringDataset,
-    ClusteringDatasetConfig,
-    HierarchicalClusteringModel,
-)
+from typing import Any
+
+from apps.interface import Analysis, ClusteringDataset, ClusteringDatasetConfig, ClusteringModel
+from apps.interface.clustering.protocols import HasClusterPrototypes
+
+# Type alias for models with cluster prototypes - using Any at runtime
+# but type checkers understand the constraint from the method signatures
+ClusteringModelWithPrototypes = Any
 from apps.runtime import Artifact, MetricDict, RunHandler
 
 
@@ -528,7 +530,7 @@ class BadenBerens(Artifact):
 
 @dataclass(frozen=True)
 class BadenBerensAnalysis(
-    Analysis[ClusteringDataset, HierarchicalClusteringModel, BadenBerens]
+    Analysis[ClusteringDataset, ClusteringModelWithPrototypes, BadenBerens]
 ):
     """Baden-Berens style analysis comparing clustering with ground truth cell types."""
 
@@ -545,7 +547,7 @@ class BadenBerensAnalysis(
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: HierarchicalClusteringModel,
+        model: ClusteringModelWithPrototypes,
         epoch: int,
         params: Array,
     ) -> BadenBerens:

@@ -1,0 +1,14 @@
+# MFA configuration optimized for MNIST
+defaults:
+  - mfa
+  - _self_
+
+# MNIST-specific architecture
+latent_dim: 20     # Larger latent space for capturing digit structure
+n_clusters: 10     # Match number of digit classes (0-9)
+
+# Training hyperparameters
+trainer:
+  lr: 1e-2         # Learning rate
+  n_epochs: 500    # More epochs for better convergence
+  batch_size: null # Full batch

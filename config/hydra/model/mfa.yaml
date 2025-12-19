@@ -1,0 +1,10 @@
+# Base MFA (Mixture of Factor Analyzers) configuration
+defaults:
+  - /model/trainer@trainer: default
+  - _self_
+
+_target_: plugins.models.mfa.model.MFAModel
+
+# Model architecture
+latent_dim: 10  # Dimension of latent factors
+n_clusters: 10  # Number of mixture components

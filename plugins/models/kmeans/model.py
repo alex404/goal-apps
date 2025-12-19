@@ -168,7 +168,6 @@ class KMeansModel(ClusteringModel):
         handler.save_params(jnp.array([0.0]), 0)
         log.info("K-means training completed")
 
-    @override
     def generate(self, params: Array, key: Array, n_samples: int) -> Array:
         """Generate samples from cluster centers (simple approach)."""
         if self._cluster_centers is None:
@@ -198,15 +197,13 @@ class KMeansModel(ClusteringModel):
         assignments = self._kmeans.predict(data_np)
         return jnp.array(assignments)
 
-    @override
     def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get K-means cluster centers as prototypes."""
         if self._cluster_centers is None:
             raise ValueError("Model must be trained before getting prototypes")
-        
+
         return [jnp.array(center) for center in self._cluster_centers]
 
-    @override
     def get_cluster_members(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get cluster members for each cluster."""
         if self._kmeans is None or self._train_data is None:
@@ -414,7 +411,6 @@ class PCAKMeansModel(ClusteringModel):
         handler.save_params(jnp.array([0.0]), 0)
         log.info("PCA + K-means training completed")
 
-    @override
     def generate(self, params: Array, key: Array, n_samples: int) -> Array:
         """Generate samples by sampling from clusters and inverse PCA transform."""
         if self._pipeline is None:
@@ -449,21 +445,15 @@ class PCAKMeansModel(ClusteringModel):
         assignments = self._pipeline.predict(data_np)
         return jnp.array(assignments)
 
-    @override
     def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get cluster prototypes in original space (inverse transform of PCA centers)."""
         if self._pipeline is None:
             raise ValueError("Model must be trained before getting prototypes")
-        
-        # Get cluster centers in PCA space
+
         cluster_centers_pca = self._kmeans.cluster_centers_
-        
-        # Transform back to original space
         cluster_centers_original = self._pca.inverse_transform(cluster_centers_pca)
-        
         return [jnp.array(center) for center in cluster_centers_original]
 
-    @override
     def get_cluster_members(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get cluster members for each cluster."""
         if self._pipeline is None or self._train_data is None:

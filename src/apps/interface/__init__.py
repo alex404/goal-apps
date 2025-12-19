@@ -1,27 +1,29 @@
 from .analysis import Analysis
-from .dataset import (
+from .dataset import Dataset, DatasetConfig
+from .model import Model, ModelConfig
+from .protocols import HasLogLikelihood, IsGenerative
+
+# Re-export clustering for backward compatibility
+from .clustering import (
     ClusteringDataset,
     ClusteringDatasetConfig,
-    Dataset,
-    DatasetConfig,
-)
-from .model import (
     ClusteringModel,
     ClusteringModelConfig,
-    HierarchicalClusteringModel,
-    Model,
-    ModelConfig,
 )
 
 __all__ = [
+    # Generic
     "Analysis",
+    "Dataset",
+    "DatasetConfig",
+    "Model",
+    "ModelConfig",
+    # Generic protocols
+    "HasLogLikelihood",
+    "IsGenerative",
+    # Clustering (re-exported for convenience)
     "ClusteringDataset",
     "ClusteringDatasetConfig",
     "ClusteringModel",
     "ClusteringModelConfig",
-    "Dataset",
-    "DatasetConfig",
-    "HierarchicalClusteringModel",
-    "Model",
-    "ModelConfig",
 ]
