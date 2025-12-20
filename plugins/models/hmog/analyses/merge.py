@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import override
+from typing import Any, override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -346,10 +346,8 @@ def merge_results_plotter(
 
 
 @dataclass(frozen=True)
-class MergeAnalysis[T: MergeResults](
-    Analysis[ClusteringDataset, DifferentiableHMoG, T], ABC
-):
-    """KL divergence-based cluster merging analysis."""
+class MergeAnalysis[T: MergeResults](Analysis[ClusteringDataset, Any, T], ABC):
+    """Cluster merging analysis base class."""
 
     filter_empty_clusters: bool
     min_cluster_size: float
@@ -360,14 +358,14 @@ class MergeAnalysis[T: MergeResults](
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: DifferentiableHMoG,
+        model: Any,
         epoch: int,
         params: Array,
     ) -> T:
         return generate_merge_results(
             handler,
             dataset,
-            model,
+            model.manifold,
             epoch,
             params,
             self.artifact_type,

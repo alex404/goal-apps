@@ -105,15 +105,22 @@ class MFAModel(
         """Generate samples from the model."""
         return self.mfa.observable_sample(key, params, n_samples)
 
-    def posterior_assignments(self, params: Array, data: Array) -> Array:
+    def posterior_soft_assignments(self, params: Array, data: Array) -> Array:
         """Compute posterior responsibilities p(z|x) for all data."""
-        return self.mfa.posterior_assignments(params, data)
+        return jax.lax.map(
+            lambda x: self.mfa.posterior_soft_assignments(params, x),
+            data,
+            batch_size=2048,
+        )
 
     @override
     def cluster_assignments(self, params: Array, data: Array) -> Array:
         """Assign data to clusters using posterior responsibilities."""
-        responsibilities = self.posterior_assignments(params, data)
-        return jnp.argmax(responsibilities, axis=1)
+        return jax.lax.map(
+            lambda x: self.mfa.posterior_hard_assignment(params, x),
+            data,
+            batch_size=2048,
+        )
 
     def encode(self, params: Array, data: Array) -> Array:
         """Encode data into latent space representation (MFA-specific)."""

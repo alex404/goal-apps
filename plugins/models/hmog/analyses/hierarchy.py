@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import override
+from typing import Any, override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -244,7 +244,7 @@ def hierarchy_plotter(
 
 @dataclass(frozen=True)
 class HierarchyAnalysis[T: ClusterHierarchy](
-    Analysis[ClusteringDataset, DifferentiableHMoG, T], ABC
+    Analysis[ClusteringDataset, Any, T], ABC
 ):
     @override
     def generate(
@@ -252,12 +252,12 @@ class HierarchyAnalysis[T: ClusterHierarchy](
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: DifferentiableHMoG,
+        model: Any,
         epoch: int,
         params: Array,
     ) -> T:
         return generate_cluster_hierarchy(
-            model, params, self.artifact_type, dataset.train_data
+            model.manifold, params, self.artifact_type, dataset.train_data
         )
 
     @override

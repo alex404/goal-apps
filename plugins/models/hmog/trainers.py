@@ -26,7 +26,7 @@ from apps.interface import (
 )
 from apps.runtime import STATS_NUM, Logger, MetricDict, RunHandler
 
-from .analysis.metrics import log_epoch_metrics, pre_log_epoch_metrics
+from .analyses.metrics import log_epoch_metrics, pre_log_epoch_metrics
 from .base import fori
 
 ### Constants ###

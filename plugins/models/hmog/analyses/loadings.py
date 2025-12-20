@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import override
+from typing import Any, override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -110,10 +110,8 @@ def loading_matrix_plotter(
 
 
 @dataclass(frozen=True)
-class LoadingMatrixAnalysis(
-    Analysis[ClusteringDataset, DifferentiableHMoG, LoadingMatrixArtifact]
-):
-    """Analysis of cluster prototypes with their members."""
+class LoadingMatrixAnalysis(Analysis[ClusteringDataset, Any, LoadingMatrixArtifact]):
+    """Analysis of loading matrices from the linear Gaussian model."""
 
     @property
     @override
@@ -126,13 +124,12 @@ class LoadingMatrixAnalysis(
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: DifferentiableHMoG,
+        model: Any,
         epoch: int,
         params: Array,
     ) -> LoadingMatrixArtifact:
-        """Generate collection of clusters with their members."""
-        # Convert array to typed point for the model
-        return generate_loading_matrices(model, params)
+        """Generate loading matrix visualization."""
+        return generate_loading_matrices(model.manifold, params)
 
     @override
     def plot(

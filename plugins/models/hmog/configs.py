@@ -123,6 +123,7 @@ class HMoGConfig(ClusteringModelConfig):
     full: GradientTrainerConfig = field(default=MISSING)
 
 
+
 @dataclass
 class DifferentiableHMoGConfig(HMoGConfig):
     """HMoG configuration with cyclic training."""

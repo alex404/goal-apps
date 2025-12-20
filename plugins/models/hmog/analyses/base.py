@@ -151,8 +151,9 @@ def cluster_assignments(model: DifferentiableHMoG, params: Array, data: Array) -
     Returns:
         Array of cluster assignments
     """
-    probs = cluster_probabilities(model, params, data)
-    return jnp.argmax(probs, axis=-1)
+    return jax.lax.map(
+        lambda x: model.posterior_hard_assignment(params, x), data, batch_size=2048
+    )
 
 
 def symmetric_kl_matrix(
@@ -226,13 +227,9 @@ def cluster_probabilities(
     Returns:
         Array of shape (n_samples, n_clusters) with probability distributions
     """
-
-    def data_point_probs(x: Array) -> Array:
-        cat_pst = model.pst_man.prior(model.posterior_at(params, x))
-        with model.pst_man.lat_man as lm:
-            return lm.to_probs(lm.to_mean(cat_pst))
-
-    return jax.lax.map(data_point_probs, data, batch_size=2048)
+    return jax.lax.map(
+        lambda x: model.posterior_soft_assignments(params, x), data, batch_size=2048
+    )
 
 
 ### Logging ###

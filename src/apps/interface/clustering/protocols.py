@@ -22,7 +22,7 @@ class HasSoftAssignments(Protocol):
     prototype computation and other soft-clustering analyses.
     """
 
-    def posterior_assignments(self, params: Array, data: Array) -> Array:
+    def posterior_soft_assignments(self, params: Array, data: Array) -> Array:
         """Compute posterior responsibilities p(z|x) for all data.
 
         Args:

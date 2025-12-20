@@ -14,24 +14,21 @@ from goal.models import DifferentiableHMoG, differentiable_hmog
 from jax import Array
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
+from apps.interface.analyses import GenerativeSamplesAnalysis
 from apps.interface.clustering.protocols import (
-    HasClusterHierarchy,
-    HasClusterPrototypes,
     HasSoftAssignments,
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
 
-from .analysis.base import cluster_assignments as hmog_cluster_assignments
-from .analysis.clusters import ClusterStatistics, ClusterStatisticsAnalysis
-from .analysis.generative import GenerativeExamplesAnalysis
-from .analysis.hierarchy import (
+from .analyses.clusters import ClusterStatistics, ClusterStatisticsAnalysis
+from .analyses.hierarchy import (
     CoAssignmentClusterHierarchy,
     CoAssignmentHierarchyAnalysis,
     KLHierarchyAnalysis,
 )
-from .analysis.loadings import LoadingMatrixAnalysis
-from .analysis.merge import (
+from .analyses.loadings import LoadingMatrixAnalysis
+from .analyses.merge import (
     CoAssignmentMergeAnalysis,
     KLMergeAnalysis,
     OptimalMergeAnalysis,
@@ -78,8 +75,6 @@ class HMoGModel(
     HasLogLikelihood,
     IsGenerative,
     HasSoftAssignments,
-    HasClusterPrototypes,
-    HasClusterHierarchy,
     ABC,
 ):
     """Model framework for HMoGs."""
@@ -193,44 +188,43 @@ class HMoGModel(
 
         return self.manifold.join_coords(obs_params, int_params, mix_params)
 
+    @override
     def log_likelihood(self, params: Array, data: Array) -> float:
         return float(self.manifold.average_log_observable_density(params, data))
 
-    def posterior_assignments(self, params: Array, data: Array) -> Array:
+    def posterior_soft_assignments(self, params: Array, data: Array) -> Array:
         """Compute posterior responsibilities p(z|x) for all data."""
-        return self.manifold.posterior_assignments(params, data)
+        return self.manifold.posterior_soft_assignments(params, data)
 
     @override
     def get_analyses(
         self, dataset: ClusteringDataset
-    ) -> list[Analysis[ClusteringDataset, DifferentiableHMoG, Any]]:
-        analyses: list[Analysis[ClusteringDataset, DifferentiableHMoG, Any]] = [
+    ) -> list[Analysis[ClusteringDataset, Any, Any]]:
+        # Hardcoded analyses for now
+        analyses: list[Analysis[ClusteringDataset, Any, Any]] = [
+            GenerativeSamplesAnalysis(n_samples=100),
             ClusterStatisticsAnalysis(),
             KLHierarchyAnalysis(),
             CoAssignmentHierarchyAnalysis(),
-            GenerativeExamplesAnalysis(n_samples=1000),
             LoadingMatrixAnalysis(),
+            OptimalMergeAnalysis(filter_empty_clusters=True, min_cluster_size=0.0005),
+            KLMergeAnalysis(filter_empty_clusters=True, min_cluster_size=0.0005),
+            CoAssignmentMergeAnalysis(filter_empty_clusters=True, min_cluster_size=0.0005),
         ]
+        return analyses + list(dataset.get_dataset_analyses().values())
 
-        if dataset.has_labels:
-            analyses.extend(
-                [
-                    KLMergeAnalysis(True, 0.0005),
-                    CoAssignmentMergeAnalysis(True, 0.0005),
-                    OptimalMergeAnalysis(True, 0.0005),
-                ]
-            )
-
-        specialized_analyses = dataset.get_dataset_analyses()
-        return analyses + list(specialized_analyses.values())
-
+    @override
     def generate(self, params: Array, key: Array, n_samples: int) -> Array:
         return self.manifold.observable_sample(key, params, n_samples)
 
     @override
     def cluster_assignments(self, params: Array, data: Array) -> Array:
         """Assign data points to clusters using the HMoG model."""
-        return hmog_cluster_assignments(self.manifold, params, data)
+        return jax.lax.map(
+            lambda x: self.manifold.posterior_hard_assignment(params, x),
+            data,
+            batch_size=2048,
+        )
 
     @override
     def analyze(
@@ -252,11 +246,11 @@ class HMoGModel(
             key_check, key_model = jax.random.split(key, 2)
             params_array = self.prepare_model(key_model, handler, dataset.train_data)
             self.process_checkpoint(
-                key_check, handler, logger, dataset, self.manifold, epoch, params_array
+                key_check, handler, logger, dataset, self, epoch, params_array
             )
         else:
             log.info("Loading existing artifacts.")
-            self.process_checkpoint(key, handler, logger, dataset, self.manifold, epoch)
+            self.process_checkpoint(key, handler, logger, dataset, self, epoch)
 
     @override
     def train(
@@ -319,9 +313,7 @@ class HMoGModel(
             )
             params = self.manifold.join_coords(obs_params, int_params, lat_params)
             epoch = self.pre.n_epochs
-            self.process_checkpoint(
-                key, handler, logger, dataset, self.manifold, epoch, params
-            )
+            self.process_checkpoint(key, handler, logger, dataset, self, epoch, params)
             log.info("Pretraining complete.")
 
         # Cycle between Mixture and LGM training
@@ -378,9 +370,7 @@ class HMoGModel(
                 )
                 epoch += self.full.n_epochs
 
-            self.process_checkpoint(
-                key, handler, logger, dataset, self.manifold, epoch, params
-            )
+            self.process_checkpoint(key, handler, logger, dataset, self, epoch, params)
 
             log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")
 

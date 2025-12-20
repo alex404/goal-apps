@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import override
+from typing import Any, override
 
 import matplotlib.pyplot as plt
 import numpy as np
-from goal.models import DifferentiableHMoG
 from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
@@ -101,9 +100,7 @@ def cluster_statistics_plotter(
 
 
 @dataclass(frozen=True)
-class ClusterStatisticsAnalysis(
-    Analysis[ClusteringDataset, DifferentiableHMoG, ClusterStatistics]
-):
+class ClusterStatisticsAnalysis(Analysis[ClusteringDataset, Any, ClusterStatistics]):
     """Analysis of cluster prototypes with their members."""
 
     @property
@@ -117,13 +114,12 @@ class ClusterStatisticsAnalysis(
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: DifferentiableHMoG,
+        model: Any,
         epoch: int,
         params: Array,
     ) -> ClusterStatistics:
         """Generate collection of clusters with their members."""
-        # Convert array to typed point for the model
-        return generate_cluster_statistics(model, dataset, params)
+        return generate_cluster_statistics(model.manifold, dataset, params)
 
     @override
     def plot(self, artifact: ClusterStatistics, dataset: ClusteringDataset) -> Figure:
