@@ -7,7 +7,12 @@ and reusable analysis implementations.
 
 from .dataset import ClusteringDataset, ClusteringDatasetConfig
 from .model import ClusteringModel, ClusteringModelConfig
-from .protocols import HasClusterHierarchy, HasClusterPrototypes, HasSoftAssignments
+from .protocols import (
+    CanComputePrototypes,
+    HasClusterHierarchy,
+    HasClusterPrototypes,
+    HasSoftAssignments,
+)
 
 __all__ = [
     # Dataset
@@ -17,6 +22,7 @@ __all__ = [
     "ClusteringModel",
     "ClusteringModelConfig",
     # Protocols
+    "CanComputePrototypes",
     "HasClusterHierarchy",
     "HasClusterPrototypes",
     "HasSoftAssignments",

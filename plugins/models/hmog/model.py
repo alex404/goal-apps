@@ -15,13 +15,13 @@ from jax import Array
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
+from apps.interface.clustering.analyses import ClusterStatistics, ClusterStatisticsAnalysis
 from apps.interface.clustering.protocols import (
+    CanComputePrototypes,
     HasSoftAssignments,
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
-
-from .analyses.clusters import ClusterStatistics, ClusterStatisticsAnalysis
 from .analyses.hierarchy import (
     CoAssignmentClusterHierarchy,
     CoAssignmentHierarchyAnalysis,
@@ -75,6 +75,7 @@ class HMoGModel(
     HasLogLikelihood,
     IsGenerative,
     HasSoftAssignments,
+    CanComputePrototypes,
     ABC,
 ):
     """Model framework for HMoGs."""
@@ -195,6 +196,12 @@ class HMoGModel(
     def posterior_soft_assignments(self, params: Array, data: Array) -> Array:
         """Compute posterior responsibilities p(z|x) for all data."""
         return self.manifold.posterior_soft_assignments(params, data)
+
+    def compute_cluster_prototypes(self, params: Array) -> list[Array]:
+        """Compute model-derived prototypes for each cluster."""
+        from .analyses.base import get_component_prototypes
+
+        return get_component_prototypes(self.manifold, params)
 
     @override
     def get_analyses(

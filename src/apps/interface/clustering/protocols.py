@@ -87,3 +87,25 @@ class HasClusterHierarchy(Protocol):
             Scipy-compatible linkage matrix
         """
         ...
+
+
+class CanComputePrototypes(Protocol):
+    """Protocol for models that can compute cluster prototypes from parameters.
+
+    Models implementing this protocol can derive cluster prototypes directly
+    from model parameters, rather than computing them from data. This is
+    typically done by extracting the mean of each mixture component's
+    observable distribution.
+    """
+
+    def compute_cluster_prototypes(self, params: Array) -> list[Array]:
+        """Compute model-derived prototypes for each cluster.
+
+        Args:
+            params: Model parameters
+
+        Returns:
+            List of prototype arrays, one per cluster. Each prototype
+            represents the expected observable for that cluster.
+        """
+        ...
