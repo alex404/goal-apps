@@ -15,24 +15,20 @@ from jax import Array
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
-from apps.interface.clustering.analyses import ClusterStatistics, ClusterStatisticsAnalysis
+from apps.interface.clustering.analyses import (
+    ClusterStatistics,
+    ClusterStatisticsAnalysis,
+    CoAssignmentHierarchy,
+    CoAssignmentHierarchyAnalysis,
+)
+from apps.interface.clustering.config import ClusteringAnalysesConfig
 from apps.interface.clustering.protocols import (
     CanComputePrototypes,
     HasSoftAssignments,
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
-from .analyses.hierarchy import (
-    CoAssignmentClusterHierarchy,
-    CoAssignmentHierarchyAnalysis,
-    KLHierarchyAnalysis,
-)
-from .analyses.loadings import LoadingMatrixAnalysis
-from .analyses.merge import (
-    CoAssignmentMergeAnalysis,
-    KLMergeAnalysis,
-    OptimalMergeAnalysis,
-)
+
 from .trainers import (
     FullGradientTrainer,
     LGMPreTrainer,
@@ -93,6 +89,9 @@ class HMoGModel(
     lgm_noise_scale: float
     mix_noise_scale: float
 
+    # Analysis configuration
+    analyses_config: ClusteringAnalysesConfig
+
     def __init__(
         self,
         data_dim: int,
@@ -106,6 +105,7 @@ class HMoGModel(
         num_cycles: int,
         lgm_noise_scale: float,
         mix_noise_scale: float,
+        analyses: ClusteringAnalysesConfig,
     ) -> None:
         super().__init__()
 
@@ -129,6 +129,8 @@ class HMoGModel(
 
         self.lgm_noise_scale = lgm_noise_scale
         self.mix_noise_scale = mix_noise_scale
+
+        self.analyses_config = analyses
 
     # Properties
 
@@ -193,10 +195,16 @@ class HMoGModel(
     def log_likelihood(self, params: Array, data: Array) -> float:
         return float(self.manifold.average_log_observable_density(params, data))
 
+    @override
     def posterior_soft_assignments(self, params: Array, data: Array) -> Array:
         """Compute posterior responsibilities p(z|x) for all data."""
-        return self.manifold.posterior_soft_assignments(params, data)
+        return jax.lax.map(
+            lambda x: self.manifold.posterior_soft_assignments(params, x),
+            data,
+            batch_size=2048,
+        )
 
+    @override
     def compute_cluster_prototypes(self, params: Array) -> list[Array]:
         """Compute model-derived prototypes for each cluster."""
         from .analyses.base import get_component_prototypes
@@ -207,17 +215,21 @@ class HMoGModel(
     def get_analyses(
         self, dataset: ClusteringDataset
     ) -> list[Analysis[ClusteringDataset, Any, Any]]:
-        # Hardcoded analyses for now
-        analyses: list[Analysis[ClusteringDataset, Any, Any]] = [
-            GenerativeSamplesAnalysis(n_samples=100),
-            ClusterStatisticsAnalysis(),
-            KLHierarchyAnalysis(),
-            CoAssignmentHierarchyAnalysis(),
-            LoadingMatrixAnalysis(),
-            OptimalMergeAnalysis(filter_empty_clusters=True, min_cluster_size=0.0005),
-            KLMergeAnalysis(filter_empty_clusters=True, min_cluster_size=0.0005),
-            CoAssignmentMergeAnalysis(filter_empty_clusters=True, min_cluster_size=0.0005),
-        ]
+        """Build analyses list from configuration."""
+        analyses: list[Analysis[ClusteringDataset, Any, Any]] = []
+        cfg = self.analyses_config
+
+        if cfg.generative_samples.enabled:
+            analyses.append(
+                GenerativeSamplesAnalysis(n_samples=cfg.generative_samples.n_samples)
+            )
+
+        if cfg.cluster_statistics.enabled:
+            analyses.append(ClusterStatisticsAnalysis())
+
+        if cfg.co_assignment_hierarchy.enabled:
+            analyses.append(CoAssignmentHierarchyAnalysis())
+
         return analyses + list(dataset.get_dataset_analyses().values())
 
     @override
@@ -393,5 +405,5 @@ class HMoGModel(
 
     def get_cluster_hierarchy(self, handler: RunHandler, epoch: int) -> Array:
         """Get co-assignment based hierarchy by loading from artifact."""
-        hierarchy = handler.load_artifact(epoch, CoAssignmentClusterHierarchy)
+        hierarchy = handler.load_artifact(epoch, CoAssignmentHierarchy)
         return jnp.array(hierarchy.linkage_matrix)

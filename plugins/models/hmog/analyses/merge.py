@@ -22,6 +22,7 @@ from apps.interface import (
     Analysis,
     ClusteringDataset,
 )
+from apps.interface.clustering.analyses import CoAssignmentHierarchy
 from apps.runtime import Artifact, MetricDict, RunHandler
 
 from .base import (
@@ -30,10 +31,7 @@ from .base import (
     cluster_probabilities,
     get_component_prototypes,
 )
-from .hierarchy import (
-    CoAssignmentClusterHierarchy,
-    KLClusterHierarchy,
-)
+from .hierarchy import KLClusterHierarchy
 
 ### Analyses ###
 
@@ -228,7 +226,7 @@ def generate_merge_results[MR: MergeResults](
         similarity_type = "kl"
 
     elif merge_type == CoAssignmentMergeResults:
-        coassign_hierarchy = handler.load_artifact(epoch, CoAssignmentClusterHierarchy)
+        coassign_hierarchy = handler.load_artifact(epoch, CoAssignmentHierarchy)
         filtered_mapping = distance_matrix_to_mapping(
             coassign_hierarchy.distance_matrix, valid_clusters, n_classes
         )

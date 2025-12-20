@@ -9,6 +9,7 @@ from hydra.core.config_store import ConfigStore
 from omegaconf import MISSING
 
 from apps.interface import ClusteringModelConfig
+from apps.interface.clustering.config import ClusteringAnalysesConfig
 
 ### Gradient Trainer Configs ###
 
@@ -122,6 +123,9 @@ class HMoGConfig(ClusteringModelConfig):
     mix: MixtureGradientTrainerConfig = field(default=MISSING)
     full: GradientTrainerConfig = field(default=MISSING)
 
+    # Analysis configuration
+    analyses: ClusteringAnalysesConfig = field(default_factory=ClusteringAnalysesConfig)
+
 
 
 @dataclass
@@ -167,6 +171,9 @@ class ProjectionHMoGConfig(ClusteringModelConfig):
     # Training configuration
     pre: PreTrainerConfig = field(default=MISSING)
     pro: ProjectionTrainerConfig = field(default_factory=ProjectionTrainerConfig)
+
+    # Analysis configuration
+    analyses: ClusteringAnalysesConfig = field(default_factory=ClusteringAnalysesConfig)
 
 
 ### Config Registration ###

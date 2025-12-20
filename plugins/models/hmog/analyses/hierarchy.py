@@ -1,13 +1,14 @@
-"""Base class for DifferentiableHMoG implementations."""
+"""KL divergence based hierarchical clustering analysis for HMoG.
+
+This is HMoG-specific because it requires computing KL divergence between
+mixture components, which depends on the model's internal structure.
+"""
 
 from __future__ import annotations
 
-from abc import ABC
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, override
 
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.cluster.hierarchy
@@ -18,234 +19,125 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from numpy.typing import NDArray
 
-from apps.interface import (
-    Analysis,
-    ClusteringDataset,
-)
+from apps.interface import Analysis, ClusteringDataset
 from apps.runtime import Artifact, RunHandler
 
-from .base import cluster_probabilities, get_component_prototypes, symmetric_kl_matrix
-
-### Helpers ###
-
-
-def posterior_co_assignment_matrix(
-    model: DifferentiableHMoG,
-    params: Array,
-    data: Array,
-) -> Array:
-    """Compute posterior co-assignment matrix between components.
-
-    This computes how often two clusters are assigned to the same data points,
-    based on their posterior probabilities.
-
-    Args:
-        model: DifferentiableHMoG model
-        params: Model parameters
-        data: Data points for calculating empirical similarities
-
-    Returns:
-        Co-assignment similarity matrix (higher values = more similar)
-    """
-    # Get cluster probabilities for each data point
-    probs = cluster_probabilities(model, params, data)
-
-    # Compute co-assignment matrix efficiently through matrix multiplication
-    # co_assignment[i,j] = sum_x p(x,i) * p(x,j)
-    co_assignment = probs.T @ probs
-
-    # Normalize to get correlation-like measure
-    diag_sqrt = jnp.sqrt(jnp.diag(co_assignment))
-    # Build outer product of sqrt-diag entries, add small epsilon for stability
-    denom = diag_sqrt[:, None] * diag_sqrt[None, :] + 1e-12
-    normalized_co_assignment = co_assignment / denom
-
-    # Ensure perfect symmetry by averaging with transpose
-    return 0.5 * (normalized_co_assignment + normalized_co_assignment.T)
-
-
-### Artifacts ###
+from .base import get_component_prototypes, symmetric_kl_matrix
 
 
 @dataclass(frozen=True)
-class ClusterHierarchy(Artifact):
-    """Base artifact for clustering hierarchy analysis."""
+class KLClusterHierarchy(Artifact):
+    """KL divergence-based clustering hierarchy.
+
+    Uses symmetric KL divergence between mixture components to build
+    a hierarchical clustering of the learned clusters.
+    """
 
     prototypes: list[Array]
     linkage_matrix: NDArray[np.float64]
     distance_matrix: NDArray[np.float64]
 
 
-@dataclass(frozen=True)
-class KLClusterHierarchy(ClusterHierarchy):
-    """KL divergence-based clustering hierarchy."""
-
-
-@dataclass(frozen=True)
-class CoAssignmentClusterHierarchy(ClusterHierarchy):
-    """Co-assignment probability-based clustering hierarchy."""
-
-
-def generate_cluster_hierarchy[C: ClusterHierarchy](
-    model: DifferentiableHMoG,
-    params: Array,
-    hierarchy_type: type[C],
-    data: Array,
-) -> C:
-    """Generate clustering hierarchy analysis with specified similarity metric.
+def build_hierarchy_from_distance(
+    distance_matrix: Array,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Build hierarchical clustering from a distance matrix.
 
     Args:
-        model: DifferentiableHMoG model
-        params: Model parameters
-        hierarchy_type: Type of cluster hierarchy to create
-        data: Data points for calculating empirical similarities (only needed for co-assignment)
+        distance_matrix: Symmetric matrix where lower values = more similar
 
     Returns:
-        Specified type of cluster hierarchy
+        Tuple of (linkage_matrix, distance_matrix)
     """
-    prototypes = get_component_prototypes(model, params)
-
-    # Calculate the similarity matrix based on the hierarchy type
-    if hierarchy_type == KLClusterHierarchy:
-        similarity_matrix = symmetric_kl_matrix(model, params)
-        # convert to numpy
-    elif hierarchy_type == CoAssignmentClusterHierarchy:
-        similarity_matrix = posterior_co_assignment_matrix(model, params, data)
-    else:
-        raise TypeError(f"Unsupported hierarchy type: {hierarchy_type}")
-    similarity_matrix = np.array(similarity_matrix, dtype=np.float64)
-
-    # Convert to numpy and prepare for hierarchical clustering
-    if hierarchy_type == CoAssignmentClusterHierarchy:
-        # Co-assignment is a similarity matrix (higher = more similar)
-        # Convert to distance (lower = more similar)
-        dist_matrix = np.array(1.0 - similarity_matrix, dtype=np.float64)
-    else:
-        # KL divergence is already a distance (lower = more similar)
-        dist_matrix = np.array(similarity_matrix, dtype=np.float64)
+    dist_np = np.array(distance_matrix, dtype=np.float64)
 
     # Ensure non-negative distances
-    # Ensure non-negative distances
-    min_off_diag = np.min(dist_matrix[~np.eye(dist_matrix.shape[0], dtype=bool)])
+    min_off_diag = np.min(dist_np[~np.eye(dist_np.shape[0], dtype=bool)])
     if min_off_diag < 0:
-        dist_matrix = dist_matrix - min_off_diag  # Ensure perfect symmetry
-    dist_matrix = (dist_matrix + dist_matrix.T) / 2
+        dist_np = dist_np - min_off_diag
+
+    # Ensure perfect symmetry
+    dist_np = (dist_np + dist_np.T) / 2
 
     # Force diagonal to exactly zero
-    np.fill_diagonal(dist_matrix, 0.0)
+    np.fill_diagonal(dist_np, 0.0)
 
-    # Convert to condensed form
-    dist_vector = scipy.spatial.distance.squareform(dist_matrix)
+    # Convert to condensed form for scipy
+    dist_vector = scipy.spatial.distance.squareform(dist_np)
 
-    # Compute linkage matrix using average linkage
-    linkage_matrix = scipy.cluster.hierarchy.linkage(
-        dist_vector,
-        method="average",  # Using UPGMA clustering
-    )
+    # Compute linkage using average linkage (UPGMA)
+    linkage_matrix = scipy.cluster.hierarchy.linkage(dist_vector, method="average")
 
-    # Create the hierarchy object of the requested type
-    return hierarchy_type(
-        prototypes=prototypes,
-        linkage_matrix=linkage_matrix,
-        distance_matrix=dist_matrix,
-    )
+    return linkage_matrix, dist_np
 
 
-def hierarchy_plotter(
+def plot_kl_hierarchy(
+    hierarchy: KLClusterHierarchy,
     dataset: ClusteringDataset,
-) -> Callable[[ClusterHierarchy], Figure]:
+) -> Figure:
     """Plot dendrogram with corresponding prototype visualizations."""
+    n_clusters = len(hierarchy.prototypes)
+    prototype_shape = dataset.observable_shape
 
-    def plot_cluster_hierarchy(hierarchy: ClusterHierarchy) -> Figure:
-        n_clusters = len(hierarchy.prototypes)
-        prototype_shape = dataset.observable_shape
+    # Compute figure dimensions
+    dendrogram_width = 6
+    height, width = prototype_shape
+    prototype_width = width / height * dendrogram_width
+    spacing = 4
 
-        # Compute figure dimensions
-        dendrogram_width = 6  # Fixed width for dendrogram
-        height, width = prototype_shape
-        prototype_width = (
-            width / height * dendrogram_width
-        )  # Scale width based on shape
-        spacing = 4
+    fig_width = dendrogram_width + spacing + prototype_width
+    cluster_height = 1.0
+    fig_height = n_clusters * cluster_height
 
-        # Total figure width
-        fig_width = dendrogram_width + spacing + prototype_width
+    fig = plt.figure(figsize=(fig_width, fig_height))
+    fig.suptitle("Hierarchical Clustering (KL Divergence)", fontsize=12)
 
-        # Height per prototype/cluster
-        cluster_height = 1.0  # Base height per cluster
-        fig_height = n_clusters * cluster_height
+    # Create grid with two columns
+    gs = GridSpec(
+        n_clusters,
+        2,
+        width_ratios=[dendrogram_width, prototype_width],
+        wspace=spacing / fig_width,
+        figure=fig,
+    )
 
-        # Create figure with grid
-        fig = plt.figure(figsize=(fig_width, fig_height))
+    # Plot dendrogram
+    dendrogram_ax = fig.add_subplot(gs[:, 0])
+    dendrogram_results = scipy.cluster.hierarchy.dendrogram(
+        hierarchy.linkage_matrix,
+        orientation="left",
+        ax=dendrogram_ax,
+        leaf_font_size=10,
+        leaf_label_func=lambda x: f"Cluster {x}",
+    )
+    dendrogram_ax.set_xlabel("KL Divergence")
 
-        # Set title and metric label based on hierarchy type
-        if isinstance(hierarchy, KLClusterHierarchy):
-            fig.suptitle("Hierarchical Clustering using KL Divergence", fontsize=12)
-            metric_label = "KL Divergence"
-            linkage_matrix = hierarchy.linkage_matrix
-        elif isinstance(hierarchy, CoAssignmentClusterHierarchy):
-            fig.suptitle("Hierarchical Clustering using Co-assignment", fontsize=12)
+    leaf_order = dendrogram_results["leaves"]
+    if leaf_order is None:
+        raise ValueError("Failed to get leaf order from dendrogram.")
+    leaf_order = leaf_order[::-1]
 
-            # For co-assignment, use log-scale for better visualization
-            # Check if most distances are near 0
-            linkage_matrix = hierarchy.linkage_matrix.copy()
-            distances = linkage_matrix[:, 2]
-            if np.percentile(distances, 75) < 0.1:
-                # Transform distances to better visualize when most are near 0
-                linkage_matrix[:, 2] = -np.log(
-                    1 - np.minimum(0.999, linkage_matrix[:, 2])
-                )
-                metric_label = "-log(Co-assignment)"
-            else:
-                metric_label = "1 - Co-assignment"
-        else:
-            fig.suptitle("Hierarchical Clustering", fontsize=12)
-            metric_label = "Distance"
-            linkage_matrix = hierarchy.linkage_matrix
+    # Plot prototypes aligned with dendrogram leaves
+    for i, leaf_idx in enumerate(leaf_order):
+        prototype_ax = fig.add_subplot(gs[i, 1])
+        dataset.paint_observable(hierarchy.prototypes[leaf_idx], prototype_ax)
 
-        # Create gridspec with two columns
-        gs = GridSpec(
-            n_clusters,
-            2,
-            width_ratios=[dendrogram_width, prototype_width],
-            wspace=spacing / fig_width,  # Normalize spacing
-            figure=fig,
-        )
-
-        # Plot dendrogram in left column
-        dendrogram_ax = fig.add_subplot(gs[:, 0])
-        # Using scipy's dendrogram with modified orientation
-        dendrogram_results = scipy.cluster.hierarchy.dendrogram(
-            linkage_matrix,
-            orientation="left",
-            ax=dendrogram_ax,
-            leaf_font_size=10,
-            leaf_label_func=lambda x: f"Cluster {x}",
-        )
-        dendrogram_ax.set_xlabel(metric_label)
-
-        leaf_order = dendrogram_results["leaves"]
-        if leaf_order is None:
-            raise ValueError("Failed to get leaf order from dendrogram.")
-
-        leaf_order = leaf_order[::-1]
-
-        # Clean individual prototype visualization - scales well with compact paint_observable
-        for i, leaf_idx in enumerate(leaf_order):
-            prototype_ax = fig.add_subplot(gs[i, 1])
-            dataset.paint_observable(hierarchy.prototypes[leaf_idx], prototype_ax)
-        return fig
-
-    return plot_cluster_hierarchy
-
-
-### Analysis ###
+    return fig
 
 
 @dataclass(frozen=True)
-class HierarchyAnalysis[T: ClusterHierarchy](
-    Analysis[ClusteringDataset, Any, T], ABC
-):
+class KLHierarchyAnalysis(Analysis[ClusteringDataset, Any, KLClusterHierarchy]):
+    """KL divergence based hierarchical clustering analysis.
+
+    HMoG-specific: requires access to model.manifold for computing
+    KL divergence between mixture components.
+    """
+
+    @property
+    @override
+    def artifact_type(self) -> type[KLClusterHierarchy]:
+        return KLClusterHierarchy
+
     @override
     def generate(
         self,
@@ -255,32 +147,27 @@ class HierarchyAnalysis[T: ClusterHierarchy](
         model: Any,
         epoch: int,
         params: Array,
-    ) -> T:
-        return generate_cluster_hierarchy(
-            model.manifold, params, self.artifact_type, dataset.train_data
+    ) -> KLClusterHierarchy:
+        """Generate hierarchy from KL divergence between components."""
+        manifold: DifferentiableHMoG = model.manifold
+
+        # Get prototypes for visualization
+        prototypes = get_component_prototypes(manifold, params)
+
+        # Compute symmetric KL divergence matrix
+        kl_matrix = symmetric_kl_matrix(manifold, params)
+
+        # Build hierarchy (KL is already a distance - lower = more similar)
+        linkage_matrix, distance_matrix = build_hierarchy_from_distance(kl_matrix)
+
+        return KLClusterHierarchy(
+            prototypes=prototypes,
+            linkage_matrix=linkage_matrix,
+            distance_matrix=distance_matrix,
         )
 
     @override
-    def plot(self, artifact: T, dataset: ClusteringDataset) -> Figure:
-        plotter = hierarchy_plotter(dataset)
-        return plotter(artifact)
-
-
-@dataclass(frozen=True)
-class KLHierarchyAnalysis(HierarchyAnalysis[KLClusterHierarchy]):
-    """Co-assignment probability-based hierarchical clustering analysis."""
-
-    @property
-    @override
-    def artifact_type(self) -> type[KLClusterHierarchy]:
-        return KLClusterHierarchy
-
-
-@dataclass(frozen=True)
-class CoAssignmentHierarchyAnalysis(HierarchyAnalysis[CoAssignmentClusterHierarchy]):
-    """Co-assignment probability-based hierarchical clustering analysis."""
-
-    @property
-    @override
-    def artifact_type(self) -> type[CoAssignmentClusterHierarchy]:
-        return CoAssignmentClusterHierarchy
+    def plot(
+        self, artifact: KLClusterHierarchy, dataset: ClusteringDataset
+    ) -> Figure:
+        return plot_kl_hierarchy(artifact, dataset)

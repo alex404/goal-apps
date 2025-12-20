@@ -5,6 +5,14 @@ apps.interface framework, including protocols for model capabilities
 and reusable analysis implementations.
 """
 
+from .config import (
+    AnalysisConfig,
+    ClusteringAnalysesConfig,
+    ClusteringRunConfig,
+    ClusterStatisticsConfig,
+    GenerativeSamplesConfig,
+    RunConfig,
+)
 from .dataset import ClusteringDataset, ClusteringDatasetConfig
 from .model import ClusteringModel, ClusteringModelConfig
 from .protocols import (
@@ -15,6 +23,13 @@ from .protocols import (
 )
 
 __all__ = [
+    # Config
+    "AnalysisConfig",
+    "ClusteringAnalysesConfig",
+    "ClusteringRunConfig",
+    "ClusterStatisticsConfig",
+    "GenerativeSamplesConfig",
+    "RunConfig",
     # Dataset
     "ClusteringDataset",
     "ClusteringDatasetConfig",
