@@ -1,6 +1,6 @@
 # Tasic single-cell RNA-seq configuration for HMOG - higher learning rate test
 defaults:
-  - hmog_diff
+  - hmog
   - _self_
 
 # Model architecture - same as stable baseline

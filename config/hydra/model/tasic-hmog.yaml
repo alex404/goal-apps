@@ -1,6 +1,6 @@
 # Tasic single-cell RNA-seq configuration for HMOG
 defaults:
-  - hmog_diff
+  - hmog
   - _self_
 
 # Model architecture - minimal complexity for stability

@@ -1,6 +1,6 @@
 # Tasic single-cell RNA-seq configuration for HMOG - 6 clusters
 defaults:
-  - hmog_diff
+  - hmog
   - _self_
 
 # Model architecture - testing 6 clusters with stable gene count  

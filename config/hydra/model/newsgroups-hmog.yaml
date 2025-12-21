@@ -1,6 +1,6 @@
 # 20 Newsgroups text classification configuration for HMOG
 defaults:
-  - hmog_diff
+  - hmog
   - _self_
 
 # Model architecture - tuned for text data

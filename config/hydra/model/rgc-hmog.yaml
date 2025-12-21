@@ -1,6 +1,6 @@
 # Neural traces experiment configuration
 defaults:
-  - hmog_diff
+  - hmog
   - _self_
 
 latent_dim: 40
