@@ -10,7 +10,10 @@ from .config import (
     ClusteringAnalysesConfig,
     ClusteringRunConfig,
     ClusterStatisticsConfig,
+    CoAssignmentHierarchyConfig,
+    CoAssignmentMergeConfig,
     GenerativeSamplesConfig,
+    OptimalMergeConfig,
 )
 from .dataset import ClusteringDataset, ClusteringDatasetConfig
 from .metrics import cluster_accuracy, clustering_nmi
@@ -28,7 +31,10 @@ __all__ = [
     "ClusteringAnalysesConfig",
     "ClusteringRunConfig",
     "ClusterStatisticsConfig",
+    "CoAssignmentHierarchyConfig",
+    "CoAssignmentMergeConfig",
     "GenerativeSamplesConfig",
+    "OptimalMergeConfig",
     # Dataset
     "ClusteringDataset",
     "ClusteringDatasetConfig",

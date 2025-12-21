@@ -20,6 +20,8 @@ from apps.interface.clustering.analyses import (
     ClusterStatisticsAnalysis,
     CoAssignmentHierarchy,
     CoAssignmentHierarchyAnalysis,
+    CoAssignmentMergeAnalysis,
+    OptimalMergeAnalysis,
 )
 from apps.interface.clustering.config import ClusteringAnalysesConfig
 from apps.interface.clustering.protocols import (
@@ -229,6 +231,22 @@ class HMoGModel(
 
         if cfg.co_assignment_hierarchy.enabled:
             analyses.append(CoAssignmentHierarchyAnalysis())
+
+        if cfg.optimal_merge.enabled:
+            analyses.append(
+                OptimalMergeAnalysis(
+                    filter_empty_clusters=cfg.optimal_merge.filter_empty_clusters,
+                    min_cluster_size=cfg.optimal_merge.min_cluster_size,
+                )
+            )
+
+        if cfg.co_assignment_merge.enabled:
+            analyses.append(
+                CoAssignmentMergeAnalysis(
+                    filter_empty_clusters=cfg.co_assignment_merge.filter_empty_clusters,
+                    min_cluster_size=cfg.co_assignment_merge.min_cluster_size,
+                )
+            )
 
         return analyses + list(dataset.get_dataset_analyses().values())
 

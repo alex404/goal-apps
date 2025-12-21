@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import override
 
 from jax import Array
 from omegaconf import MISSING
 
-from ...runtime import Logger, RunHandler
 from ..model import Model, ModelConfig
 from .dataset import ClusteringDataset
 
@@ -46,14 +44,3 @@ class ClusteringModel(Model[ClusteringDataset], ABC):
         Returns:
             Array of cluster assignments with shape (n_samples,)
         """
-
-    @abstractmethod
-    @override
-    def train(
-        self,
-        key: Array,
-        handler: RunHandler,
-        logger: Logger,
-        dataset: ClusteringDataset,
-    ) -> None:
-        """Train model on dataset."""

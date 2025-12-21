@@ -27,7 +27,6 @@ from apps.interface import (
 from apps.runtime import STATS_NUM, Logger, MetricDict, RunHandler
 
 from .metrics import log_epoch_metrics, pre_log_epoch_metrics
-from .base import fori
 
 ### Constants ###
 
@@ -454,7 +453,7 @@ class FullGradientTrainer:
             return opt_state, new_params, next_key
 
         # Run training loop
-        (_, params_final, _) = fori(0, n_epochs, epoch_step, (opt_state, params0, key))
+        (_, params_final, _) = jax.lax.fori_loop(0, n_epochs, epoch_step, (opt_state, params0, key))
 
         return params_final
 
@@ -674,7 +673,7 @@ class LGMPreTrainer:
             return opt_state, new_params, next_key
 
         # Run training loop
-        (_, params_final, _) = fori(0, n_epochs, epoch_step, (opt_state, params0, key))
+        (_, params_final, _) = jax.lax.fori_loop(0, n_epochs, epoch_step, (opt_state, params0, key))
 
         return params_final
 
@@ -995,7 +994,7 @@ class MixtureGradientTrainer:
             return opt_state, new_mix_params, next_key
 
         # Run training loop
-        (_, mix_params_final, _) = fori(
+        (_, mix_params_final, _) = jax.lax.fori_loop(
             0, n_epochs, epoch_step, (opt_state, mix_params0, key)
         )
 

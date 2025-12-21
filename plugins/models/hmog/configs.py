@@ -149,5 +149,3 @@ cs.store(group="model/full", name="gradient_full", node=FullGradientTrainerConfi
 
 # Register model configs
 cs.store(group="model", name="hmog", node=DifferentiableHMoGConfig)
-
-cs = ConfigStore.instance()

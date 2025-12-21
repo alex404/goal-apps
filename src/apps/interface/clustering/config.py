@@ -43,6 +43,23 @@ class CoAssignmentHierarchyConfig(AnalysisConfig):
 
 
 @dataclass
+class OptimalMergeConfig(AnalysisConfig):
+    """Configuration for optimal (Hungarian) merge analysis."""
+
+    enabled: bool = False  # Disabled by default (requires labels, uses cheating)
+    filter_empty_clusters: bool = True
+    min_cluster_size: float = 0.0005
+
+
+@dataclass
+class CoAssignmentMergeConfig(AnalysisConfig):
+    """Configuration for co-assignment based merge analysis."""
+
+    filter_empty_clusters: bool = True
+    min_cluster_size: float = 0.0005
+
+
+@dataclass
 class ClusteringAnalysesConfig:
     """Configuration for all clustering analyses.
 
@@ -58,6 +75,10 @@ class ClusteringAnalysesConfig:
     )
     co_assignment_hierarchy: CoAssignmentHierarchyConfig = field(
         default_factory=CoAssignmentHierarchyConfig
+    )
+    optimal_merge: OptimalMergeConfig = field(default_factory=OptimalMergeConfig)
+    co_assignment_merge: CoAssignmentMergeConfig = field(
+        default_factory=CoAssignmentMergeConfig
     )
 
 

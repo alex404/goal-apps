@@ -61,16 +61,16 @@ def get_store_groups() -> dict[str, list[str]]:
 
     cs = ConfigStore.instance()
 
-    for name, node in cs.repo.items():
+    for _, node in cs.repo.items():
         # Handle the case where node is a dict
         if isinstance(node, dict):
-            for config_name, config_node in node.items():  # pyright: ignore[reportUnknownVariableType]
+            for config_name, config_node in node.items():
                 if hasattr(config_node, "group") and config_node.group:
-                    group = config_node.group  # pyright: ignore[reportUnknownVariableType]
+                    group = config_node.group
                     if group not in groups:
                         groups[group] = []
                     # Remove .yaml extension if present
-                    clean_name = config_name.replace(".yaml", "")  # pyright: ignore[reportUnknownVariableType]
+                    clean_name = config_name.replace(".yaml", "")
                     groups[group].append(clean_name)
 
     return groups

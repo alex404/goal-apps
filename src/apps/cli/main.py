@@ -173,8 +173,8 @@ def inspect(plugin: str = plugin):
     for group_name in ["model", "dataset"]:
         group = cs.repo.get(group_name, {})
         if isinstance(group, dict):
-            for name, config_node in group.items():  # pyright: ignore[reportUnknownVariableType]
-                clean_name: str = name.replace(".yaml", "")  # pyright: ignore[reportUnknownVariableType]
+            for name, config_node in group.items():
+                clean_name: str = name.replace(".yaml", "")
                 if clean_name == plugin and isinstance(config_node, ConfigNode):
                     params: dict[str, Any] = OmegaConf.to_container(config_node.node)  # pyright: ignore[reportAssignmentType]
                     if not params:
