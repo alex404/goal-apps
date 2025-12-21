@@ -1,45 +1,11 @@
-"""HMoG-specific analysis utilities.
-
-This module contains utilities specific to HMoG models. Generic clustering
-metrics (cluster_accuracy, clustering_nmi) are available from
-apps.interface.clustering, and update_stats is available from apps.runtime.
-"""
+"""HMoG-specific analysis utilities."""
 
 from __future__ import annotations
 
-import logging
-
 import jax
 import jax.numpy as jnp
-from goal.models import (
-    DifferentiableHMoG,
-    Normal,
-    NormalAnalyticLGM,
-)
+from goal.models import DifferentiableHMoG, Normal, NormalAnalyticLGM
 from jax import Array
-
-from apps.interface.clustering import cluster_accuracy, clustering_nmi
-from apps.runtime import STATS_NUM, update_stats
-
-# Re-export for backward compatibility
-__all__ = [
-    "INFO_LEVEL",
-    "STATS_LEVEL",
-    "analyze_component",
-    "cluster_accuracy",
-    "cluster_assignments",
-    "cluster_probabilities",
-    "clustering_nmi",
-    "get_component_prototypes",
-    "symmetric_kl_matrix",
-    "update_stats",
-]
-
-# Start logger
-log = logging.getLogger(__name__)
-
-STATS_LEVEL = jnp.array(STATS_NUM)
-INFO_LEVEL = jnp.array(logging.INFO)
 
 
 ### HMoG-specific Analysis ###
@@ -135,9 +101,6 @@ def cluster_probabilities(
     return jax.lax.map(
         lambda x: model.posterior_soft_assignments(params, x), data, batch_size=2048
     )
-
-
-### Logging ###
 
 
 def analyze_component(nor_man: Normal, nrm_params: Array) -> Array:

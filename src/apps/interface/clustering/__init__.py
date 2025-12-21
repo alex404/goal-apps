@@ -11,7 +11,6 @@ from .config import (
     ClusteringRunConfig,
     ClusterStatisticsConfig,
     GenerativeSamplesConfig,
-    RunConfig,
 )
 from .dataset import ClusteringDataset, ClusteringDatasetConfig
 from .metrics import cluster_accuracy, clustering_nmi
@@ -30,7 +29,6 @@ __all__ = [
     "ClusteringRunConfig",
     "ClusterStatisticsConfig",
     "GenerativeSamplesConfig",
-    "RunConfig",
     # Dataset
     "ClusteringDataset",
     "ClusteringDatasetConfig",

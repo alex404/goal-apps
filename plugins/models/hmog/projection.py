@@ -32,7 +32,7 @@ from apps.interface import (
 )
 from apps.runtime import Logger, RunHandler
 
-from .analyses.metrics import log_epoch_metrics
+from .metrics import log_epoch_metrics
 from .base import fori
 from .trainers import LGMPreTrainer
 

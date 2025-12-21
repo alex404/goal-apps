@@ -1,9 +1,10 @@
 from .analysis import Analysis
+from .config import RunConfig
 from .dataset import Dataset, DatasetConfig
 from .model import Model, ModelConfig
 from .protocols import HasLogLikelihood, IsGenerative
 
-# Re-export clustering for backward compatibility
+# Re-export clustering for convenience
 from .clustering import (
     ClusteringDataset,
     ClusteringDatasetConfig,
@@ -18,6 +19,7 @@ __all__ = [
     "DatasetConfig",
     "Model",
     "ModelConfig",
+    "RunConfig",
     # Generic protocols
     "HasLogLikelihood",
     "IsGenerative",

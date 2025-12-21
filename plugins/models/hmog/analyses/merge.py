@@ -20,20 +20,15 @@ from numpy.typing import NDArray
 from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
-from apps.interface import (
-    Analysis,
-    ClusteringDataset,
-)
+from apps.interface import Analysis, ClusteringDataset
+from apps.interface.clustering import cluster_accuracy
 from apps.interface.clustering.analyses import CoAssignmentHierarchy
-from apps.runtime import Artifact, MetricDict, RunHandler
+from apps.runtime import STATS_NUM, Artifact, MetricDict, RunHandler
 
-from .base import (
-    STATS_LEVEL,
-    cluster_accuracy,
-    cluster_probabilities,
-    get_component_prototypes,
-)
+from .base import cluster_probabilities, get_component_prototypes
 from .hierarchy import KLClusterHierarchy
+
+STATS_LEVEL = jnp.array(STATS_NUM)
 
 ### Analyses ###
 
