@@ -38,6 +38,37 @@ type MetricDict = dict[str, tuple[Array, Array]]  # Single snapshot
 type MetricHistory = dict[str, list[tuple[int, float]]]  # Time series
 
 
+def update_stats(
+    group: str, name: str, stats: Array, metrics: MetricDict, level: int = STATS_NUM
+) -> MetricDict:
+    """Add min/median/max statistics for an array to a metrics dict.
+
+    Args:
+        group: Metric group name (e.g., "Params", "Grad Norms")
+        name: Metric name within group (e.g., "Obs Location")
+        stats: Array of values to compute statistics over
+        metrics: Existing metrics dict to update
+        level: Log level for these metrics (default: STATS_NUM)
+
+    Returns:
+        Updated metrics dict with three new entries:
+        - "{group}/{name} Min"
+        - "{group}/{name} Median"
+        - "{group}/{name} Max"
+    """
+    import jax.numpy as jnp
+
+    level_arr = jnp.array(level)
+    metrics.update(
+        {
+            f"{group}/{name} Min": (level_arr, jnp.min(stats)),
+            f"{group}/{name} Median": (level_arr, jnp.median(stats)),
+            f"{group}/{name} Max": (level_arr, jnp.max(stats)),
+        }
+    )
+    return metrics
+
+
 ### Artifacts ###
 
 

@@ -13,7 +13,8 @@ dependencies = [
     "pandas",
     "joblib",
     "tables",
-    "scipy",          # For Hungarian algorithm in clustering metrics (core functionality)
+    "scipy",    
+    "scipy-stubs",
 ]
 
 [project.scripts]
@@ -55,6 +56,8 @@ venv = ".venv"
 reportUnknownParameterType = "none"
 reportUnknownMemberType = "none"
 reportUnknownArgumentType = "none"
+reportUnknownVariableType = "none"
+reportUnknownLambdaType = "none"
 reportAny = "none"
 reportExplicitAny = "none"
 reportMissingSuperCall = "none"

@@ -9,11 +9,8 @@ from .hierarchy import (
     compute_co_assignment_matrix,
     plot_hierarchy_dendrogram,
 )
-from .metrics import ClusteringMetrics, ClusteringMetricsAnalysis
 
 __all__ = [
-    "ClusteringMetrics",
-    "ClusteringMetricsAnalysis",
     "ClusterStatistics",
     "ClusterStatisticsAnalysis",
     # Hierarchy

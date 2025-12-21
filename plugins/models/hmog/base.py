@@ -31,4 +31,4 @@ class RepresentationType(Enum):
 
 
 def fori[X](lower: int, upper: int, body_fun: Callable[[Array, X], X], init: X) -> X:
-    return jax.lax.fori_loop(lower, upper, body_fun, init)  # pyright: ignore[reportUnknownVariableType]
+    return jax.lax.fori_loop(lower, upper, body_fun, init)

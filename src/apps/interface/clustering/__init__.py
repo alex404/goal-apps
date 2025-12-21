@@ -14,6 +14,7 @@ from .config import (
     RunConfig,
 )
 from .dataset import ClusteringDataset, ClusteringDatasetConfig
+from .metrics import cluster_accuracy, clustering_nmi
 from .model import ClusteringModel, ClusteringModelConfig
 from .protocols import (
     CanComputePrototypes,
@@ -36,6 +37,9 @@ __all__ = [
     # Model
     "ClusteringModel",
     "ClusteringModelConfig",
+    # Metrics
+    "cluster_accuracy",
+    "clustering_nmi",
     # Protocols
     "CanComputePrototypes",
     "HasClusterHierarchy",

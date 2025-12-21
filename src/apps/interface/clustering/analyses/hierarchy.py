@@ -79,7 +79,7 @@ def build_hierarchy_from_distance(
     # Compute linkage using average linkage (UPGMA)
     linkage_matrix = scipy.cluster.hierarchy.linkage(dist_vector, method="average")
 
-    return linkage_matrix, dist_np
+    return linkage_matrix, dist_np  # pyright: ignore[reportReturnType]
 
 
 def plot_hierarchy_dendrogram(

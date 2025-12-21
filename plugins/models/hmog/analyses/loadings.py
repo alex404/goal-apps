@@ -43,7 +43,7 @@ def generate_loading_matrices(
     natural_loadings = model.int_man.to_matrix(int_params)
 
     # Convert to mean parameterization for interpretability
-    obs_loc, obs_prs = model.obs_man.split_coords(obs_params)
+    _, obs_prs = model.obs_man.split_coords(obs_params)
     obs_prs_dense = model.obs_man.cov_man.to_matrix(obs_prs)
 
     # In mean coordinates, the loading matrix is Σ_x * Λ
@@ -62,7 +62,7 @@ def loading_matrix_plotter(
 
     def plot_loading_matrices(artifact: LoadingMatrixArtifact) -> Figure:
         # Get dimensions
-        data_dim, latent_dim = artifact.mean_loadings.shape
+        _, latent_dim = artifact.mean_loadings.shape
 
         # Create figure for all latent dimensions
         # We'll show natural and mean parameterizations side by side

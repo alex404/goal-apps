@@ -1,4 +1,9 @@
-"""Configuration for DifferentiableHMoG implementations."""
+"""HMoG-specific analysis utilities.
+
+This module contains utilities specific to HMoG models. Generic clustering
+metrics (cluster_accuracy, clustering_nmi) are available from
+apps.interface.clustering, and update_stats is available from apps.runtime.
+"""
 
 from __future__ import annotations
 
@@ -6,9 +11,6 @@ import logging
 
 import jax
 import jax.numpy as jnp
-from goal.geometry import (
-    Manifold,
-)
 from goal.models import (
     DifferentiableHMoG,
     Normal,
@@ -16,128 +18,31 @@ from goal.models import (
 )
 from jax import Array
 
-from apps.runtime import STATS_NUM, MetricDict
+from apps.interface.clustering import cluster_accuracy, clustering_nmi
+from apps.runtime import STATS_NUM, update_stats
+
+# Re-export for backward compatibility
+__all__ = [
+    "INFO_LEVEL",
+    "STATS_LEVEL",
+    "analyze_component",
+    "cluster_accuracy",
+    "cluster_assignments",
+    "cluster_probabilities",
+    "clustering_nmi",
+    "get_component_prototypes",
+    "symmetric_kl_matrix",
+    "update_stats",
+]
 
 # Start logger
 log = logging.getLogger(__name__)
-
 
 STATS_LEVEL = jnp.array(STATS_NUM)
 INFO_LEVEL = jnp.array(logging.INFO)
 
 
-### Analysis ###
-
-
-def cluster_accuracy(true_labels: Array, pred_clusters: Array) -> Array:
-    """Compute clustering accuracy with optimal label assignment.
-
-    Uses a fixed-size contingency matrix approach to be JIT-compatible.
-
-    Args:
-        true_labels: Ground truth labels
-        pred_clusters: Predicted cluster assignments
-
-    Returns:
-        Clustering accuracy after optimal label assignment
-    """
-    # Use a fixed max size for JIT compatibility
-    # If your model has more clusters, adjust this value
-    max_clusters = 100
-
-    # Create a fixed-size contingency matrix
-    contingency = jnp.zeros((max_clusters, max_clusters))
-
-    # Fill the contingency matrix
-    def body_fun(i, cont):
-        true_label = jnp.clip(true_labels[i], 0, max_clusters - 1)
-        pred_cluster = jnp.clip(pred_clusters[i], 0, max_clusters - 1)
-        return cont.at[pred_cluster, true_label].add(1)
-
-    contingency = jax.lax.fori_loop(0, true_labels.shape[0], body_fun, contingency)
-
-    # Find the best cluster-to-label assignment
-    cluster_to_label = jnp.argmax(contingency, axis=1)
-
-    # Map each point's cluster to its best label
-    def map_fn(i):
-        cluster = jnp.clip(pred_clusters[i], 0, max_clusters - 1)
-        return cluster_to_label[cluster]
-
-    mapped_preds = jax.vmap(map_fn)(jnp.arange(true_labels.shape[0]))
-
-    # Compute accuracy
-    return jnp.mean(mapped_preds == true_labels)
-
-
-def clustering_nmi(
-    n_clusters: int, n_classes: int, assignments: Array, true_labels: Array
-) -> Array:
-    """
-    Compute Normalized Mutual Information (NMI) between cluster assignments and true labels.
-
-    Fully JAX-compatible implementation that can be used with jax.jit.
-
-    Args:
-        assignments: Array of cluster assignments
-        true_labels: Array of true class labels
-
-    Returns:
-        NMI score (0-1, higher is better)
-    """
-    # Get number of clusters and classes
-    n_samples = assignments.shape[0]
-
-    # Create indices for counting
-    cluster_indices = assignments
-    class_indices = true_labels
-
-    # Compute cluster and class counts
-    cluster_counts = jnp.zeros(n_clusters).at[cluster_indices].add(1.0)
-    class_counts = jnp.zeros(n_classes).at[class_indices].add(1.0)
-
-    # Initialize contingency matrix
-    contingency = jnp.zeros((n_clusters, n_classes))
-
-    # Build contingency matrix using scatter_add approach
-    idx_matrix = jnp.stack([assignments, true_labels], axis=1)
-    values = jnp.ones(n_samples)
-
-    # Use a non-python loop to build the contingency table
-    def update_contingency(i, cont):
-        idx = idx_matrix[i]
-        val = values[i]
-        return cont.at[idx[0], idx[1]].add(val)
-
-    contingency = jax.lax.fori_loop(0, n_samples, update_contingency, contingency)
-
-    # Compute entropy for clusters
-    cluster_probs = cluster_counts / n_samples
-    cluster_entropy = -jnp.sum(
-        jnp.where(cluster_probs > 0, cluster_probs * jnp.log(cluster_probs), 0.0)
-    )
-
-    # Compute entropy for classes
-    class_probs = class_counts / n_samples
-    class_entropy = -jnp.sum(
-        jnp.where(class_probs > 0, class_probs * jnp.log(class_probs), 0.0)
-    )
-
-    # Compute mutual information
-    joint_probs = contingency / n_samples
-    outer_probs = jnp.outer(cluster_probs, class_probs)
-
-    # Avoid log(0) by masking
-    log_ratio = jnp.where(joint_probs > 0, jnp.log(joint_probs / outer_probs), 0.0)
-
-    mutual_info = jnp.sum(joint_probs * log_ratio)
-
-    # Compute NMI with small epsilon to avoid division by zero
-    epsilon = 1e-10
-    nmi = 2.0 * mutual_info / (cluster_entropy + class_entropy + epsilon)
-
-    # Ensure NMI is in [0, 1]
-    return jnp.clip(nmi, 0.0, 1.0)
+### HMoG-specific Analysis ###
 
 
 def cluster_assignments(model: DifferentiableHMoG, params: Array, data: Array) -> Array:
@@ -233,28 +138,6 @@ def cluster_probabilities(
 
 
 ### Logging ###
-
-
-def update_stats[M: Manifold](
-    group: str, name: str, stats: Array, metrics: MetricDict
-) -> MetricDict:
-    metrics.update(
-        {
-            f"{group}/{name} Min": (
-                STATS_LEVEL,
-                jnp.min(stats),
-            ),
-            f"{group}/{name} Median": (
-                STATS_LEVEL,
-                jnp.median(stats),
-            ),
-            f"{group}/{name} Max": (
-                STATS_LEVEL,
-                jnp.max(stats),
-            ),
-        }
-    )
-    return metrics
 
 
 def analyze_component(nor_man: Normal, nrm_params: Array) -> Array:

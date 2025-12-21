@@ -22,7 +22,6 @@ from apps.runtime import Logger, RunHandler
 from .analysis.clusters import ClusterStatistics, ClusterStatisticsAnalysis
 from .analysis.generative import GenerativeSamplesAnalysis
 from .analysis.latent import LatentProjectionsAnalysis
-from .analysis.metrics import TrainingMetricsAnalysis
 from .base import MFA
 from .trainers import GradientTrainer
 
@@ -218,5 +217,4 @@ class MFAModel(
             ClusterStatisticsAnalysis(),
             GenerativeSamplesAnalysis(n_samples=100),
             LatentProjectionsAnalysis(),
-            TrainingMetricsAnalysis(),
         ]

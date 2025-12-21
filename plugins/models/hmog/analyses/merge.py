@@ -10,6 +10,8 @@ from typing import Any, override
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
+import scipy.cluster.hierarchy
+import scipy.spatial.distance
 from goal.models import DifferentiableHMoG
 from jax import Array
 from matplotlib.figure import Figure
@@ -109,8 +111,6 @@ def distance_matrix_to_mapping(
     distance_matrix: NDArray[np.float64], valid_clusters: Array, n_classes: int
 ) -> NDArray[np.int32]:
     """Convert distance matrix to cluster mapping using hierarchical clustering on filtered subset."""
-    import scipy.cluster.hierarchy
-    import scipy.spatial.distance
 
     # Extract submatrix for valid clusters only
     filtered_dist = distance_matrix[valid_clusters][:, valid_clusters]
