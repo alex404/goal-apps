@@ -163,6 +163,15 @@ class FullGradientTrainer:
     # Strategy
     mask_type: MaskingStrategy
 
+    # Numerical stability
+    reset_latent_to_standard: bool = True
+    """Explicitly reset overall latent to standard_normal after whitening.
+
+    While mathematically redundant (whitening + join_mean_mixture produces ~standard
+    normal to ~1e-7 precision), the explicit reset prevents small numerical errors
+    from accumulating over many training steps, improving stability.
+    """
+
     def bound_means(
         self,
         model: DifferentiableHMoG,
@@ -179,10 +188,12 @@ class FullGradientTrainer:
 
         # Bound latent parameters
         with model.pst_man as uh:
-            # Split latent parameters
+            # Component means and probabilities
             comp_meanss, prob_means = uh.split_mean_mixture(lat_means)
+            # Average latent means for whitening
             lat_obs_means, _, _ = model.pst_man.split_coords(lat_means)
 
+            # Whiten component means relative to average of component means
             def whiten_and_bound(
                 comp_means: Array,
             ) -> Array:
@@ -191,23 +202,27 @@ class FullGradientTrainer:
                     whitened_comp_means, self.lat_jitter_var, self.lat_min_var
                 )
 
-            # map() returns 2D by default, but join_mean_mixture expects flat
-            bounded_comp_meanss = uh.cmp_man.map(whiten_and_bound, comp_meanss, flatten=True)
+            bounded_comp_meanss = uh.cmp_man.map(
+                whiten_and_bound, comp_meanss, flatten=True
+            )
 
+            # Bound probabilities
             probs = uh.lat_man.to_probs(prob_means)
             bounded_probs0 = jnp.clip(probs, self.min_prob, 1.0)
             bounded_probs = bounded_probs0 / jnp.sum(bounded_probs0)
             bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
 
-            bounded_lat_means0 = uh.join_mean_mixture(
+            # Reassemble regularized mean mixture.
+            bounded_lat_means = uh.join_mean_mixture(
                 bounded_comp_meanss, bounded_prob_means
             )
 
-            _, bounded_lat_int, bounded_lat_cat = uh.split_coords(bounded_lat_means0)
-
-            z = uh.obs_man.standard_normal()
-
-            bounded_lat_means = uh.join_coords(z, bounded_lat_int, bounded_lat_cat)
+            # Optionally reset overall to exact standard_normal (mathematically redundant
+            # since whitening already produces ~standard_normal, but prevents error accumulation)
+            if self.reset_latent_to_standard:
+                _, bounded_lat_int, bounded_lat_cat = uh.split_coords(bounded_lat_means)
+                z = uh.obs_man.standard_normal()
+                bounded_lat_means = uh.join_coords(z, bounded_lat_int, bounded_lat_cat)
 
         # Rejoin all parameters
         return model.join_coords(bounded_obs_means, int_means, bounded_lat_means)
@@ -453,7 +468,9 @@ class FullGradientTrainer:
             return opt_state, new_params, next_key
 
         # Run training loop
-        (_, params_final, _) = jax.lax.fori_loop(0, n_epochs, epoch_step, (opt_state, params0, key))
+        (_, params_final, _) = jax.lax.fori_loop(
+            0, n_epochs, epoch_step, (opt_state, params0, key)
+        )
 
         return params_final
 
@@ -673,7 +690,9 @@ class LGMPreTrainer:
             return opt_state, new_params, next_key
 
         # Run training loop
-        (_, params_final, _) = jax.lax.fori_loop(0, n_epochs, epoch_step, (opt_state, params0, key))
+        (_, params_final, _) = jax.lax.fori_loop(
+            0, n_epochs, epoch_step, (opt_state, params0, key)
+        )
 
         return params_final
 
@@ -703,6 +722,15 @@ class MixtureGradientTrainer:
     lat_jitter_var: float
     upr_prs_reg: float
     lwr_prs_reg: float
+
+    # Numerical stability
+    reset_latent_to_standard: bool = True
+    """Explicitly reset overall latent to standard_normal after whitening.
+
+    While mathematically redundant (whitening + join_mean_mixture produces ~standard
+    normal to ~1e-7 precision), the explicit reset prevents small numerical errors
+    from accumulating over many training steps, improving stability.
+    """
 
     def precompute_observable_mappings(
         self,
@@ -772,7 +800,9 @@ class MixtureGradientTrainer:
                 )
 
             # map() returns 2D by default, but join_mean_mixture expects flat
-            bounded_cmp_meanss = uh.cmp_man.map(whiten_and_bound, cmp_meanss, flatten=True)
+            bounded_cmp_meanss = uh.cmp_man.map(
+                whiten_and_bound, cmp_meanss, flatten=True
+            )
 
             # Bound probabilities
             probs = uh.lat_man.to_probs(cat_means)
@@ -780,7 +810,16 @@ class MixtureGradientTrainer:
             bounded_probs = bounded_probs / jnp.sum(bounded_probs)
             bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
 
-            return uh.join_mean_mixture(bounded_cmp_meanss, bounded_prob_means)
+            bounded_mix_means = uh.join_mean_mixture(bounded_cmp_meanss, bounded_prob_means)
+
+            # Optionally reset overall to exact standard_normal (mathematically redundant
+            # since whitening already produces ~standard_normal, but prevents error accumulation)
+            if self.reset_latent_to_standard:
+                _, bounded_lat_int, bounded_lat_cat = uh.split_coords(bounded_mix_means)
+                z = uh.obs_man.standard_normal()
+                bounded_mix_means = uh.join_coords(z, bounded_lat_int, bounded_lat_cat)
+
+            return bounded_mix_means
 
     def make_regularizer(
         self, model: DifferentiableHMoG, rho: Array

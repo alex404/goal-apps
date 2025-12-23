@@ -167,21 +167,6 @@ class HMoGModel(
         )
         obs_params = self.manifold.obs_man.to_natural(obs_means)
 
-        # with self.model.pst_man as uh:
-        #     cat_params = uh.lat_man.initialize(key_cat, shape=self.mix_noise_scale)
-        #     key_comps = jax.random.split(key_comp, self.n_clusters)
-        #     anchor = uh.obs_man.initialize(key_comps[0], shape=self.mix_noise_scale)
-        #
-        #     component_list = [
-        #         uh.obs_emb.sub_man.initialize(
-        #             key_compi, shape=self.mix_noise_scale
-        #         ).array
-        #         for key_compi in key_comps[1:]
-        #     ]
-        #     components = jnp.stack(component_list)
-        #     mix_params = uh.join_coords(
-        #         anchor, uh.int_man.point(components), cat_params
-        #     )
         mix_params = self.manifold.pst_man.initialize(
             key_comp, shape=self.mix_noise_scale
         )

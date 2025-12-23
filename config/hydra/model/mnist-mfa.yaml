@@ -4,11 +4,33 @@ defaults:
   - _self_
 
 # MNIST-specific architecture
-latent_dim: 20     # Larger latent space for capturing digit structure
+latent_dim: 3      # Latent factor dimensions
 n_clusters: 10     # Match number of digit classes (0-9)
+init_scale: 0.01   # Keep small for stability
+min_var: 0.01      # Minimum variance (handles zero-variance pixels)
 
-# Training hyperparameters
+# Training hyperparameters with HMOG-style regularization
 trainer:
-  lr: 1e-2         # Learning rate
-  n_epochs: 500    # More epochs for better convergence
-  batch_size: null # Full batch
+  lr: 1e-5         # Lower learning rate for stability
+  n_epochs: 500    # Training epochs
+  batch_size: 1024 # Mini-batch size
+  batch_steps: 1   # Single gradient step per batch
+  grad_clip: 1.0   # Gradient clipping
+
+  # Regularization (start with low values)
+  l1_reg: 1e-5     # Sparse loadings
+  l2_reg: 1e-5     # Weight decay
+  upr_prs_reg: 1e-4  # Push precision eigenvalues toward 1
+  lwr_prs_reg: 1e-4  # Push precision eigenvalues toward 1
+
+  # Parameter bounds (applied in mean coordinate space)
+  min_prob: 1e-4
+  obs_min_var: 1e-3  # Higher for MNIST's zero-variance pixels
+  lat_min_var: 1e-6
+
+# Temporarily disable problematic analyses
+analyses:
+  co_assignment_hierarchy:
+    enabled: false
+  co_assignment_merge:
+    enabled: false

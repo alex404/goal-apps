@@ -8,3 +8,18 @@ _target_: plugins.models.mfa.model.MFAModel
 # Model architecture
 latent_dim: 10  # Dimension of latent factors
 n_clusters: 10  # Number of mixture components
+init_scale: 0.01  # Scale for parameter initialization
+min_var: 0.01  # Minimum variance for regularization
+
+# Training with regularization (defaults)
+trainer:
+  lr: 1e-3
+  n_epochs: 200
+  grad_clip: 1.0
+  l1_reg: 0
+  l2_reg: 0
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 1e-3
+  min_prob: 1e-4
+  obs_min_var: 1e-5
+  lat_min_var: 1e-6
