@@ -27,48 +27,71 @@ INFO_LEVEL = jnp.array(logging.INFO)
 
 def precision_regularizer(
     mfa: MFA,
-    params: Array,
+    rho: Array,
+    lat_params: Array,
     upr_prs_reg: float,
     lwr_prs_reg: float,
 ) -> tuple[Array, MetricDict]:
-    """Regularize latent component precision eigenvalues toward 1.0.
+    """Compute regularization based on precision matrix eigenvalues.
 
-    Formula: R(Λ) = upr_prs_reg * tr(Λ) - lwr_prs_reg * log|Λ|
+    This regularizer controls the condition number and scale of the latent
+    precision matrices by penalizing extreme eigenvalues:
 
-    Applied to the latent component precisions (low-dimensional), not the
-    observable space.
+    R(Lambda) = upr_prs_reg * tr(Lambda) - lwr_prs_reg * log|Lambda|
+
+    where:
+    - tr(Lambda) = sum of eigenvalues (penalizes large eigenvalues)
+    - log|Lambda| = sum of log eigenvalues (penalizes small eigenvalues)
+
+    Mathematical insight: For a precision matrix with eigenvalues lambda_i,
+    the gradient of this regularizer is:
+
+        dR/dlambda_i = upr_prs_reg - lwr_prs_reg/lambda_i
+
+    Setting to zero gives the optimal eigenvalue: lambda* = lwr_prs_reg/upr_prs_reg
+
+    When upr_prs_reg = lwr_prs_reg:
+    - All eigenvalues are pushed toward 1
+    - Creates an isotropic latent space with uniform scaling
 
     Args:
         mfa: MFA model
-        params: Model parameters in natural coordinates
-        upr_prs_reg: Weight for trace penalty (upper bound on eigenvalues)
-        lwr_prs_reg: Weight for log-det penalty (lower bound on eigenvalues)
+        rho: Conjugation parameters
+        lat_params: Latent mixture parameters in natural coordinates
+        upr_prs_reg: Weight for trace penalty (controls upper bound on eigenvalues)
+        lwr_prs_reg: Weight for log-det penalty (controls lower bound on eigenvalues)
 
     Returns:
         Tuple of (regularization_loss, metrics_dict)
     """
-    # Get latent mixture parameters
-    _, _, lat_params = mfa.split_coords(params)
+    # Apply conjugation to get prior-space parameters (matches HMOG pattern)
+    con_lat_params = mfa.pst_prr_emb.translate(rho, lat_params)
     lat_man = mfa.lat_man  # CompleteMixture[Normal]
 
     # Split into component params and categorical
-    comp_params, _ = lat_man.split_natural_mixture(lat_params)
+    comp_params, _ = lat_man.split_natural_mixture(con_lat_params)
 
-    def comp_prs_stats(nor_params: Array) -> Array:
+    def compute_trace(nor_params: Array) -> Array:
         _, prs = lat_man.obs_man.split_location_precision(nor_params)
         prs_dense = lat_man.obs_man.cov_man.to_matrix(prs)
-        return jnp.array([jnp.trace(prs_dense), jnp.linalg.slogdet(prs_dense)[1]])
+        return jnp.trace(prs_dense)
 
-    stats = lat_man.cmp_man.map(comp_prs_stats, comp_params)
-    trace_sum = jnp.sum(stats[:, 0])
-    logdet_sum = jnp.sum(stats[:, 1])
-
+    traces = lat_man.cmp_man.map(compute_trace, comp_params)
+    trace_sum = jnp.sum(traces)
     trace_reg = upr_prs_reg * trace_sum
-    logdet_reg = -lwr_prs_reg * logdet_sum
+
+    def compute_logdet(nor_params: Array) -> Array:
+        _, prs = lat_man.obs_man.split_location_precision(nor_params)
+        prs_dense = lat_man.obs_man.cov_man.to_matrix(prs)
+        return -jnp.linalg.slogdet(prs_dense)[1]
+
+    logdets = lat_man.cmp_man.map(compute_logdet, comp_params)
+    logdet_sum = jnp.sum(logdets)
+    logdet_reg = lwr_prs_reg * logdet_sum
 
     metrics: MetricDict = {
         "Regularization/Precision Trace Sum": (STATS_LEVEL, trace_sum),
-        "Regularization/Precision LogDet Sum": (STATS_LEVEL, logdet_sum),
+        "Regularization/Precision LogDet Sum": (STATS_LEVEL, -logdet_sum),
         "Regularization/Trace Penalty": (STATS_LEVEL, trace_reg),
         "Regularization/LogDet Penalty": (STATS_LEVEL, logdet_reg),
     }
@@ -120,33 +143,23 @@ class GradientTrainer:
     """Minimum observable variance."""
 
     lat_min_var: float = 1e-6
-    """Minimum latent variance."""
+    """Minimum latent variance (currently unused - latents reset to standard normal)."""
 
     obs_jitter_var: float = 0.0
     """Jitter for observable variance."""
 
     lat_jitter_var: float = 0.0
-    """Jitter for latent variance."""
-
-    reset_latent_to_standard: bool = True
-    """Explicitly reset overall latent to standard_normal after whitening.
-
-    While mathematically redundant (whitening + join_mean_mixture produces ~standard
-    normal to ~1e-7 precision), the explicit reset prevents small numerical errors
-    from accumulating over many training steps, improving stability.
-    """
+    """Jitter for latent variance (currently unused - latents reset to standard normal)."""
 
     def bound_means(self, mfa: MFA, means: Array) -> Array:
         """Apply bounds to posterior/prior statistics in mean coordinates.
 
-        Bounds observable and latent covariances, and clips mixture weights.
-        Uses whitening to re-center the latent mixture components.
+        Bounds observable covariances, clips mixture weights, and resets all
+        latent components to standard normal N(0, I).
 
-        The key insight: lat_obs_means represents the average statistics over all
-        components. We whiten each component relative to this average, then bound
-        the whitened components. This preserves relative component structure while
-        preventing scale drift. The whitening automatically produces a standard
-        normal overall distribution.
+        This matches the gans-n-gmms approach where the latent prior is fixed
+        at standard normal for ALL mixture components. All component variation
+        must be expressed through the loading matrices and observation parameters.
         """
         obs_means, int_means, lat_means = mfa.split_coords(means)
 
@@ -159,21 +172,12 @@ class GradientTrainer:
         lat_man = mfa.lat_man  # CompleteMixture[Normal]
 
         # Split mixture into component means and categorical means
-        comp_meanss, cat_means = lat_man.split_mean_mixture(lat_means)
+        _, cat_means = lat_man.split_mean_mixture(lat_means)
 
-        # Get the overall latent obs means (average over components)
-        lat_obs_means, _, _ = lat_man.split_coords(lat_means)
-
-        # Whiten each component relative to overall, then bound
-        def whiten_and_bound(comp_means: Array) -> Array:
-            whitened = lat_man.obs_man.whiten(comp_means, lat_obs_means)
-            return lat_man.obs_man.regularize_covariance(
-                whitened, self.lat_jitter_var, self.lat_min_var
-            )
-
-        bounded_comp_meanss = lat_man.cmp_man.map(
-            whiten_and_bound, comp_meanss, flatten=True
-        )
+        # Reset ALL component latents to standard normal N(0, I)
+        # This enforces identifiability by fixing the latent prior
+        standard = lat_man.obs_man.standard_normal()
+        reset_comp_meanss = jnp.tile(standard, lat_man.n_categories)
 
         # Bound categorical probabilities
         probs = lat_man.lat_man.to_probs(cat_means)
@@ -183,41 +187,36 @@ class GradientTrainer:
 
         # Rejoin mixture with bounded components
         bounded_lat_means = lat_man.join_mean_mixture(
-            bounded_comp_meanss, bounded_cat_means
+            reset_comp_meanss, bounded_cat_means
         )
-
-        # Optionally reset overall to exact standard_normal (mathematically redundant
-        # since whitening already produces ~standard_normal, but may help numerics)
-        if self.reset_latent_to_standard:
-            _, bounded_lat_int, bounded_lat_cat = lat_man.split_coords(
-                bounded_lat_means
-            )
-            z = lat_man.obs_man.standard_normal()
-            bounded_lat_means = lat_man.join_coords(z, bounded_lat_int, bounded_lat_cat)
 
         return mfa.join_coords(bounded_obs_means, int_means, bounded_lat_means)
 
     def make_regularizer(
         self, mfa: MFA
     ) -> Callable[[Array], tuple[Array, tuple[Array, MetricDict]]]:
-        """Create regularizer that returns gradient and metrics."""
+        """Create a unified regularizer that returns loss, metrics, and gradient."""
 
-        def reg_with_metrics(params: Array) -> tuple[Array, MetricDict]:
-            _, int_params, _ = mfa.split_coords(params)
+        def loss_with_metrics(params: Array) -> tuple[Array, MetricDict]:
+            # Extract components for regularization (matches HMOG pattern)
+            obs_params, int_params, lat_params = mfa.split_coords(params)
+            lkl_params = mfa.lkl_fun_man.join_coords(obs_params, int_params)
+            rho = mfa.conjugation_parameters(lkl_params)
 
-            # L1 on interactions
+            # L1 regularization on interactions
             l1_norm = jnp.sum(jnp.abs(int_params))
             l1_loss = self.l1_reg * l1_norm
 
-            # L2 on all params
+            # L2 regularization on all params
             l2_norm = jnp.sum(jnp.square(params))
             l2_loss = self.l2_reg * l2_norm
 
-            # Precision regularization
+            # Component precision regularization
             prs_loss, prs_metrics = precision_regularizer(
-                mfa, params, self.upr_prs_reg, self.lwr_prs_reg
+                mfa, rho, lat_params, self.upr_prs_reg, self.lwr_prs_reg
             )
 
+            # Combine into total loss and metrics
             total_loss = l1_loss + l2_loss + prs_loss
 
             metrics: MetricDict = {
@@ -230,7 +229,7 @@ class GradientTrainer:
 
             return total_loss, metrics
 
-        return jax.grad(reg_with_metrics, has_aux=True)
+        return jax.grad(loss_with_metrics, has_aux=True)
 
     def train(
         self,

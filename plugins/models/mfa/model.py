@@ -6,6 +6,7 @@ import logging
 from typing import Any, override
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 from goal.models import FactorAnalysis, Normal
 from goal.models.graphical.mixture import MixtureOfConjugated
@@ -102,22 +103,27 @@ class MFAModel(
 
     @override
     def initialize_model(self, key: Array, data: Array) -> Array:
-        """Initialize MFA parameters from data sample.
+        """Initialize MFA parameters from k-means clustering.
 
-        Uses k-means initialization to spread out mixture components and
-        regularized observable statistics to handle zero-variance pixels.
+        Each mixture component is initialized as an FA with:
+        - Observable mean = k-means cluster center
+        - Observable covariance = identity (scaled by data variance)
+        - Interaction (loading) = small noise
+        - Latent = standard normal N(0, I)
+
+        This ensures that without training, the MFA achieves similar
+        clustering performance to k-means.
 
         Args:
             key: Random key for initialization
             data: Training data for initialization
 
         Returns:
-            Initial model parameters
+            Initial model parameters (natural coordinates)
         """
+        keys = jax.random.split(key, 3)
 
-        keys = jax.random.split(key, 4)
-
-        # Use k-means to get initial cluster centers
+        # Run k-means to get cluster centers
         log.info("Running k-means for initialization...")
         kmeans = KMeans(
             n_clusters=self.n_clusters, random_state=int(keys[0][0]), n_init="auto"
@@ -126,51 +132,49 @@ class MFAModel(
         centers = jax.numpy.asarray(kmeans.cluster_centers_)
         log.info("K-means initialization complete")
 
-        # Initialize observable biases from data with regularization
-        obs_man = self.mfa.hrm.obs_man
-        obs_means = obs_man.average_sufficient_statistic(data)
-        obs_means = obs_man.regularize_covariance(
-            obs_means, jitter=0.0, min_var=self.min_var
-        )
-        obs_params = obs_man.to_natural(obs_means)
+        # Compute uniform variance for covariance initialization
+        # Using mean variance across dimensions gives isotropic-like behavior
+        # that matches k-means' Euclidean distance assumption
+        data_var = jnp.var(data, axis=0)
+        mean_var = jnp.maximum(jnp.mean(data_var), self.min_var)
+        reg_var = jnp.full(data_var.shape, mean_var)
 
-        # Initialize latent (mixture) parameters using k-means centers
-        lat_params = self._initialize_mixture_from_centers(keys[1], centers)
+        # Build each FA component in natural coordinates
+        obs_man_fa = self.mfa.hrm.obs_man  # Diagonal Normal for observables
+        pst_man_fa = self.mfa.hrm.pst_man  # PositiveDefinite Normal for latents
 
-        # Initialize interaction matrix with appropriate scaling
-        obs_dim = self.mfa.hrm.obs_man.data_dim
-        lat_dim = self.mfa.hrm.pst_man.data_dim
-        scaling = self.init_scale / jax.numpy.sqrt(obs_dim * lat_dim)
-        int_noise = scaling * jax.random.normal(keys[2], shape=(self.mfa.int_man.dim,))
+        component_nat_list = []
+        int_key = keys[1]
+        for k in range(self.n_clusters):
+            # Observable: mean=center, cov=diag(reg_var) -> convert to natural
+            obs_cov_params = obs_man_fa.cov_man.from_matrix(jnp.diag(reg_var))
+            obs_means = obs_man_fa.join_mean_covariance(centers[k], obs_cov_params)
+            obs_params = obs_man_fa.to_natural(obs_means)
 
-        return self.mfa.join_coords(obs_params, int_noise, lat_params)
+            # Interaction: small noise for loading matrix
+            int_key, subkey = jax.random.split(int_key)
+            int_params = self.init_scale * jax.random.normal(
+                subkey, shape=(self.mfa.hrm.int_man.dim,)
+            )
 
-    def _initialize_mixture_from_centers(self, key: Array, _centers: Array) -> Array:
-        """Initialize mixture parameters to spread out components.
+            # Latent: standard normal in natural coords
+            lat_means = pst_man_fa.standard_normal()
+            lat_params = pst_man_fa.to_natural(lat_means)
 
-        Args:
-            key: Random key
-            _centers: K-means cluster centers (currently unused, could be used for scaling)
+            # Join FA params
+            fa_params = self.mfa.hrm.join_coords(obs_params, int_params, lat_params)
+            component_nat_list.append(fa_params)
 
-        Returns:
-            Latent parameters for CompleteMixture
-        """
-        keys = jax.random.split(key, 3)
-        lat_man = self.mfa.lat_man
+        components_nat = jnp.concatenate(component_nat_list)
 
-        # CompleteMixture is a Triple: (obs_man=Normal, int_man=EmbeddedMap, lat_man=Categorical)
-        # Initialize component-specific params with larger scale to spread out
-        obs_params = lat_man.obs_man.initialize(keys[0], shape=self.init_scale * 10)
+        # Categorical: uniform weights (natural params are log-odds, all zero for uniform)
+        cat_nat = jnp.zeros(self.n_clusters - 1)
 
-        # Initialize interaction params with random noise
-        int_params = self.init_scale * jax.random.normal(
-            keys[1], shape=(lat_man.int_man.dim,)
-        )
+        # Join into mixture natural params and convert to MFA params
+        mix_params = self.mfa.mix_man.join_natural_mixture(components_nat, cat_nat)
+        mfa_params = self.mfa.from_mixture_params(mix_params)
 
-        # Initialize categorical with uniform weights (shape=0 means uniform)
-        cat_params = lat_man.lat_man.initialize(keys[2], shape=0.0)
-
-        return lat_man.join_coords(obs_params, int_params, cat_params)
+        return mfa_params
 
     @override
     def log_likelihood(self, params: Array, data: Array) -> float:
