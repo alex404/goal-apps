@@ -14,7 +14,10 @@ from goal.models import Normal
 from goal.models.graphical.mixture import CompleteMixtureOfConjugated
 from jax import Array
 
+from apps.interface import ClusteringDataset
 from apps.runtime import STATS_NUM, Logger, MetricDict
+
+from .metrics import log_epoch_metrics
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +25,6 @@ log = logging.getLogger(__name__)
 type MFA = CompleteMixtureOfConjugated[Normal, Normal]
 
 STATS_LEVEL = jnp.array(STATS_NUM)
-INFO_LEVEL = jnp.array(logging.INFO)
 
 
 def precision_regularizer(
@@ -135,6 +137,9 @@ class GradientTrainer:
     lwr_prs_reg: float = 1e-3
     """Lower bound regularization on precision eigenvalues."""
 
+    log_freq: int = 10
+    """Log metrics every log_freq epochs."""
+
     # Parameter bounds (applied in mean space)
     min_prob: float = 1e-4
     """Minimum cluster probability."""
@@ -234,7 +239,7 @@ class GradientTrainer:
     def train(
         self,
         mfa: MFA,
-        data: Array,
+        dataset: ClusteringDataset,
         logger: Logger,
         epoch_offset: int,
         params0: Array,
@@ -249,6 +254,8 @@ class GradientTrainer:
         """
         if key is None:
             key = jax.random.PRNGKey(0)
+
+        data = dataset.train_data
 
         # Setup batching
         n_samples = data.shape[0]
@@ -335,17 +342,26 @@ class GradientTrainer:
                 batch_step, (opt_state, params), batched_data
             )
 
-            # Compute metrics for logging
-            train_ll = mfa.average_log_observable_density(new_params, data)
-            grad_norms = jnp.sqrt(jnp.sum(gradss**2, axis=-1))
-            avg_grad_norm = jnp.mean(grad_norms)
+            # Compute regularization metrics for logging (at final params)
+            # make_regularizer returns jax.grad(loss_with_metrics, has_aux=True)
+            # Calling it returns (gradient, metrics_dict)
+            _, reg_metrics = reg_fn(new_params)
 
-            metrics: MetricDict = {
-                "train/log_likelihood": (INFO_LEVEL, train_ll),
-                "train/grad_norm": (INFO_LEVEL, avg_grad_norm),
-            }
+            # Log metrics using the new metrics module
+            # gradss shape is (n_batches, batch_steps, param_dim)
+            # Flatten to (n_batches * batch_steps, param_dim) for gradient norm computation
+            flat_grads = gradss.reshape(-1, gradss.shape[-1])
 
-            logger.log_metrics(metrics, epoch + epoch_offset + 1)
+            log_epoch_metrics(
+                dataset,
+                mfa,
+                logger,
+                new_params,
+                epoch + epoch_offset,
+                reg_metrics,
+                flat_grads,
+                self.log_freq,
+            )
 
             return opt_state, new_params, next_key
 

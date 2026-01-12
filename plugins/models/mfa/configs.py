@@ -44,6 +44,9 @@ class GradientTrainerConfig:
     lwr_prs_reg: float = 1e-3
     """Lower bound regularization on precision eigenvalues (log-det penalty)."""
 
+    log_freq: int = 10
+    """Log metrics every log_freq epochs."""
+
     # Parameter bounds (applied in mean coordinate space)
     min_prob: float = 1e-4
     """Minimum cluster probability to prevent collapse."""

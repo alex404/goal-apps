@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 
-import jax
 import jax.numpy as jnp
 from goal.geometry import Replicated
 from goal.models import DifferentiableHMoG, Normal, NormalLGM
@@ -13,7 +11,15 @@ from jax import Array
 
 from apps.interface import ClusteringDataset
 from apps.interface.clustering import cluster_accuracy, clustering_nmi
-from apps.runtime import STATS_NUM, Logger, MetricDict, update_stats
+from apps.runtime import (
+    STATS_NUM,
+    Logger,
+    MetricDict,
+    add_clustering_metrics,
+    add_ll_metrics,
+    log_with_frequency,
+    update_stats,
+)
 
 from .analyses.base import analyze_component, cluster_assignments
 
@@ -21,26 +27,6 @@ log = logging.getLogger(__name__)
 
 STATS_LEVEL = jnp.array(STATS_NUM)
 INFO_LEVEL = jnp.array(logging.INFO)
-
-
-### Shared Metric Helpers ###
-
-
-def add_ll_metrics(
-    metrics: MetricDict,
-    model_dim: int,
-    train_ll: Array,
-    test_ll: Array,
-    n_train_samples: int,
-) -> MetricDict:
-    """Add log-likelihood and BIC metrics."""
-    scaled_bic = -(model_dim * jnp.log(n_train_samples) / n_train_samples - 2 * train_ll) / 2
-    metrics.update({
-        "Log-Likelihood/Train": (INFO_LEVEL, train_ll),
-        "Log-Likelihood/Test": (INFO_LEVEL, test_ll),
-        "Log-Likelihood/Scaled BIC": (INFO_LEVEL, scaled_bic),
-    })
-    return metrics
 
 
 def add_conjugation_metrics(
@@ -57,23 +43,6 @@ def add_conjugation_metrics(
         "Conjugation/Covariance LogDet": (STATS_LEVEL, rho_stats[5]),
     })
     return metrics
-
-
-def log_with_frequency(
-    logger: Logger,
-    epoch: Array,
-    log_freq: int,
-    compute_fn: Callable[[], MetricDict],
-) -> None:
-    """Log metrics at specified frequency using jax.lax.cond."""
-    def do_log() -> None:
-        metrics = compute_fn()
-        logger.log_metrics(metrics, epoch + 1)
-
-    def no_op() -> None:
-        pass
-
-    jax.lax.cond(epoch % log_freq == 0, do_log, no_op)
 
 
 ### LGM Pretraining Metrics ###
@@ -187,20 +156,17 @@ def log_epoch_metrics(
             train_clusters = cluster_assignments(model, params, train_data)
             test_clusters = cluster_assignments(model, params, test_data)
 
-            train_acc = cluster_accuracy(dataset.train_labels, train_clusters)
-            test_acc = cluster_accuracy(dataset.test_labels, test_clusters)
-
-            n_clusters = model.pst_man.n_categories
-            n_classes = dataset.n_classes
-            train_nmi = clustering_nmi(n_clusters, n_classes, train_clusters, dataset.train_labels)
-            test_nmi = clustering_nmi(n_clusters, n_classes, test_clusters, dataset.test_labels)
-
-            metrics.update({
-                "Clustering/Train Accuracy (Greedy)": (INFO_LEVEL, train_acc),
-                "Clustering/Test Accuracy (Greedy)": (INFO_LEVEL, test_acc),
-                "Clustering/Train NMI": (INFO_LEVEL, train_nmi),
-                "Clustering/Test NMI": (INFO_LEVEL, test_nmi),
-            })
+            metrics = add_clustering_metrics(
+                metrics,
+                n_clusters=model.pst_man.n_categories,
+                n_classes=dataset.n_classes,
+                train_labels=dataset.train_labels,
+                test_labels=dataset.test_labels,
+                train_clusters=train_clusters,
+                test_clusters=test_clusters,
+                cluster_accuracy_fn=cluster_accuracy,
+                clustering_nmi_fn=clustering_nmi,
+            )
 
         # Parameter decomposition (HMoG has more components than LGM)
         obs_params, lwr_int, upr_params = model.split_coords(params)

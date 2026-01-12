@@ -1,34 +1,29 @@
 # MFA configuration optimized for MNIST
-# Tested settings that maintain stable training and clustering quality
 defaults:
   - mfa
   - _self_
 
-# MNIST-specific architecture
-latent_dim: 10     # Latent factor dimensions
-n_clusters: 50     # Match number of digit classes (0-9)
-init_scale: 0.01   # Small noise for interaction initialization
-min_var: 0.01      # Minimum variance (handles zero-variance pixels)
+latent_dim: 10
+n_clusters: 50
+init_scale: 0.01
+min_var: 0.01
 
-# Training hyperparameters - tested for stable training
-# With these settings: LL improves ~+30 nats, NMI stays ~0.47 over 40 epochs
 trainer:
-  lr: 3e-4         # Conservative learning rate for stability
-  n_epochs: 200     # Enough to learn without cluster collapse
-  # batch_size: 500  # Mini-batch size
-  batch_steps: 1000   # Single gradient step per batch
-  grad_clip: 1.0   # Gradient clipping
+  lr: 1e-5
+  n_epochs: 200   
+  # batch_size: 500
+  batch_steps: 1000
+  grad_clip: 1.0 
 
   # Regularization
-  l1_reg: 1e-4     # L1 on interaction params (sparse loadings)
-  l2_reg: 1e-5     # Weight decay
-  upr_prs_reg: 1e-3  # Push precision eigenvalues toward 1
-  lwr_prs_reg: 1e-3  # Push precision eigenvalues toward 1
+  l1_reg: 0 # 1e-3
+  l2_reg: 0 # 1e-4
+  upr_prs_reg: 0 # 1e-3
+  lwr_prs_reg: 0 # 1e-3
 
-  # Parameter bounds (applied in mean coordinate space)
-  min_prob: 1e-3   # Minimum cluster probability
-  obs_min_var: 1e-4  # Higher for MNIST's zero-variance pixels
-  lat_min_var: 1e-4
+  min_prob: 1e-3
+  obs_min_var: 1e-4
+  lat_min_var: 1e-6
 
   # Jitter (optional, for additional stability)
   obs_jitter_var: 0.0

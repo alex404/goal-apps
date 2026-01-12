@@ -265,7 +265,7 @@ class MFAModel(
         log.info(f"Training MFA model for {self.trainer.n_epochs} epochs")
         params = self.trainer.train(
             mfa=self.mfa,
-            data=dataset.train_data,
+            dataset=dataset,
             logger=logger,
             epoch_offset=epoch,
             params0=params,
