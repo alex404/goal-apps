@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import optax
 from goal.geometry import Optimizer, OptState
 from goal.models import Normal
-from goal.models.graphical.mixture import MixtureOfConjugated
+from goal.models.graphical.mixture import CompleteMixtureOfConjugated
 from jax import Array
 
 from apps.runtime import STATS_NUM, Logger, MetricDict
@@ -19,7 +19,7 @@ from apps.runtime import STATS_NUM, Logger, MetricDict
 log = logging.getLogger(__name__)
 
 # Type alias for MFA model
-type MFA = MixtureOfConjugated[Normal, Normal]
+type MFA = CompleteMixtureOfConjugated[Normal, Normal]
 
 STATS_LEVEL = jnp.array(STATS_NUM)
 INFO_LEVEL = jnp.array(logging.INFO)
@@ -164,7 +164,7 @@ class GradientTrainer:
         obs_means, int_means, lat_means = mfa.split_coords(means)
 
         # Bound observable covariance
-        bounded_obs_means = mfa.hrm.obs_man.regularize_covariance(
+        bounded_obs_means = mfa.bas_hrm.obs_man.regularize_covariance(
             obs_means, self.obs_jitter_var, self.obs_min_var
         )
 

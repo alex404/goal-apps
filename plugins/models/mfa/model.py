@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from goal.models import FactorAnalysis, Normal
-from goal.models.graphical.mixture import MixtureOfConjugated
+from goal.models.graphical.mixture import CompleteMixtureOfConjugated
 from jax import Array
 from sklearn.cluster import KMeans
 
@@ -35,7 +35,7 @@ from .trainers import GradientTrainer
 log = logging.getLogger(__name__)
 
 # Type alias for MFA model
-type MFA = MixtureOfConjugated[Normal, Normal]
+type MFA = CompleteMixtureOfConjugated[Normal, Normal]
 
 
 class MFAModel(
@@ -83,7 +83,9 @@ class MFAModel(
 
         # Create MFA model from goal-jax
         base_fa = FactorAnalysis(obs_dim=data_dim, lat_dim=latent_dim)
-        self.mfa: MFA = MixtureOfConjugated(n_categories=n_clusters, hrm=base_fa)
+        self.mfa: MFA = CompleteMixtureOfConjugated(
+            n_categories=n_clusters, bas_hrm=base_fa
+        )
 
     # Properties
 
@@ -140,8 +142,8 @@ class MFAModel(
         reg_var = jnp.full(data_var.shape, mean_var)
 
         # Build each FA component in natural coordinates
-        obs_man_fa = self.mfa.hrm.obs_man  # Diagonal Normal for observables
-        pst_man_fa = self.mfa.hrm.pst_man  # PositiveDefinite Normal for latents
+        obs_man_fa = self.mfa.bas_hrm.obs_man  # Diagonal Normal for observables
+        pst_man_fa = self.mfa.bas_hrm.pst_man  # PositiveDefinite Normal for latents
 
         component_nat_list = []
         int_key = keys[1]
@@ -154,7 +156,7 @@ class MFAModel(
             # Interaction: small noise for loading matrix
             int_key, subkey = jax.random.split(int_key)
             int_params = self.init_scale * jax.random.normal(
-                subkey, shape=(self.mfa.hrm.int_man.dim,)
+                subkey, shape=(self.mfa.bas_hrm.int_man.dim,)
             )
 
             # Latent: standard normal in natural coords
@@ -162,7 +164,7 @@ class MFAModel(
             lat_params = pst_man_fa.to_natural(lat_means)
 
             # Join FA params
-            fa_params = self.mfa.hrm.join_coords(obs_params, int_params, lat_params)
+            fa_params = self.mfa.bas_hrm.join_coords(obs_params, int_params, lat_params)
             component_nat_list.append(fa_params)
 
         components_nat = jnp.concatenate(component_nat_list)
@@ -218,11 +220,11 @@ class MFAModel(
             # Get component k's harmonium params (natural coords)
             hrm_k = self.mfa.mix_man.cmp_man.get_replicate(comp_hrm_params, k)
             # Convert to mean coordinates FIRST (marginalizes out latent)
-            hrm_k_mean = self.mfa.hrm.to_mean(hrm_k)
+            hrm_k_mean = self.mfa.bas_hrm.to_mean(hrm_k)
             # Then split to get observable mean params
-            obs_k_mean, _, _ = self.mfa.hrm.split_coords(hrm_k_mean)
+            obs_k_mean, _, _ = self.mfa.bas_hrm.split_coords(hrm_k_mean)
             # Extract mean from Normal mean coordinates (mean, second_moment)
-            mean_k = self.mfa.hrm.obs_man.split_mean_second_moment(obs_k_mean)[0]
+            mean_k = self.mfa.bas_hrm.obs_man.split_mean_second_moment(obs_k_mean)[0]
             prototypes.append(mean_k)
 
         return prototypes

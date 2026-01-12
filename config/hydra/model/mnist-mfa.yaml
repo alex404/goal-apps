@@ -6,28 +6,28 @@ defaults:
 
 # MNIST-specific architecture
 latent_dim: 10     # Latent factor dimensions
-n_clusters: 10     # Match number of digit classes (0-9)
+n_clusters: 50     # Match number of digit classes (0-9)
 init_scale: 0.01   # Small noise for interaction initialization
 min_var: 0.01      # Minimum variance (handles zero-variance pixels)
 
 # Training hyperparameters - tested for stable training
 # With these settings: LL improves ~+30 nats, NMI stays ~0.47 over 40 epochs
 trainer:
-  lr: 5e-5         # Conservative learning rate for stability
-  n_epochs: 40     # Enough to learn without cluster collapse
-  batch_size: 500  # Mini-batch size
-  batch_steps: 1   # Single gradient step per batch
+  lr: 3e-4         # Conservative learning rate for stability
+  n_epochs: 200     # Enough to learn without cluster collapse
+  # batch_size: 500  # Mini-batch size
+  batch_steps: 1000   # Single gradient step per batch
   grad_clip: 1.0   # Gradient clipping
 
   # Regularization
-  l1_reg: 1e-3     # L1 on interaction params (sparse loadings)
+  l1_reg: 1e-4     # L1 on interaction params (sparse loadings)
   l2_reg: 1e-5     # Weight decay
   upr_prs_reg: 1e-3  # Push precision eigenvalues toward 1
   lwr_prs_reg: 1e-3  # Push precision eigenvalues toward 1
 
   # Parameter bounds (applied in mean coordinate space)
   min_prob: 1e-3   # Minimum cluster probability
-  obs_min_var: 1e-2  # Higher for MNIST's zero-variance pixels
+  obs_min_var: 1e-4  # Higher for MNIST's zero-variance pixels
   lat_min_var: 1e-4
 
   # Jitter (optional, for additional stability)
@@ -41,8 +41,8 @@ analyses:
   cluster_statistics:
     enabled: true
   co_assignment_hierarchy:
-    enabled: false
+    enabled: true
   co_assignment_merge:
-    enabled: false
+    enabled: true
   optimal_merge:
     enabled: false
