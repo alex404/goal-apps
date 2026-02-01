@@ -9,9 +9,8 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import optax
-from goal.geometry import Optimizer, OptState
 from goal.models import Normal
-from goal.models.graphical.mixture import CompleteMixtureOfConjugated
+from goal.models.graphical.mixture import CompleteMixtureOfSymmetric
 from jax import Array
 
 from apps.interface import ClusteringDataset
@@ -22,7 +21,7 @@ from .metrics import log_epoch_metrics
 log = logging.getLogger(__name__)
 
 # Type alias for MFA model
-type MFA = CompleteMixtureOfConjugated[Normal, Normal]
+type MFA = CompleteMixtureOfSymmetric[Normal, Normal]
 
 STATS_LEVEL = jnp.array(STATS_NUM)
 
@@ -267,10 +266,13 @@ class GradientTrainer:
             n_batches = n_samples // batch_size
 
         # Create optimizer
-        optim = optax.adamw(learning_rate=self.lr)
-        optimizer: Optimizer[MFA] = Optimizer(optim, mfa)
         if self.grad_clip > 0.0:
-            optimizer = optimizer.with_grad_clip(self.grad_clip)
+            optimizer = optax.chain(
+                optax.clip_by_global_norm(self.grad_clip),
+                optax.adamw(learning_rate=self.lr),
+            )
+        else:
+            optimizer = optax.adamw(learning_rate=self.lr)
         opt_state = optimizer.init(params0)
 
         # Create regularizer
@@ -279,9 +281,9 @@ class GradientTrainer:
         log.info(f"Training MFA for {self.n_epochs} epochs (lr={self.lr})")
 
         def batch_step(
-            carry: tuple[OptState, Array],
+            carry: tuple[optax.OptState, Array],
             batch: Array,
-        ) -> tuple[tuple[OptState, Array], Array]:
+        ) -> tuple[tuple[optax.OptState, Array], Array]:
             opt_state, params = carry
 
             # Compute posterior statistics (mean coordinates)
@@ -291,9 +293,9 @@ class GradientTrainer:
             bounded_posterior_stats = self.bound_means(mfa, posterior_stats)
 
             def inner_step(
-                carry: tuple[OptState, Array],
+                carry: tuple[optax.OptState, Array],
                 _: None,
-            ) -> tuple[tuple[OptState, Array], Array]:
+            ) -> tuple[tuple[optax.OptState, Array], Array]:
                 current_opt_state, current_params = carry
 
                 # Prior statistics (mean coordinates)
@@ -308,9 +310,10 @@ class GradientTrainer:
                 grad = grad + reg_grad
 
                 # Update parameters
-                new_opt_state, new_params = optimizer.update(
-                    current_opt_state, grad, current_params
+                updates, new_opt_state = optimizer.update(
+                    grad, current_opt_state, current_params
                 )
+                new_params = optax.apply_updates(current_params, updates)
 
                 return (new_opt_state, new_params), grad
 

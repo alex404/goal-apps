@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from goal.models import FactorAnalysis, Normal
-from goal.models.graphical.mixture import CompleteMixtureOfConjugated
+from goal.models.graphical.mixture import CompleteMixtureOfSymmetric
 from jax import Array
 from sklearn.cluster import KMeans
 
@@ -35,7 +35,7 @@ from .trainers import GradientTrainer
 log = logging.getLogger(__name__)
 
 # Type alias for MFA model
-type MFA = CompleteMixtureOfConjugated[Normal, Normal]
+type MFA = CompleteMixtureOfSymmetric[Normal, Normal]
 
 
 class MFAModel(
@@ -83,7 +83,7 @@ class MFAModel(
 
         # Create MFA model from goal-jax
         base_fa = FactorAnalysis(obs_dim=data_dim, lat_dim=latent_dim)
-        self.mfa: MFA = CompleteMixtureOfConjugated(
+        self.mfa: MFA = CompleteMixtureOfSymmetric(
             n_categories=n_clusters, bas_hrm=base_fa
         )
 

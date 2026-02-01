@@ -10,10 +10,6 @@ from enum import Enum, auto
 import jax
 import jax.numpy as jnp
 import optax
-from goal.geometry import (
-    Optimizer,
-    OptState,
-)
 from goal.geometry.manifold.util import batched_mean
 from goal.models import (
     DifferentiableHMoG,
@@ -309,10 +305,10 @@ class FullGradientTrainer:
         handler: RunHandler,
         model: DifferentiableHMoG,
         logger: Logger,
-        optimizer: Optimizer[DifferentiableHMoG],
+        optimizer: optax.GradientTransformation,
     ) -> Callable[
-        [tuple[OptState, Array], Array],
-        tuple[tuple[OptState, Array], Array],
+        [tuple[optax.OptState, Array], Array],
+        tuple[tuple[optax.OptState, Array], Array],
     ]:
         """Create step function for processing a single batch.
 
@@ -322,9 +318,9 @@ class FullGradientTrainer:
         mask_gradient = self.create_gradient_mask(model)
 
         def batch_step(
-            carry: tuple[OptState, Array],
+            carry: tuple[optax.OptState, Array],
             batch: Array,
-        ) -> tuple[tuple[OptState, Array], Array]:
+        ) -> tuple[tuple[optax.OptState, Array], Array]:
             opt_state, params = carry
 
             # Compute posterior statistics once for this batch
@@ -336,9 +332,9 @@ class FullGradientTrainer:
 
             # Define the inner step function for scan
             def inner_step(
-                carry: tuple[OptState, Array],
+                carry: tuple[optax.OptState, Array],
                 _: None,  # Dummy input since we don't need per-step inputs
-            ) -> tuple[tuple[OptState, Array], Array]:
+            ) -> tuple[tuple[optax.OptState, Array], Array]:
                 current_opt_state, current_params = carry
 
                 # Compute gradient as difference between posterior and current prior
@@ -352,9 +348,10 @@ class FullGradientTrainer:
                 masked_grad = mask_gradient(grad)
 
                 # Update parameters
-                new_opt_state, new_params = optimizer.update(
-                    current_opt_state, masked_grad, current_params
+                updates, new_opt_state = optimizer.update(
+                    masked_grad, current_opt_state, current_params
                 )
+                new_params = optax.apply_updates(current_params, updates)
 
                 # new_params = self.reset_non_pd(model, new_params)
 
@@ -411,11 +408,13 @@ class FullGradientTrainer:
             batch_size = self.batch_size
 
         # Create optimizer
-        optim = optax.adamw(learning_rate=self.lr * learning_rate_scale)
-        optimizer: Optimizer[DifferentiableHMoG] = Optimizer(optim, model)
-
         if self.grad_clip > 0.0:
-            optimizer = optimizer.with_grad_clip(self.grad_clip)
+            optimizer = optax.chain(
+                optax.clip_by_global_norm(self.grad_clip),
+                optax.adamw(learning_rate=self.lr * learning_rate_scale),
+            )
+        else:
+            optimizer = optax.adamw(learning_rate=self.lr * learning_rate_scale)
 
         # Initialize optimizer state
         opt_state = optimizer.init(params0)
@@ -426,8 +425,8 @@ class FullGradientTrainer:
         # Create epoch step function
         def epoch_step(
             epoch: Array,
-            carry: tuple[OptState, Array, Array],
-        ) -> tuple[OptState, Array, Array]:
+            carry: tuple[optax.OptState, Array, Array],
+        ) -> tuple[optax.OptState, Array, Array]:
             opt_state, params, epoch_key = carry
 
             # Split key for shuffling
@@ -545,15 +544,15 @@ class LGMPreTrainer:
         handler: RunHandler,
         model: NormalLGM,
         logger: Logger,
-        optimizer: Optimizer[NormalLGM],
+        optimizer: optax.GradientTransformation,
     ) -> Callable[
-        [tuple[OptState, Array], Array],
-        tuple[tuple[OptState, Array], Array],
+        [tuple[optax.OptState, Array], Array],
+        tuple[tuple[optax.OptState, Array], Array],
     ]:
         def batch_step(
-            carry: tuple[OptState, Array],
+            carry: tuple[optax.OptState, Array],
             batch: Array,
-        ) -> tuple[tuple[OptState, Array], Array]:
+        ) -> tuple[tuple[optax.OptState, Array], Array]:
             opt_state, params = carry
 
             # Compute posterior statistics once for this batch
@@ -565,9 +564,9 @@ class LGMPreTrainer:
 
             # Define the inner step function for scan
             def inner_step(
-                carry: tuple[OptState, Array],
+                carry: tuple[optax.OptState, Array],
                 _: None,  # Dummy input since we don't need per-step inputs
-            ) -> tuple[tuple[OptState, Array], Array]:
+            ) -> tuple[tuple[optax.OptState, Array], Array]:
                 current_opt_state, current_params = carry
 
                 # Compute gradient as difference between posterior and current prior
@@ -578,9 +577,10 @@ class LGMPreTrainer:
                 grad = grad + reg_grad
 
                 # Update parameters
-                new_opt_state, new_params = optimizer.update(
-                    current_opt_state, grad, current_params
+                updates, new_opt_state = optimizer.update(
+                    grad, current_opt_state, current_params
                 )
+                new_params = optax.apply_updates(current_params, updates)
 
                 # Monitor parameters for debugging
                 logger.monitor_params(
@@ -633,11 +633,13 @@ class LGMPreTrainer:
             batch_size = self.batch_size
 
         # Create optimizer
-        optim = optax.adamw(learning_rate=self.lr)
-        optimizer: Optimizer[NormalLGM] = Optimizer(optim, model)
-
         if self.grad_clip > 0.0:
-            optimizer = optimizer.with_grad_clip(self.grad_clip)
+            optimizer = optax.chain(
+                optax.clip_by_global_norm(self.grad_clip),
+                optax.adamw(learning_rate=self.lr),
+            )
+        else:
+            optimizer = optax.adamw(learning_rate=self.lr)
 
         # Initialize optimizer state
         opt_state = optimizer.init(params0)
@@ -648,8 +650,8 @@ class LGMPreTrainer:
         # Create epoch step function
         def epoch_step(
             epoch: Array,
-            carry: tuple[OptState, Array, Array],
-        ) -> tuple[OptState, Array, Array]:
+            carry: tuple[optax.OptState, Array, Array],
+        ) -> tuple[optax.OptState, Array, Array]:
             opt_state, params, epoch_key = carry
 
             # Split key for shuffling
@@ -892,10 +894,13 @@ class MixtureGradientTrainer:
         )
 
         # Setup optimizer for mixture parameters
-        optim = optax.adam(learning_rate=self.lr * learning_rate_scale)
-        optimizer = Optimizer(optim, model.pst_man)
         if self.grad_clip > 0.0:
-            optimizer = optimizer.with_grad_clip(self.grad_clip)
+            optimizer = optax.chain(
+                optax.clip_by_global_norm(self.grad_clip),
+                optax.adam(learning_rate=self.lr * learning_rate_scale),
+            )
+        else:
+            optimizer = optax.adam(learning_rate=self.lr * learning_rate_scale)
 
         # Initialize optimizer state
         opt_state = optimizer.init(mix_params0)
@@ -918,9 +923,9 @@ class MixtureGradientTrainer:
 
         # Define batch step function
         def batch_step(
-            carry: tuple[OptState, Array],
+            carry: tuple[optax.OptState, Array],
             batch_locations: Array,
-        ) -> tuple[tuple[OptState, Array], Array]:
+        ) -> tuple[tuple[optax.OptState, Array], Array]:
             opt_state, params = carry
 
             posterior_stats = self.mean_posterior_statistics(
@@ -931,9 +936,9 @@ class MixtureGradientTrainer:
 
             # Define the inner step function
             def inner_step(
-                carry: tuple[OptState, Array],
+                carry: tuple[optax.OptState, Array],
                 _: None,
-            ) -> tuple[tuple[OptState, Array], Array]:
+            ) -> tuple[tuple[optax.OptState, Array], Array]:
                 current_opt_state, current_params = carry
 
                 # Current parameters as means
@@ -947,9 +952,10 @@ class MixtureGradientTrainer:
                 grad = grad + reg_grad
 
                 # Update parameters
-                new_opt_state, new_params = optimizer.update(
-                    current_opt_state, grad, current_params
+                updates, new_opt_state = optimizer.update(
+                    grad, current_opt_state, current_params
                 )
+                new_params = optax.apply_updates(current_params, updates)
                 full_params = model.join_coords(
                     obs_params0, int_params0, current_params
                 )
@@ -989,8 +995,8 @@ class MixtureGradientTrainer:
         # Create epoch step function
         def epoch_step(
             epoch: Array,
-            carry: tuple[OptState, Array, Array],
-        ) -> tuple[OptState, Array, Array]:
+            carry: tuple[optax.OptState, Array, Array],
+        ) -> tuple[optax.OptState, Array, Array]:
             opt_state, mix_params, epoch_key = carry
 
             # Split key for shuffling

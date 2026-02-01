@@ -7,7 +7,7 @@ import logging
 import jax.numpy as jnp
 from goal.geometry import Replicated
 from goal.models import Normal
-from goal.models.graphical.mixture import CompleteMixtureOfConjugated
+from goal.models.graphical.mixture import CompleteMixtureOfSymmetric
 from jax import Array
 
 from apps.interface import ClusteringDataset
@@ -25,7 +25,7 @@ from apps.runtime import (
 log = logging.getLogger(__name__)
 
 # Type alias for MFA model
-type MFA = CompleteMixtureOfConjugated[Normal, Normal]
+type MFA = CompleteMixtureOfSymmetric[Normal, Normal]
 
 STATS_LEVEL = jnp.array(STATS_NUM)
 INFO_LEVEL = jnp.array(logging.INFO)
