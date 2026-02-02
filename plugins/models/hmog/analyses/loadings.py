@@ -9,8 +9,9 @@ from typing import Any, override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from goal.models import DifferentiableHMoG
 from jax import Array
+
+from ..types import DiagonalHMoG
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 
@@ -32,7 +33,7 @@ class LoadingMatrixArtifact(Artifact):
 
 
 def generate_loading_matrices(
-    model: DifferentiableHMoG,
+    model: DiagonalHMoG,
     params: Array,
 ) -> LoadingMatrixArtifact:
     """Extract loading matrices in both natural and mean parameterizations."""

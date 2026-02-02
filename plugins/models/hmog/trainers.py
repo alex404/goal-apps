@@ -1,4 +1,4 @@
-"""Trainers forDifferentiableHMoG model components."""
+"""Trainers forDiagonalHMoG model components."""
 
 from __future__ import annotations
 
@@ -11,10 +11,6 @@ import jax
 import jax.numpy as jnp
 import optax
 from goal.geometry.manifold.util import batched_mean
-from goal.models import (
-    DifferentiableHMoG,
-    NormalLGM,
-)
 from jax import Array
 
 from apps.interface import (
@@ -23,6 +19,7 @@ from apps.interface import (
 from apps.runtime import STATS_NUM, Logger, MetricDict, RunHandler
 
 from .metrics import log_epoch_metrics, pre_log_epoch_metrics
+from .types import DiagonalHMoG, DiagonalLGM
 
 ### Constants ###
 
@@ -45,7 +42,7 @@ INFO_LEVEL = jnp.array(logging.INFO)
 
 
 def precision_regularizer(
-    model: DifferentiableHMoG,
+    model: DiagonalHMoG,
     rho: Array,
     mix_params: Array,
     upr_prs_reg: float,
@@ -82,7 +79,7 @@ def precision_regularizer(
     - May be useful for specific domain knowledge or computational constraints
 
     Args:
-        model:DifferentiableHMoG model
+        model:DiagonalHMoG model
         rho: Conjugation parameters
         mix_params: Mixture parameters in natural coordinates
         upr_prs_reg: Weight for trace penalty (controls upper bound on eigenvalues)
@@ -134,7 +131,7 @@ def precision_regularizer(
 
 @dataclass(frozen=True)
 class FullGradientTrainer:
-    """Base trainer for gradient-based training ofDifferentiableHMoG models."""
+    """Base trainer for gradient-based training ofDiagonalHMoG models."""
 
     # Training hyperparameters
     lr: float
@@ -170,7 +167,7 @@ class FullGradientTrainer:
 
     def bound_means(
         self,
-        model: DifferentiableHMoG,
+        model: DiagonalHMoG,
         means: Array,
     ) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
@@ -224,7 +221,7 @@ class FullGradientTrainer:
         return model.join_coords(bounded_obs_means, int_means, bounded_lat_means)
 
     def make_regularizer(
-        self, model: DifferentiableHMoG
+        self, model: DiagonalHMoG
     ) -> Callable[
         [Array],
         tuple[Array, MetricDict],
@@ -268,9 +265,7 @@ class FullGradientTrainer:
         # Create a function that computes loss, metrics, and gradients in one pass
         return jax.grad(loss_with_metrics, has_aux=True)
 
-    def create_gradient_mask(
-        self, model: DifferentiableHMoG
-    ) -> Callable[[Array], Array]:
+    def create_gradient_mask(self, model: DiagonalHMoG) -> Callable[[Array], Array]:
         """Create a function that masks gradients for specific training regimes."""
         if self.mask_type == MaskingStrategy.LGM:
             # Only update LGM parameters (obs_params and int_params)
@@ -303,7 +298,7 @@ class FullGradientTrainer:
     def make_batch_step(
         self,
         handler: RunHandler,
-        model: DifferentiableHMoG,
+        model: DiagonalHMoG,
         logger: Logger,
         optimizer: optax.GradientTransformation,
     ) -> Callable[
@@ -390,7 +385,7 @@ class FullGradientTrainer:
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: DifferentiableHMoG,
+        model: DiagonalHMoG,
         logger: Logger,
         learning_rate_scale: float,
         epoch_offset: int,
@@ -476,7 +471,7 @@ class FullGradientTrainer:
 
 @dataclass(frozen=True)
 class LGMPreTrainer:
-    """Base trainer for gradient-based training ofDifferentiableHMoG models."""
+    """Base trainer for gradient-based training ofDiagonalHMoG models."""
 
     # Training hyperparameters
     lr: float
@@ -493,7 +488,7 @@ class LGMPreTrainer:
     min_var: float
     jitter_var: float
 
-    def bound_means(self, model: NormalLGM, means: Array) -> Array:
+    def bound_means(self, model: DiagonalLGM, means: Array) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
         # Split posterior statistics
         obs_means, int_means, _ = model.split_coords(means)
@@ -508,7 +503,7 @@ class LGMPreTrainer:
         return model.join_coords(bounded_obs_means, int_means, z)
 
     def make_regularizer(
-        self, model: NormalLGM
+        self, model: DiagonalLGM
     ) -> Callable[[Array], tuple[Array, MetricDict]]:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
@@ -542,7 +537,7 @@ class LGMPreTrainer:
     def make_batch_step(
         self,
         handler: RunHandler,
-        model: NormalLGM,
+        model: DiagonalLGM,
         logger: Logger,
         optimizer: optax.GradientTransformation,
     ) -> Callable[
@@ -616,7 +611,7 @@ class LGMPreTrainer:
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: NormalLGM,
+        model: DiagonalLGM,
         logger: Logger,
         epoch_offset: int,
         params0: Array,
@@ -736,7 +731,7 @@ class MixtureGradientTrainer:
 
     def precompute_observable_mappings(
         self,
-        model: DifferentiableHMoG,
+        model: DiagonalHMoG,
         params: Array,
         data: Array,
     ) -> tuple[Array, Array]:
@@ -754,7 +749,7 @@ class MixtureGradientTrainer:
 
     def mean_posterior_statistics(
         self,
-        model: DifferentiableHMoG,
+        model: DiagonalHMoG,
         mix_params: Array,
         latent_locations: Array,
     ) -> Array:
@@ -771,7 +766,7 @@ class MixtureGradientTrainer:
 
     def prior_statistics(
         self,
-        model: DifferentiableHMoG,
+        model: DiagonalHMoG,
         mix_params: Array,
         rho: Array,
     ) -> Array:
@@ -786,7 +781,7 @@ class MixtureGradientTrainer:
 
         return jax.grad(log_partition_function)(mix_params)
 
-    def bound_mixture_means(self, model: DifferentiableHMoG, mix_means: Array) -> Array:
+    def bound_mixture_means(self, model: DiagonalHMoG, mix_means: Array) -> Array:
         """Apply bounds to mixture components for numerical stability."""
         with model.pst_man as uh:
             # Bound component means
@@ -812,7 +807,9 @@ class MixtureGradientTrainer:
             bounded_probs = bounded_probs / jnp.sum(bounded_probs)
             bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
 
-            bounded_mix_means = uh.join_mean_mixture(bounded_cmp_meanss, bounded_prob_means)
+            bounded_mix_means = uh.join_mean_mixture(
+                bounded_cmp_meanss, bounded_prob_means
+            )
 
             # Optionally reset overall to exact standard_normal (mathematically redundant
             # since whitening already produces ~standard_normal, but prevents error accumulation)
@@ -824,7 +821,7 @@ class MixtureGradientTrainer:
             return bounded_mix_means
 
     def make_regularizer(
-        self, model: DifferentiableHMoG, rho: Array
+        self, model: DiagonalHMoG, rho: Array
     ) -> Callable[[Array], tuple[Array, MetricDict]]:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
@@ -861,7 +858,7 @@ class MixtureGradientTrainer:
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: DifferentiableHMoG,
+        model: DiagonalHMoG,
         logger: Logger,
         learning_rate_scale: float,
         epoch_offset: int,
@@ -873,7 +870,7 @@ class MixtureGradientTrainer:
             key: Random key
             handler: Run handler for saving artifacts
             dataset: Dataset for training
-            model:DifferentiableHMoG model
+            model:DiagonalHMoG model
             logger: Logger
             learning_rate_scale: Scale factor for learning rate
             epoch_offset: Offset for epoch numbering

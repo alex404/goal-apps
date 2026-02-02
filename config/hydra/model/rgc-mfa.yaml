@@ -1,0 +1,37 @@
+# MFA configuration for neural traces / RGC data
+defaults:
+  - mfa
+  - _self_
+
+latent_dim: 40
+n_clusters: 60
+init_scale: 0.01
+min_var: 0.01
+
+trainer:
+  lr: 1e-5
+  n_epochs: 1000
+  batch_steps: 1000
+  grad_clip: 1.0
+
+  # Regularization
+  l1_reg: 0.01
+  l2_reg: 0
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 3e-3
+
+  min_prob: 1e-4
+  obs_min_var: 1e-5
+  lat_min_var: 1e-6
+
+  obs_jitter_var: 0.0
+  lat_jitter_var: 0.0
+
+analyses:
+  generative_samples:
+    enabled: true
+    n_samples: 100
+  cluster_statistics:
+    enabled: true
+  co_assignment_hierarchy:
+    enabled: true

@@ -9,12 +9,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from goal.geometry import Diagonal
-from goal.models import FactorAnalysis, Normal
+from goal.models import FactorAnalysis
 from goal.models.graphical.mixture import (
     CompleteMixtureOfConjugated,
     CompleteMixtureOfSymmetric,
 )
 from goal.models.harmonium.lgm import NormalLGM
+
+from .types import MFA
 from jax import Array
 from sklearn.cluster import KMeans
 
@@ -38,12 +40,6 @@ from apps.runtime import Logger, RunHandler
 from .trainers import GradientTrainer
 
 log = logging.getLogger(__name__)
-
-# Type alias for MFA model (union of symmetric FA and conjugated diagonal variants)
-type MFA = (
-    CompleteMixtureOfSymmetric[Normal, Normal]
-    | CompleteMixtureOfConjugated[Normal, Normal, Normal]
-)
 
 
 class MFAModel(
@@ -348,20 +344,22 @@ class MFAModel(
         if cfg.co_assignment_hierarchy.enabled:
             analyses.append(CoAssignmentHierarchyAnalysis())
 
-        if cfg.optimal_merge.enabled:
-            analyses.append(
-                OptimalMergeAnalysis(
-                    filter_empty_clusters=cfg.optimal_merge.filter_empty_clusters,
-                    min_cluster_size=cfg.optimal_merge.min_cluster_size,
+        # Merge analyses require ground truth labels
+        if dataset.has_labels:
+            if cfg.optimal_merge.enabled:
+                analyses.append(
+                    OptimalMergeAnalysis(
+                        filter_empty_clusters=cfg.optimal_merge.filter_empty_clusters,
+                        min_cluster_size=cfg.optimal_merge.min_cluster_size,
+                    )
                 )
-            )
 
-        if cfg.co_assignment_merge.enabled:
-            analyses.append(
-                CoAssignmentMergeAnalysis(
-                    filter_empty_clusters=cfg.co_assignment_merge.filter_empty_clusters,
-                    min_cluster_size=cfg.co_assignment_merge.min_cluster_size,
+            if cfg.co_assignment_merge.enabled:
+                analyses.append(
+                    CoAssignmentMergeAnalysis(
+                        filter_empty_clusters=cfg.co_assignment_merge.filter_empty_clusters,
+                        min_cluster_size=cfg.co_assignment_merge.min_cluster_size,
+                    )
                 )
-            )
 
         return analyses + list(dataset.get_dataset_analyses().values())

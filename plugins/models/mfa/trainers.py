@@ -9,12 +9,9 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import optax
-from goal.models import Normal
-from goal.models.graphical.mixture import (
-    CompleteMixtureOfConjugated,
-    CompleteMixtureOfSymmetric,
-)
 from jax import Array
+
+from .types import MFA
 
 from apps.interface import ClusteringDataset
 from apps.runtime import STATS_NUM, Logger, MetricDict
@@ -22,12 +19,6 @@ from apps.runtime import STATS_NUM, Logger, MetricDict
 from .metrics import log_epoch_metrics
 
 log = logging.getLogger(__name__)
-
-# Type alias for MFA model (union of symmetric FA and conjugated diagonal variants)
-type MFA = (
-    CompleteMixtureOfSymmetric[Normal, Normal]
-    | CompleteMixtureOfConjugated[Normal, Normal, Normal]
-)
 
 STATS_LEVEL = jnp.array(STATS_NUM)
 

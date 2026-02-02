@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-from goal.models import DifferentiableHMoG, Normal, NormalAnalyticLGM
+from goal.models import FullNormal, NormalAnalyticLGM
 from jax import Array
+
+from ..types import DiagonalHMoG
 
 
 ### HMoG-specific Analysis ###
 
 
-def cluster_assignments(model: DifferentiableHMoG, params: Array, data: Array) -> Array:
+def cluster_assignments(model: DiagonalHMoG, params: Array, data: Array) -> Array:
     """Assign data points to clusters using the model.
 
     Args:
@@ -28,7 +30,7 @@ def cluster_assignments(model: DifferentiableHMoG, params: Array, data: Array) -
 
 
 def symmetric_kl_matrix(
-    model: DifferentiableHMoG,
+    model: DiagonalHMoG,
     params: Array,
 ) -> Array:
     mix_params = model.prior(params)
@@ -54,7 +56,7 @@ def symmetric_kl_matrix(
 
 
 def get_component_prototypes(
-    model: DifferentiableHMoG,
+    model: DiagonalHMoG,
     params: Array,
 ) -> list[Array]:
     # Split into likelihood and mixture parameters
@@ -86,7 +88,7 @@ def get_component_prototypes(
 
 
 def cluster_probabilities(
-    model: DifferentiableHMoG, params: Array, data: Array
+    model: DiagonalHMoG, params: Array, data: Array
 ) -> Array:
     """Get cluster probability distributions for each data point.
 
@@ -103,7 +105,7 @@ def cluster_probabilities(
     )
 
 
-def analyze_component(nor_man: Normal, nrm_params: Array) -> Array:
+def analyze_component(nor_man: FullNormal, nrm_params: Array) -> Array:
     nrm_means = nor_man.to_mean(nrm_params)
     loc, prs = nor_man.split_location_precision(nrm_params)
     mean, cov = nor_man.split_mean_covariance(nrm_means)

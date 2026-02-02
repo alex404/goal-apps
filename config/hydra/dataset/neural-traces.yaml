@@ -1,0 +1,13 @@
+# Neural traces dataset configuration (alias for neural_traces)
+defaults:
+  - neural_traces
+  - _self_
+
+# Default values - override these for specific experiments
+dataset_name: "all-rgc"
+chirp_len: 249
+bar_len: 32
+feature_len: 3
+train_split: 0.8
+random_seed: 42
+use_8hz_chirp: false

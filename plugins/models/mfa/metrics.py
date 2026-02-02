@@ -6,12 +6,9 @@ import logging
 
 import jax.numpy as jnp
 from goal.geometry import Replicated
-from goal.models import Normal
-from goal.models.graphical.mixture import (
-    CompleteMixtureOfConjugated,
-    CompleteMixtureOfSymmetric,
-)
 from jax import Array
+
+from .types import MFA
 
 from apps.interface import ClusteringDataset
 from apps.interface.clustering import cluster_accuracy, clustering_nmi
@@ -26,12 +23,6 @@ from apps.runtime import (
 )
 
 log = logging.getLogger(__name__)
-
-# Type alias for MFA model (union of symmetric FA and conjugated diagonal variants)
-type MFA = (
-    CompleteMixtureOfSymmetric[Normal, Normal]
-    | CompleteMixtureOfConjugated[Normal, Normal, Normal]
-)
 
 STATS_LEVEL = jnp.array(STATS_NUM)
 INFO_LEVEL = jnp.array(logging.INFO)

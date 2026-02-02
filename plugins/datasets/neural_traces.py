@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Self, override
+from typing import Any, override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -21,14 +21,7 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
-from typing import Any
-
-from apps.interface import Analysis, ClusteringDataset, ClusteringDatasetConfig, ClusteringModel
-from apps.interface.clustering.protocols import HasClusterPrototypes
-
-# Type alias for models with cluster prototypes - using Any at runtime
-# but type checkers understand the constraint from the method signatures
-ClusteringModelWithPrototypes = Any
+from apps.interface import Analysis, ClusteringDataset, ClusteringDatasetConfig
 from apps.runtime import Artifact, MetricDict, RunHandler
 
 
@@ -120,10 +113,11 @@ class NeuralTracesDataset(ClusteringDataset):
         else:
             # Load and preprocess raw data
             df = pd.read_pickle(raw_dir / f"{dataset_name}.pkl")
+            assert isinstance(df, pd.DataFrame), "Expected DataFrame from pickle"
 
             # Quality control (as in preprocess.py)
             quality_mask = (df.chirp_qidx > 0.35) | (df.bar_qidx > 0.6)
-            selected_df = df[quality_mask]
+            selected_df = df.loc[quality_mask]
 
             chirp_col = "chirp_8Hz_average_norm" if use_8hz_chirp else "preproc_chirp"
 
@@ -132,12 +126,12 @@ class NeuralTracesDataset(ClusteringDataset):
                     f"Column {chirp_col} not found in dataset. Available columns: {', '.join(selected_df.columns)}"
                 )
 
-            chirp_matrix = np.vstack(selected_df[chirp_col].values)
+            chirp_matrix = np.vstack(list(selected_df[chirp_col]))
 
             # Concatenate data
-            bar_matrix = np.vstack(selected_df["preproc_bar"].values)
-            features = ["bar_ds_pvalue", "bar_os_pvalue", "roi_size_um2"]
-            feature_matrix = selected_df[features].values
+            bar_matrix = np.vstack(list(selected_df["preproc_bar"]))
+            feature_cols = ["bar_ds_pvalue", "bar_os_pvalue", "roi_size_um2"]
+            feature_matrix = selected_df[feature_cols].to_numpy()
             raw_data = np.hstack([chirp_matrix, bar_matrix, feature_matrix])
 
             # Randomly split data
@@ -375,13 +369,16 @@ class NeuralTracesDataset(ClusteringDataset):
         )
 
     @override
-    def get_dataset_analyses(self) -> dict[str, Analysis[Self, Any, Any]]:
+    def get_dataset_analyses(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self,
+    ) -> dict[str, Analysis[ClusteringDataset, Any, BadenBerens]]:
         """Return RGC-specific analyses."""
 
         # Load the raw dataframe for analyses that need it
         raw_df = pd.read_pickle(
             self.cache_dir / "neural-traces" / "raw" / f"{self.dataset_name}.pkl"
         )
+        assert isinstance(raw_df, pd.DataFrame), "Expected DataFrame from pickle"
 
         return {
             "baden_berens_comparison": BadenBerensAnalysis(raw_df),
@@ -419,7 +416,6 @@ class BadenBerens(Artifact):
     ari_score: float
     nmi_score: float
 
-    @override
     def save_to_hdf5(self, file: File) -> None:
         """Save Baden-Berens analysis to HDF5."""
         file.create_dataset(
@@ -465,19 +461,18 @@ class BadenBerens(Artifact):
         file.attrs["nmi_score"] = self.nmi_score
 
     @classmethod
-    @override
     def load_from_hdf5(cls, file: File) -> BadenBerens:
         """Load Baden-Berens analysis from HDF5."""
         # Load arrays
-        cluster_assignments = jnp.array(file["cluster_assignments"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        celltype_labels = jnp.array(file["celltype_labels"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_assignments = jnp.array(file["cluster_assignments"][()])  # pyright: ignore[reportIndexIssue]
+        celltype_labels = jnp.array(file["celltype_labels"][()])  # pyright: ignore[reportIndexIssue]
 
-        cluster_chirp_traces = jnp.array(file["cluster_chirp_traces"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        cluster_bar_traces = jnp.array(file["cluster_bar_traces"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        cluster_noise_traces = jnp.array(file["cluster_noise_traces"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_chirp_traces = jnp.array(file["cluster_chirp_traces"][()])  # pyright: ignore[reportIndexIssue]
+        cluster_bar_traces = jnp.array(file["cluster_bar_traces"][()])  # pyright: ignore[reportIndexIssue]
+        cluster_noise_traces = jnp.array(file["cluster_noise_traces"][()])  # pyright: ignore[reportIndexIssue]
 
         # Load metric value lists
-        n_clusters = int(file.attrs["n_clusters"])  # pyright: ignore[reportArgumentType]
+        n_clusters = int(file.attrs.get("n_clusters", 0))
 
         rf_group = file["cluster_rf_diameter_values"]
         assert isinstance(rf_group, Group)
@@ -497,17 +492,17 @@ class BadenBerens(Artifact):
             jnp.array(os_group[f"cluster_{i}"]) for i in range(n_clusters)
         ]
 
-        cluster_soma_x = jnp.array(file["cluster_soma_x"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        cluster_soma_y = jnp.array(file["cluster_soma_y"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_soma_x = jnp.array(file["cluster_soma_x"][()])  # pyright: ignore[reportIndexIssue]
+        cluster_soma_y = jnp.array(file["cluster_soma_y"][()])  # pyright: ignore[reportIndexIssue]
 
-        cluster_sizes = jnp.array(file["cluster_sizes"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
-        linkage_matrix = jnp.array(file["linkage_matrix"][()])  # pyright: ignore[reportIndexIssue,reportArgumentType]
+        cluster_sizes = jnp.array(file["cluster_sizes"][()])  # pyright: ignore[reportIndexIssue]
+        linkage_matrix = jnp.array(file["linkage_matrix"][()])  # pyright: ignore[reportIndexIssue]
 
         # Load cluster names
-        cluster_names = [file.attrs[f"cluster_name_{i}"] for i in range(n_clusters)]
+        cluster_names = [str(file.attrs[f"cluster_name_{i}"]) for i in range(n_clusters)]
 
-        ari_score = float(file.attrs["ari_score"])  # pyright: ignore[reportArgumentType]
-        nmi_score = float(file.attrs["nmi_score"])  # pyright: ignore[reportArgumentType]
+        ari_score = float(file.attrs.get("ari_score", 0.0))
+        nmi_score = float(file.attrs.get("nmi_score", 0.0))
 
         return cls(
             cluster_assignments=cluster_assignments,
@@ -529,9 +524,7 @@ class BadenBerens(Artifact):
 
 
 @dataclass(frozen=True)
-class BadenBerensAnalysis(
-    Analysis[ClusteringDataset, ClusteringModelWithPrototypes, BadenBerens]
-):
+class BadenBerensAnalysis(Analysis[ClusteringDataset, Any, BadenBerens]):
     """Baden-Berens style analysis comparing clustering with ground truth cell types."""
 
     raw_df: pd.DataFrame  # Raw dataframe with all cell information
@@ -547,7 +540,7 @@ class BadenBerensAnalysis(
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: ClusteringModelWithPrototypes,
+        model: Any,
         epoch: int,
         params: Array,
     ) -> BadenBerens:
@@ -596,10 +589,10 @@ class BadenBerensAnalysis(
             quality_mask = (self.raw_df.chirp_qidx > 0.35) | (
                 self.raw_df.bar_qidx > 0.6
             )
-            filtered_df = self.raw_df[quality_mask].reset_index(drop=True)
+            filtered_df = self.raw_df.loc[quality_mask].reset_index(drop=True)
             n_train = len(assignments)
             if len(filtered_df) >= n_train:
-                celltype_labels = filtered_df["celltype"].values[:n_train]
+                celltype_labels = np.asarray(filtered_df["celltype"])[:n_train]
             else:
                 celltype_labels = np.zeros(n_train)  # Dummy labels
         else:
@@ -776,11 +769,12 @@ class BadenBerensAnalysis(
             ax_chirp.plot(time_points, trace_final, color=color, linewidth=1.2)
 
             # Fill only positive deviations from baseline
+            trace_final_np = np.asarray(trace_final)
             ax_chirp.fill_between(
                 time_points,
                 y_position,
-                trace_final,
-                where=(trace_final > y_position),
+                trace_final_np,
+                where=(trace_final_np > y_position).tolist(),
                 color=color,
                 alpha=0.3,
                 linewidth=0,
@@ -827,12 +821,13 @@ class BadenBerensAnalysis(
 
             time_points = np.linspace(0, 1, len(trace))
 
-            ax_bar.plot(time_points, trace_final, color=color, linewidth=1.2)
+            trace_final_bar_np = np.asarray(trace_final)
+            ax_bar.plot(time_points, trace_final_bar_np, color=color, linewidth=1.2)
             ax_bar.fill_between(
                 time_points,
                 y_position,
-                trace_final,
-                where=(trace_final > y_position),
+                trace_final_bar_np,
+                where=(trace_final_bar_np > y_position).tolist(),
                 color=color,
                 alpha=0.3,
                 linewidth=0,
@@ -899,10 +894,10 @@ class BadenBerensAnalysis(
 
                 # Plot background histogram of all values
                 all_vals = all_values_dict[metric_key]
+                bins: list[float] = np.linspace(xlim[0], xlim[1], 20).tolist()
                 if len(all_vals) > 0:
-                    bins = np.linspace(xlim[0], xlim[1], 20)
                     ax_hist.hist(
-                        all_vals,
+                        np.asarray(all_vals),
                         bins=bins,
                         density=True,
                         alpha=0.2,
@@ -914,7 +909,7 @@ class BadenBerensAnalysis(
                 # Plot cluster-specific histogram
                 if len(cluster_vals) > 0:
                     ax_hist.hist(
-                        cluster_vals,
+                        np.asarray(cluster_vals),
                         bins=bins,
                         density=True,
                         alpha=0.7,

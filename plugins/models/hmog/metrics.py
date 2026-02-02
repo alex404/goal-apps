@@ -6,8 +6,10 @@ import logging
 
 import jax.numpy as jnp
 from goal.geometry import Replicated
-from goal.models import DifferentiableHMoG, Normal, NormalLGM
+from goal.models import FullNormal
 from jax import Array
+
+from .types import DiagonalHMoG, DiagonalLGM
 
 from apps.interface import ClusteringDataset
 from apps.interface.clustering import cluster_accuracy, clustering_nmi
@@ -30,7 +32,7 @@ INFO_LEVEL = jnp.array(logging.INFO)
 
 
 def add_conjugation_metrics(
-    metrics: MetricDict, normal_man: Normal, rho: Array
+    metrics: MetricDict, normal_man: FullNormal, rho: Array
 ) -> MetricDict:
     """Add conjugation parameter statistics."""
     rho_stats = analyze_component(normal_man, rho)
@@ -50,7 +52,7 @@ def add_conjugation_metrics(
 
 def pre_log_epoch_metrics(
     dataset: ClusteringDataset,
-    model: NormalLGM,
+    model: DiagonalLGM,
     logger: Logger,
     params: Array,
     epoch: Array,
@@ -131,7 +133,7 @@ def pre_log_epoch_metrics(
 
 def log_epoch_metrics(
     dataset: ClusteringDataset,
-    model: DifferentiableHMoG,
+    model: DiagonalHMoG,
     logger: Logger,
     params: Array,
     epoch: Array,

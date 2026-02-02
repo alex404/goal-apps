@@ -10,8 +10,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from goal.geometry import Diagonal
-from goal.models import DifferentiableHMoG, differentiable_hmog
+from goal.models import differentiable_hmog
 from jax import Array
+
+from .types import DiagonalHMoG
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
@@ -79,7 +81,7 @@ class HMoGModel(
     """Model framework for HMoGs."""
 
     # Training configuration
-    manifold: DifferentiableHMoG
+    manifold: DiagonalHMoG
     pre: LGMPreTrainer
     lgm: FullGradientTrainer
     mix: MixtureGradientTrainer
@@ -221,21 +223,23 @@ class HMoGModel(
         if cfg.co_assignment_hierarchy.enabled:
             analyses.append(CoAssignmentHierarchyAnalysis())
 
-        if cfg.optimal_merge.enabled:
-            analyses.append(
-                OptimalMergeAnalysis(
-                    filter_empty_clusters=cfg.optimal_merge.filter_empty_clusters,
-                    min_cluster_size=cfg.optimal_merge.min_cluster_size,
+        # Merge analyses require ground truth labels
+        if dataset.has_labels:
+            if cfg.optimal_merge.enabled:
+                analyses.append(
+                    OptimalMergeAnalysis(
+                        filter_empty_clusters=cfg.optimal_merge.filter_empty_clusters,
+                        min_cluster_size=cfg.optimal_merge.min_cluster_size,
+                    )
                 )
-            )
 
-        if cfg.co_assignment_merge.enabled:
-            analyses.append(
-                CoAssignmentMergeAnalysis(
-                    filter_empty_clusters=cfg.co_assignment_merge.filter_empty_clusters,
-                    min_cluster_size=cfg.co_assignment_merge.min_cluster_size,
+            if cfg.co_assignment_merge.enabled:
+                analyses.append(
+                    CoAssignmentMergeAnalysis(
+                        filter_empty_clusters=cfg.co_assignment_merge.filter_empty_clusters,
+                        min_cluster_size=cfg.co_assignment_merge.min_cluster_size,
+                    )
                 )
-            )
 
         return analyses + list(dataset.get_dataset_analyses().values())
 

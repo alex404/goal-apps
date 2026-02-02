@@ -11,8 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, override
 
-from goal.models import DifferentiableHMoG
 from jax import Array
+
+from ..types import DiagonalHMoG
 from matplotlib.figure import Figure
 
 from apps.interface import Analysis, ClusteringDataset
@@ -57,7 +58,7 @@ class KLHierarchyAnalysis(Analysis[ClusteringDataset, Any, KLClusterHierarchy]):
         params: Array,
     ) -> KLClusterHierarchy:
         """Generate hierarchy from KL divergence between components."""
-        manifold: DifferentiableHMoG = model.manifold
+        manifold: DiagonalHMoG = model.manifold
 
         # Get prototypes for visualization
         prototypes = get_component_prototypes(manifold, params)

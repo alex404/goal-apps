@@ -6,8 +6,7 @@ defaults:
 latent_dim: 40
 n_clusters: 60
 
-lr_scale_init: 1
-lr_scale_final: 1
+lr_scales: [1.0]
 num_cycles: 10
 lgm_noise_scale: 0.001
 mix_noise_scale: 0.001
@@ -21,8 +20,6 @@ pre:
   grad_clip: 1
   min_var: 1e-5
   jitter_var: 0
-
-
 
 lgm:
   n_epochs: 0
