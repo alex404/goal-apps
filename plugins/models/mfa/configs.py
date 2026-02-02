@@ -80,6 +80,9 @@ class MFAConfig(ClusteringModelConfig):
     n_clusters: int = 10
     """Number of mixture components."""
 
+    diagonal: bool = False
+    """Use diagonal covariance MFA (NormalLGM with Diagonal) instead of FactorAnalysis."""
+
     init_scale: float = 0.01
     """Scale for parameter initialization (smaller for high-dim data)."""
 
@@ -95,7 +98,16 @@ class MFAConfig(ClusteringModelConfig):
     """Configuration for analyses to run."""
 
 
+@dataclass
+class MFADiagonalConfig(MFAConfig):
+    """Configuration for Diagonal MFA (NormalLGM with Diagonal covariance)."""
+
+    _target_: str = "plugins.models.mfa.model.MFAModel"
+    diagonal: bool = True
+
+
 # Register configurations with Hydra
 cs = ConfigStore.instance()
 cs.store(group="model/trainer", name="default", node=GradientTrainerConfig)
 cs.store(group="model", name="mfa", node=MFAConfig)
+cs.store(group="model", name="mfa-diagonal", node=MFADiagonalConfig)

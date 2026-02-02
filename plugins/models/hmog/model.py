@@ -119,7 +119,6 @@ class HMoGModel(
             n_components=n_clusters,
         )
 
-        log.info(f"Created HMoG model with dimension {self.manifold.dim}.")
 
         self.pre = pre
         self.lgm = lgm
@@ -152,6 +151,11 @@ class HMoGModel(
     @override
     def n_clusters(self) -> int:
         return self.manifold.prr_man.lat_man.dim + 1
+
+    @property
+    @override
+    def n_parameters(self) -> int:
+        return self.manifold.dim
 
     # Methods
 

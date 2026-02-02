@@ -8,8 +8,13 @@ from typing import Any, override
 import jax
 import jax.numpy as jnp
 import numpy as np
+from goal.geometry import Diagonal
 from goal.models import FactorAnalysis, Normal
-from goal.models.graphical.mixture import CompleteMixtureOfSymmetric
+from goal.models.graphical.mixture import (
+    CompleteMixtureOfConjugated,
+    CompleteMixtureOfSymmetric,
+)
+from goal.models.harmonium.lgm import NormalLGM
 from jax import Array
 from sklearn.cluster import KMeans
 
@@ -34,8 +39,11 @@ from .trainers import GradientTrainer
 
 log = logging.getLogger(__name__)
 
-# Type alias for MFA model
-type MFA = CompleteMixtureOfSymmetric[Normal, Normal]
+# Type alias for MFA model (union of symmetric FA and conjugated diagonal variants)
+type MFA = (
+    CompleteMixtureOfSymmetric[Normal, Normal]
+    | CompleteMixtureOfConjugated[Normal, Normal, Normal]
+)
 
 
 class MFAModel(
@@ -59,6 +67,7 @@ class MFAModel(
         n_clusters: int,
         trainer: GradientTrainer,
         analyses: ClusteringAnalysesConfig,
+        diagonal: bool = False,
         init_scale: float = 0.01,
         min_var: float = 0.01,
     ):
@@ -70,6 +79,7 @@ class MFAModel(
             n_clusters: Number of mixture components
             trainer: Trainer instance for optimization
             analyses: Configuration for analyses
+            diagonal: Use diagonal covariance (NormalLGM) instead of FactorAnalysis
             init_scale: Scale for parameter initialization (smaller for high-dim data)
             min_var: Minimum variance for regularization (prevents NaN for zero-variance pixels)
         """
@@ -78,14 +88,27 @@ class MFAModel(
         self.n_clusters_val: int = n_clusters
         self.trainer: GradientTrainer = trainer
         self.analyses_config: ClusteringAnalysesConfig = analyses
+        self.diagonal: bool = diagonal
         self.init_scale: float = init_scale
         self.min_var: float = min_var
 
         # Create MFA model from goal-jax
-        base_fa = FactorAnalysis(obs_dim=data_dim, lat_dim=latent_dim)
-        self.mfa: MFA = CompleteMixtureOfSymmetric(
-            n_categories=n_clusters, bas_hrm=base_fa
-        )
+        if diagonal:
+            base_lgm = NormalLGM(
+                obs_dim=data_dim,
+                obs_rep=Diagonal(),
+                lat_dim=latent_dim,
+                pst_rep=Diagonal(),
+            )
+            self.mfa: MFA = CompleteMixtureOfConjugated(
+                n_categories=n_clusters, bas_hrm=base_lgm
+            )
+        else:
+            base_fa = FactorAnalysis(obs_dim=data_dim, lat_dim=latent_dim)
+            self.mfa = CompleteMixtureOfSymmetric(
+                n_categories=n_clusters, bas_hrm=base_fa
+            )
+
 
     # Properties
 
@@ -100,6 +123,12 @@ class MFAModel(
     def n_clusters(self) -> int:
         """Number of mixture components."""
         return self.n_clusters_val
+
+    @property
+    @override
+    def n_parameters(self) -> int:
+        """Number of model parameters."""
+        return self.mfa.dim
 
     # Core methods
 

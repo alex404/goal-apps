@@ -10,7 +10,10 @@ import jax
 import jax.numpy as jnp
 import optax
 from goal.models import Normal
-from goal.models.graphical.mixture import CompleteMixtureOfSymmetric
+from goal.models.graphical.mixture import (
+    CompleteMixtureOfConjugated,
+    CompleteMixtureOfSymmetric,
+)
 from jax import Array
 
 from apps.interface import ClusteringDataset
@@ -20,8 +23,11 @@ from .metrics import log_epoch_metrics
 
 log = logging.getLogger(__name__)
 
-# Type alias for MFA model
-type MFA = CompleteMixtureOfSymmetric[Normal, Normal]
+# Type alias for MFA model (union of symmetric FA and conjugated diagonal variants)
+type MFA = (
+    CompleteMixtureOfSymmetric[Normal, Normal]
+    | CompleteMixtureOfConjugated[Normal, Normal, Normal]
+)
 
 STATS_LEVEL = jnp.array(STATS_NUM)
 
@@ -67,26 +73,26 @@ def precision_regularizer(
     """
     # Apply conjugation to get prior-space parameters (matches HMOG pattern)
     con_lat_params = mfa.pst_prr_emb.translate(rho, lat_params)
-    lat_man = mfa.lat_man  # CompleteMixture[Normal]
+    prr_man = mfa.prr_man  # CompleteMixture[Normal] - prior manifold
 
     # Split into component params and categorical
-    comp_params, _ = lat_man.split_natural_mixture(con_lat_params)
+    comp_params, _ = prr_man.split_natural_mixture(con_lat_params)
 
     def compute_trace(nor_params: Array) -> Array:
-        _, prs = lat_man.obs_man.split_location_precision(nor_params)
-        prs_dense = lat_man.obs_man.cov_man.to_matrix(prs)
+        _, prs = prr_man.obs_man.split_location_precision(nor_params)
+        prs_dense = prr_man.obs_man.cov_man.to_matrix(prs)
         return jnp.trace(prs_dense)
 
-    traces = lat_man.cmp_man.map(compute_trace, comp_params)
+    traces = prr_man.cmp_man.map(compute_trace, comp_params)
     trace_sum = jnp.sum(traces)
     trace_reg = upr_prs_reg * trace_sum
 
     def compute_logdet(nor_params: Array) -> Array:
-        _, prs = lat_man.obs_man.split_location_precision(nor_params)
-        prs_dense = lat_man.obs_man.cov_man.to_matrix(prs)
+        _, prs = prr_man.obs_man.split_location_precision(nor_params)
+        prs_dense = prr_man.obs_man.cov_man.to_matrix(prs)
         return -jnp.linalg.slogdet(prs_dense)[1]
 
-    logdets = lat_man.cmp_man.map(compute_logdet, comp_params)
+    logdets = prr_man.cmp_man.map(compute_logdet, comp_params)
     logdet_sum = jnp.sum(logdets)
     logdet_reg = lwr_prs_reg * logdet_sum
 
@@ -173,24 +179,24 @@ class GradientTrainer:
         )
 
         # Bound latent mixture parameters
-        lat_man = mfa.lat_man  # CompleteMixture[Normal]
+        pst_man = mfa.pst_man  # CompleteMixture[Normal] - posterior manifold
 
         # Split mixture into component means and categorical means
-        _, cat_means = lat_man.split_mean_mixture(lat_means)
+        _, cat_means = pst_man.split_mean_mixture(lat_means)
 
         # Reset ALL component latents to standard normal N(0, I)
         # This enforces identifiability by fixing the latent prior
-        standard = lat_man.obs_man.standard_normal()
-        reset_comp_meanss = jnp.tile(standard, lat_man.n_categories)
+        standard = pst_man.obs_man.standard_normal()
+        reset_comp_meanss = jnp.tile(standard, pst_man.n_categories)
 
         # Bound categorical probabilities
-        probs = lat_man.lat_man.to_probs(cat_means)
+        probs = pst_man.lat_man.to_probs(cat_means)
         bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
         bounded_probs = bounded_probs / jnp.sum(bounded_probs)
-        bounded_cat_means = lat_man.lat_man.from_probs(bounded_probs)
+        bounded_cat_means = pst_man.lat_man.from_probs(bounded_probs)
 
         # Rejoin mixture with bounded components
-        bounded_lat_means = lat_man.join_mean_mixture(
+        bounded_lat_means = pst_man.join_mean_mixture(
             reset_comp_meanss, bounded_cat_means
         )
 

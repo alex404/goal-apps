@@ -7,7 +7,10 @@ import logging
 import jax.numpy as jnp
 from goal.geometry import Replicated
 from goal.models import Normal
-from goal.models.graphical.mixture import CompleteMixtureOfSymmetric
+from goal.models.graphical.mixture import (
+    CompleteMixtureOfConjugated,
+    CompleteMixtureOfSymmetric,
+)
 from jax import Array
 
 from apps.interface import ClusteringDataset
@@ -24,8 +27,11 @@ from apps.runtime import (
 
 log = logging.getLogger(__name__)
 
-# Type alias for MFA model
-type MFA = CompleteMixtureOfSymmetric[Normal, Normal]
+# Type alias for MFA model (union of symmetric FA and conjugated diagonal variants)
+type MFA = (
+    CompleteMixtureOfSymmetric[Normal, Normal]
+    | CompleteMixtureOfConjugated[Normal, Normal, Normal]
+)
 
 STATS_LEVEL = jnp.array(STATS_NUM)
 INFO_LEVEL = jnp.array(logging.INFO)
@@ -82,7 +88,7 @@ def log_epoch_metrics(
 
             metrics = add_clustering_metrics(
                 metrics,
-                n_clusters=mfa.lat_man.n_categories,
+                n_clusters=mfa.pst_man.n_categories,
                 n_classes=dataset.n_classes,
                 train_labels=dataset.train_labels,
                 test_labels=dataset.test_labels,
@@ -102,7 +108,7 @@ def log_epoch_metrics(
         metrics = update_stats("Params", "Interaction", int_params, metrics)
 
         # Split latent mixture parameters
-        lat_comp_params, lat_cat_params = mfa.lat_man.split_natural_mixture(lat_params)
+        lat_comp_params, lat_cat_params = mfa.pst_man.split_natural_mixture(lat_params)
         metrics = update_stats("Params", "Lat Components", lat_comp_params, metrics)
         metrics = update_stats("Params", "Categorical", lat_cat_params, metrics)
 
@@ -116,7 +122,7 @@ def log_epoch_metrics(
         metrics = update_stats("Means", "Interaction", int_means, metrics)
 
         # Latent mixture means
-        lat_comp_means, lat_cat_means = mfa.lat_man.split_mean_mixture(lat_means)
+        lat_comp_means, lat_cat_means = mfa.pst_man.split_mean_mixture(lat_means)
         metrics = update_stats("Means", "Lat Components", lat_comp_means, metrics)
         metrics = update_stats("Means", "Categorical", lat_cat_means, metrics)
 

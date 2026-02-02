@@ -239,6 +239,7 @@ def initialize_run(
     # Instantiate model
     log.info("Loading model...")
     model: Model[Dataset] = instantiate(cfg.model, data_dim=dataset.data_dim)
+    log.info(f"Loaded model with {model.n_parameters} parameters.")
 
     # update cfg with handler run_id
 

@@ -65,6 +65,7 @@ class LDAModel(ClusteringModel):
         perp_tol: float = 1e-1,
     ):
         self._n_clusters = n_clusters
+        self._data_dim = data_dim
         self.random_state = random_state
         self.max_iter = max_iter
         self.learning_method = learning_method
@@ -86,6 +87,12 @@ class LDAModel(ClusteringModel):
     def n_epochs(self) -> int:
         """LDA trains in a single step."""
         return 1
+
+    @property
+    @override
+    def n_parameters(self) -> int:
+        """LDA parameters are topic-word distributions: n_clusters * data_dim."""
+        return self._n_clusters * self._data_dim
 
     @override
     def initialize_model(self, key: Array, data: Array) -> Array:

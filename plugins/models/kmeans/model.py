@@ -68,6 +68,7 @@ class KMeansModel(ClusteringModel, CanComputePrototypes):
         algorithm: str = "lloyd",
     ):
         self._n_clusters = n_clusters
+        self._data_dim = data_dim
         self.random_state = random_state
         self.max_iter = max_iter
         self.n_init = n_init
@@ -87,6 +88,12 @@ class KMeansModel(ClusteringModel, CanComputePrototypes):
     def n_epochs(self) -> int:
         """K-means trains in a single step."""
         return 1
+
+    @property
+    @override
+    def n_parameters(self) -> int:
+        """K-means parameters are cluster centers: n_clusters * data_dim."""
+        return self._n_clusters * self._data_dim
 
     @override
     def initialize_model(self, key: Array, data: Array) -> Array:
@@ -330,6 +337,7 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
         algorithm: str = "lloyd",
     ):
         self._n_clusters = n_clusters
+        self._data_dim = data_dim
         self.n_components = n_components
         self.pca_random_state = pca_random_state
         self.random_state = random_state
@@ -352,6 +360,19 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
     def n_epochs(self) -> int:
         """PCA + K-means trains in a single step."""
         return 1
+
+    @property
+    @override
+    def n_parameters(self) -> int:
+        """PCA+K-means params: PCA loadings + K-means centers in PCA space."""
+        # n_components can be int or float (variance ratio)
+        if isinstance(self.n_components, int):
+            n_comp = self.n_components
+        else:
+            # Variance ratio - estimate upper bound as data_dim
+            n_comp = self._data_dim
+        # PCA loadings: n_comp * data_dim, KMeans centers: n_clusters * n_comp
+        return n_comp * self._data_dim + self._n_clusters * n_comp
 
     @override
     def initialize_model(self, key: Array, data: Array) -> Array:

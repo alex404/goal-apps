@@ -34,6 +34,11 @@ class Model[D: Dataset](ABC):
     def n_epochs(self) -> int:
         """Number of epochs used for training the model."""
 
+    @property
+    @abstractmethod
+    def n_parameters(self) -> int:
+        """Number of parameters in the model."""
+
     @abstractmethod
     def analyze(
         self,
