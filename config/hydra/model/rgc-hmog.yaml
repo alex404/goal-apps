@@ -6,8 +6,8 @@ defaults:
 latent_dim: 40
 n_clusters: 60
 
-lr_scales: [1.0]
-num_cycles: 10
+lr_scales: [1.0,0.3,0.1]
+num_cycles: 3
 lgm_noise_scale: 0.001
 mix_noise_scale: 0.001
 

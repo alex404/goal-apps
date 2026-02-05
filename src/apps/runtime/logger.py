@@ -2,8 +2,9 @@
 
 import logging
 import sys
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,10 @@ _metric_buffer: MetricHistory = {}
 ### Artifacts ###
 
 
+# Global wall clock start time (set when Logger is initialized)
+_wall_clock_start: float = 0.0
+
+
 @dataclass(frozen=True)
 class Logger:
     """Logger supporting both local and wandb logging.
@@ -41,6 +46,9 @@ class Logger:
     Non-JIT methods (must be called outside jax.jit):
         - log_figure: For logging matplotlib figures
         - finalize: For cleanup and final logging
+
+    Wall clock timing is automatically tracked from Logger initialization
+    and included in all logged metrics.
     """
 
     run_name: str
@@ -64,7 +72,10 @@ class Logger:
 
     def __post_init__(self) -> None:
         """Initialize logger with desired logging destinations."""
-        global _metric_buffer
+        global _metric_buffer, _wall_clock_start
+
+        # Start wall clock timer for tracking training duration
+        _wall_clock_start = time.perf_counter()
 
         # Clear or load metric buffer based on whether we're resuming
         if self.use_local:
@@ -121,13 +132,17 @@ class Logger:
         use_wandb = self.use_wandb
 
         def _log_values(metrics_dict: MetricDict, epoch_array: Array) -> None:
-            global _metric_buffer
+            global _metric_buffer, _wall_clock_start
             epoch = int(epoch_array)
             # Convert arrays to floats
             float_metrics = {
                 key: (int(level), float(value))
                 for key, (level, value) in metrics_dict.items()
             }
+
+            # Automatically inject wall clock elapsed time
+            elapsed = time.perf_counter() - _wall_clock_start
+            float_metrics["Timing/Wall Clock (s)"] = (logging.INFO, elapsed)
 
             if use_local:
                 for key, (level, value) in float_metrics.items():
