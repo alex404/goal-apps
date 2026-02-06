@@ -9,7 +9,7 @@ init_scale: 0.01
 min_var: 0.01
 
 trainer:
-  lr: 1e-5
+  lr: 1e-4
   n_epochs: 200
   # batch_size: 500
   batch_steps: 1000
