@@ -3,17 +3,17 @@ defaults:
   - mfa-diagonal
   - _self_
 
-latent_dim: 10
-n_clusters: 50
+latent_dim: 50
+n_clusters: 150
 init_scale: 0.01
 min_var: 0.01
 
 trainer:
-  lr: 1e-4
+  lr: 1e-5
   n_epochs: 200
-  # batch_size: 500
-  batch_steps: 1000
-  grad_clip: 1.0
+  batch_size: 512
+  # batch_steps: 1000
+  grad_clip: 0
 
   # Regularization
   l1_reg: 0 # 1e-3

@@ -4,7 +4,7 @@ import logging
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ _metric_buffer: MetricHistory = {}
 ### Artifacts ###
 
 
+# TODO: Make sure wall clock time skips, or tracks seperately, heavy duty analyses and plotting.
 # Global wall clock start time (set when Logger is initialized)
 _wall_clock_start: float = 0.0
 
