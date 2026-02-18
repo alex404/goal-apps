@@ -12,7 +12,6 @@ dependencies = [
     "typer",
     "pandas",
     "joblib",
-    "tables",
     "scipy",    
     "scipy-stubs",
 ]

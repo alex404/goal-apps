@@ -44,8 +44,8 @@ goal analyze run_name=<run_name>
 # View trained run results (stored in runs/)
 ls runs/<run_name>/
 
-# Launch hyperparameter sweep
-goal sweep dataset=mnist model=hmog latent_dim=[4,8,12,16] n_clusters=[50,100,200]
+# Launch hyperparameter sweep (comma-separated, no brackets)
+goal sweep dataset=mnist model=mnist-hmog latent_dim=4,8,12,16 n_clusters=50,100,200
 
 # Dry run to view configuration
 goal train dataset=mnist model=hmog --dry-run
@@ -265,18 +265,26 @@ Common config parameters:
 
 Sweeps use Weights & Biases:
 ```bash
-# Create sweep
-goal sweep dataset=mnist model=hmog latent_dim=[10,20,50] n_clusters=[50,100,200]
+# Create sweep (comma-separated values, no brackets)
+goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 n_clusters=50,100,200
 
-# This generates a W&B sweep config and prints sweep ID
-# Then run agents to execute the sweep:
+# Validate a sample config without launching
+goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --validate
+
+# Dry run to view sweep config tree
+goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --dry-run
+
+# Specify W&B project
+goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --project my-project
+
+# After launching, run agents to execute the sweep:
 wandb agent <sweep_id>
 ```
 
 The sweep system (`src/apps/cli/sweep.py`):
-- Parses list-valued overrides (e.g., `param=[1,2,3]`)
-- Creates W&B sweep configuration
-- Supports validation via `--validate` flag
+- Parses comma-separated overrides (e.g., `param=1,2,3`) — **not** bracket syntax
+- Creates W&B grid sweep configuration
+- Supports validation via `--validate` flag (initializes a sample config to check validity)
 
 ## Development Patterns
 
@@ -352,8 +360,8 @@ Ignored rules:
 - **joblib**: Serialization of parameters/artifacts
 - **pandas**: Data manipulation
 - **scipy**: Scientific computing
-- **tables** (PyTables): HDF5 support
 - **torchvision**: Vision dataset loaders (optional, `datasets` extra)
+- **h5py**: HDF5 file access for Tasic and Neural Traces datasets (optional, `datasets` extra)
 - **pytest**: Testing (optional, `test` extra)
 
 ## File Locations
