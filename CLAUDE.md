@@ -6,21 +6,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 goal-apps is a Python CLI application framework for training, analyzing, and evaluating statistical clustering models on various datasets. Built on the GOAL (Geometric OptimizAtion Libraries) JAX library, it provides a plugin-based architecture for extensible model and dataset implementations.
 
+## Environment
+
+This project uses **uv** with a virtual environment at `.venv/`. All commands must be run inside this environment. Always activate it before running anything:
+
+```bash
+source .venv/bin/activate
+```
+
+All tools (basedpyright, ruff, the `goal` CLI, Python itself) are installed in this venv. Do **not** use system Python or install packages outside the venv.
+
 ## Common Commands
 
 ### Installation and Setup
 ```bash
 # Install the package in editable mode
-pip install -e .
+uv pip install -e .
 
 # Install with GPU support
-pip install -e ".[gpu]"
+uv pip install -e ".[gpu]"
 
 # Install with dataset support (torchvision, h5py)
-pip install -e ".[datasets]"
+uv pip install -e ".[datasets]"
 
-# Type checking
-pyright
+# Type checking (basedpyright, not pyright)
+basedpyright
 
 # Linting and formatting
 ruff check .

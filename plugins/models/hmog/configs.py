@@ -137,6 +137,51 @@ class DifferentiableHMoGConfig(HMoGConfig):
     defaults: list[Any] = field(default_factory=lambda: cycle_defaults)
 
 
+### Projection Trainer Config ###
+
+
+@dataclass
+class ProjectionTrainerConfig:
+    """Configuration for projection-based trainer."""
+
+    _target_: str = "plugins.models.hmog.projection.ProjectionTrainer"
+    lr: float = 1e-3
+    n_epochs: int = 1000
+    batch_size: int | None = None
+    batch_steps: int = 1000
+    l1_reg: float = 0
+    l2_reg: float = 0
+    grad_clip: float = 1.0
+    min_prob: float = 1e-4
+    lat_min_var: float = 1e-6
+    lat_jitter_var: float = 0.0
+
+
+@dataclass
+class ProjectionHMoGConfig(ClusteringModelConfig):
+    """Configuration for projection-based HMoG training."""
+
+    _target_: str = "plugins.models.hmog.projection.ProjectionHMoGModel"
+
+    # Model architecture
+    data_dim: int = MISSING
+    latent_dim: int = 10
+    n_clusters: int = 10
+    lgm_noise_scale: float = 0.01
+    mix_noise_scale: float = 0.01
+
+    # Training configuration
+    pre: PreTrainerConfig = field(default=MISSING)
+    pro: ProjectionTrainerConfig = field(default_factory=ProjectionTrainerConfig)
+
+    # Analysis configuration
+    analyses: ClusteringAnalysesConfig = field(default_factory=ClusteringAnalysesConfig)
+
+    defaults: list[Any] = field(
+        default_factory=lambda: [{"pre": "gradient_pre"}, "_self_"]
+    )
+
+
 ### Config Registration ###
 
 cs = ConfigStore.instance()
@@ -149,3 +194,4 @@ cs.store(group="model/full", name="gradient_full", node=FullGradientTrainerConfi
 
 # Register model configs
 cs.store(group="model", name="hmog", node=DifferentiableHMoGConfig)
+cs.store(group="model", name="hmog_proj", node=ProjectionHMoGConfig)
