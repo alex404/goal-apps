@@ -20,11 +20,11 @@ from goal.geometry import Diagonal
 from goal.models import (
     AnalyticHMoG,
     AnalyticMixture,
+    FactorAnalysis,
     FullNormal,
     Normal,
     NormalCovarianceEmbedding,
     analytic_hmog,
-    differentiable_hmog,
 )
 from jax import Array
 
@@ -43,11 +43,11 @@ from apps.interface.clustering.protocols import (
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
-from apps.runtime.metrics import add_ll_metrics
+from apps.interface.clustering import cluster_accuracy, clustering_nmi
+from apps.runtime.metrics import add_clustering_metrics, add_ll_metrics
 from apps.runtime.util import MetricDict
 
 from .trainers import LGMPreTrainer
-from .types import DiagonalHMoG, DiagonalLGM
 
 # Start logger
 log = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ def embed_to_full_mix(
 
 
 def to_analytic_params(
-    lgm: DiagonalLGM,
+    lgm: FactorAnalysis,
     diag_mix: AnalyticMixture[Normal[Diagonal]],
     analytic_manifold: AnalyticHMoG[Diagonal],
     lgm_params: Array,
@@ -117,19 +117,19 @@ class ProjectionTrainer:
     lat_min_var: float = 1e-6
     lat_jitter_var: float = 0.0
 
-    def project_data(self, lgm: DiagonalLGM, params: Array, data: Array) -> Array:
+    def project_data(self, lgm: FactorAnalysis, params: Array, data: Array) -> Array:
         """Project data to the latent space using the LGM posterior means."""
 
         def posterior_mean(x: Array) -> Array:
             prms = lgm.posterior_at(params, x)
-            with lgm.pst_man as lm:
+            with lgm.lat_man as lm:
                 return lm.split_mean_covariance(lm.to_mean(prms))[0]
 
         return jax.lax.map(posterior_mean, data, batch_size=256)
 
     def kmeans_init(
         self,
-        lgm: DiagonalLGM,
+        lgm: FactorAnalysis,
         lgm_params: Array,
         data: Array,
         mix: AnalyticMixture[Normal[Diagonal]],
@@ -160,8 +160,10 @@ class ProjectionTrainer:
         obs_params, int_params, _ = lgm.split_coords(lgm_params)
         lkl_params = jnp.concatenate([obs_params, int_params])
         rho = lgm.conjugation_parameters(lkl_params)  # FullNormal natural params
-        rho_diag = lgm.pst_prr_emb.project(rho)  # Diagonal Normal natural params
-        rho_second = rho_diag[lat_dim:]  # positive conjugation second-order per dim
+        # Extract diagonal elements from upper-triangular precision part of rho
+        rho_second_flat = rho[lat_dim:]
+        diag_indices = jnp.array([i * lat_dim - i * (i - 1) // 2 for i in range(lat_dim)])
+        rho_second = rho_second_flat[diag_indices]  # shape (lat_dim,)
         # Use 10x safety margin below the validity boundary
         safe_var = 0.1 / (jnp.abs(rho_second) + 1e-10)
         log.info(
@@ -188,24 +190,17 @@ class ProjectionTrainer:
         self, model: AnalyticMixture[Normal[Diagonal]], means: Array
     ) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
-        with model as uh:
-            comp_means, prob_means = uh.split_mean_mixture(means)
-            lat_obs_means, _, _ = uh.split_coords(means)
-
-            def whiten_and_bound(comp_m: Array) -> Array:
-                whitened = uh.obs_man.whiten(comp_m, lat_obs_means)
-                return uh.obs_man.regularize_covariance(
-                    whitened, self.lat_jitter_var, self.lat_min_var
-                )
-
-            bounded_comp_means = uh.cmp_man.map(whiten_and_bound, comp_means, flatten=True)
-
-            probs = uh.lat_man.to_probs(prob_means)
-            bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
-            bounded_probs = bounded_probs / jnp.sum(bounded_probs)
-            bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
-
-            return uh.join_mean_mixture(bounded_comp_means, bounded_prob_means)
+        comp_means, prob_means = model.split_mean_mixture(means)
+        bounded_comp_means = model.cmp_man.map(
+            lambda m: model.obs_man.regularize_covariance(m, self.lat_jitter_var, self.lat_min_var),
+            comp_means,
+            flatten=True,
+        )
+        probs = model.lat_man.to_probs(prob_means)
+        bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
+        bounded_probs = bounded_probs / jnp.sum(bounded_probs)
+        bounded_prob_means = model.lat_man.from_probs(bounded_probs)
+        return model.join_mean_mixture(bounded_comp_means, bounded_prob_means)
 
     def prior_statistics(
         self, mix: AnalyticMixture[Normal[Diagonal]], mix_params: Array
@@ -323,7 +318,7 @@ class ProjectionTrainer:
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        lgm: DiagonalLGM,
+        lgm: FactorAnalysis,
         lgm_params: Array,
         logger: Logger,
         epoch_offset: int,
@@ -360,7 +355,8 @@ class ProjectionHMoGModel(
     Evaluations use the AnalyticHMoG which correctly accounts for conjugation.
     """
 
-    manifold: DiagonalHMoG
+    lgm: FactorAnalysis
+    mixture: AnalyticMixture[Normal[Diagonal]]
     analytic_manifold: AnalyticHMoG[Diagonal]
     pre: LGMPreTrainer
     projection: ProjectionTrainer
@@ -381,12 +377,10 @@ class ProjectionHMoGModel(
     ) -> None:
         super().__init__()
 
-        self.manifold = differentiable_hmog(
-            obs_dim=data_dim,
-            obs_rep=Diagonal(),
-            lat_dim=latent_dim,
-            pst_rep=Diagonal(),
-            n_components=n_clusters,
+        self.lgm = FactorAnalysis(obs_dim=data_dim, lat_dim=latent_dim)
+        self.mixture = AnalyticMixture(
+            obs_man=Normal(latent_dim, Diagonal()),
+            n_categories=n_clusters,
         )
 
         self.analytic_manifold = analytic_hmog(
@@ -415,19 +409,17 @@ class ProjectionHMoGModel(
 
     @property
     def latent_dim(self) -> int:
-        return self.manifold.prr_man.obs_man.data_dim
+        return self.lgm.lat_dim
 
     @property
     @override
     def n_clusters(self) -> int:
-        return self.manifold.prr_man.lat_man.dim + 1
+        return self.mixture.n_categories
 
     @property
     @override
     def n_parameters(self) -> int:
-        # Use DiagonalHMoG dim (free params) rather than AnalyticHMoG dim
-        # (which includes zero off-diagonal elements from the embedding)
-        return self.manifold.dim
+        return self.lgm.dim - self.lgm.lat_man.dim + self.mixture.dim
 
     # Initialization
 
@@ -437,15 +429,15 @@ class ProjectionHMoGModel(
         lgm_params = self._initialize_lgm(key_lgm, data)
         mix_params = self._initialize_mixture(key_mix)
         return to_analytic_params(
-            self.manifold.lwr_hrm,
-            self.manifold.pst_man,
+            self.lgm,
+            self.mixture,
             self.analytic_manifold,
             lgm_params,
             mix_params,
         )
 
     def _initialize_lgm(self, key: Array, data: Array) -> Array:
-        lgm = self.manifold.lwr_hrm
+        lgm = self.lgm
         obs_means = lgm.obs_man.average_sufficient_statistic(data)
         obs_means = lgm.obs_man.regularize_covariance(
             obs_means, self.pre.jitter_var, self.pre.min_var
@@ -462,7 +454,7 @@ class ProjectionHMoGModel(
         return lgm.join_coords(obs_params, int_params, lat_params)
 
     def _initialize_mixture(self, key: Array) -> Array:
-        return self.manifold.pst_man.initialize(key, shape=self.mix_noise_scale)
+        return self.mixture.initialize(key, shape=self.mix_noise_scale)
 
     # Protocol methods
 
@@ -585,8 +577,8 @@ class ProjectionHMoGModel(
     ) -> None:
         key_init, key_pre, key_proj = jax.random.split(key, 3)
 
-        lgm = self.manifold.lwr_hrm
-        mixture = self.manifold.pst_man
+        lgm = self.lgm
+        mixture = self.mixture
 
         # Initialize LGM parameters
         lgm_params = self._initialize_lgm(key_init, dataset.train_data)
@@ -657,16 +649,30 @@ class ProjectionHMoGModel(
                     lgm, mixture, self.analytic_manifold, lgm_params, mix_params
                 )
                 train_ll = self.analytic_manifold.average_log_observable_density(
-                    hmog_params, dataset.train_data[:2000]
+                    hmog_params, dataset.train_data
                 )
                 test_ll = self.analytic_manifold.average_log_observable_density(
-                    hmog_params, dataset.test_data[:500]
+                    hmog_params, dataset.test_data
                 )
                 metrics: MetricDict = {}
                 add_ll_metrics(
                     metrics, self.n_parameters, train_ll, test_ll,
                     dataset.train_data.shape[0]
                 )
+                if dataset.has_labels:
+                    train_clusters = self.cluster_assignments(hmog_params, dataset.train_data)
+                    test_clusters = self.cluster_assignments(hmog_params, dataset.test_data)
+                    add_clustering_metrics(
+                        metrics,
+                        n_clusters=self.n_clusters,
+                        n_classes=dataset.n_classes,
+                        train_labels=dataset.train_labels,
+                        test_labels=dataset.test_labels,
+                        train_clusters=train_clusters,
+                        test_clusters=test_clusters,
+                        cluster_accuracy_fn=cluster_accuracy,
+                        clustering_nmi_fn=clustering_nmi,
+                    )
                 logger.log_metrics(metrics, chunk_epoch)
 
             final_params = to_analytic_params(

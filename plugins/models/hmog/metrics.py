@@ -6,7 +6,7 @@ import logging
 
 import jax.numpy as jnp
 from goal.geometry import Replicated
-from goal.models import FullNormal
+from goal.models import FactorAnalysis, FullNormal
 from jax import Array
 
 from .types import DiagonalHMoG, DiagonalLGM
@@ -52,7 +52,7 @@ def add_conjugation_metrics(
 
 def pre_log_epoch_metrics(
     dataset: ClusteringDataset,
-    model: DiagonalLGM,
+    model: DiagonalLGM | FactorAnalysis,
     logger: Logger,
     params: Array,
     epoch: Array,
