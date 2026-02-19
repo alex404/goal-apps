@@ -28,6 +28,7 @@ class PreTrainerConfig:
     grad_clip: float = 8.0
     min_var: float = 1e-5
     jitter_var: float = 0.0
+    epoch_reset: bool = False
 
 
 @dataclass
@@ -96,6 +97,7 @@ class MixtureGradientTrainerConfig:
     # Precision matrix regularization
     upr_prs_reg: float = 1e-3
     lwr_prs_reg: float = 1e-3
+    epoch_reset: bool = False
 
 
 ### Main Configuration ###
@@ -155,6 +157,7 @@ class ProjectionTrainerConfig:
     min_prob: float = 1e-4
     lat_min_var: float = 1e-6
     lat_jitter_var: float = 0.0
+    epoch_reset: bool = False
 
 
 @dataclass

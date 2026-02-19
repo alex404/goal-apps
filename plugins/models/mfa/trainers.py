@@ -152,6 +152,9 @@ class GradientTrainer:
     lat_jitter_var: float = 0.0
     """Jitter for latent variance (currently unused - latents reset to standard normal)."""
 
+    epoch_reset: bool = False
+    """Reset optimizer state at the start of each epoch."""
+
     def bound_means(self, mfa: MFA, means: Array) -> Array:
         """Apply bounds to posterior/prior statistics in mean coordinates.
 
@@ -329,6 +332,9 @@ class GradientTrainer:
             carry: tuple[OptState, Array, Array],
         ) -> tuple[OptState, Array, Array]:
             opt_state, params, epoch_key = carry
+
+            if self.epoch_reset:
+                opt_state = optimizer.init(params)
 
             shuffle_key, next_key = jax.random.split(epoch_key)
 

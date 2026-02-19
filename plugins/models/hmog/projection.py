@@ -118,7 +118,7 @@ class ProjectionTrainer:
     lat_jitter_var: float = 0.0
 
     # Optimizer behaviour
-    reset_optimizer_each_epoch: bool = True
+    epoch_reset: bool = True
     """Reset Adam state at the start of each epoch (each new E-step).
 
     Prevents stale momentum from one E-step's gradient direction carrying over
@@ -307,7 +307,7 @@ class ProjectionTrainer:
 
             # Optionally reset optimizer state so stale momentum from the
             # previous E-step does not bias this epoch's M-steps.
-            if self.reset_optimizer_each_epoch:
+            if self.epoch_reset:
                 opt_state = optimizer.init(mix_params)
 
             shuffle_key, next_key = jax.random.split(epoch_key)

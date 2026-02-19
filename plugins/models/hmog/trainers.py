@@ -165,6 +165,8 @@ class FullGradientTrainer:
     from accumulating over many training steps, improving stability.
     """
 
+    epoch_reset: bool = False
+
     def bound_means(
         self,
         model: DiagonalHMoG,
@@ -424,6 +426,9 @@ class FullGradientTrainer:
         ) -> tuple[optax.OptState, Array, Array]:
             opt_state, params, epoch_key = carry
 
+            if self.epoch_reset:
+                opt_state = optimizer.init(params)
+
             # Split key for shuffling
             shuffle_key, next_key = jax.random.split(epoch_key)
 
@@ -487,6 +492,8 @@ class LGMPreTrainer:
     # Parameter bounds
     min_var: float
     jitter_var: float
+
+    epoch_reset: bool = False
 
     def bound_means(self, model: DiagonalLGM, means: Array) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
@@ -649,6 +656,9 @@ class LGMPreTrainer:
         ) -> tuple[optax.OptState, Array, Array]:
             opt_state, params, epoch_key = carry
 
+            if self.epoch_reset:
+                opt_state = optimizer.init(params)
+
             # Split key for shuffling
             shuffle_key, next_key = jax.random.split(epoch_key)
 
@@ -728,6 +738,8 @@ class MixtureGradientTrainer:
     normal to ~1e-7 precision), the explicit reset prevents small numerical errors
     from accumulating over many training steps, improving stability.
     """
+
+    epoch_reset: bool = False
 
     def precompute_observable_mappings(
         self,
@@ -995,6 +1007,9 @@ class MixtureGradientTrainer:
             carry: tuple[optax.OptState, Array, Array],
         ) -> tuple[optax.OptState, Array, Array]:
             opt_state, mix_params, epoch_key = carry
+
+            if self.epoch_reset:
+                opt_state = optimizer.init(mix_params)
 
             # Split key for shuffling
             shuffle_key, next_key = jax.random.split(epoch_key)

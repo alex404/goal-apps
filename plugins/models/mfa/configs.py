@@ -63,6 +63,9 @@ class GradientTrainerConfig:
     lat_jitter_var: float = 0.0
     """Jitter to add to latent variance."""
 
+    epoch_reset: bool = False
+    """Reset optimizer state at the start of each epoch."""
+
 
 @dataclass
 class MFAConfig(ClusteringModelConfig):
