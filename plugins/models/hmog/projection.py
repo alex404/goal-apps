@@ -4,12 +4,12 @@ Trains in two phases:
 1. Learn a Factor Analysis / LGM on raw data
 2. Project data to latent space via posterior means, then train a diagonal
    Gaussian mixture on the projected data
+3. Assemble AnalyticHMoG params via join_conjugated for correct conjugation
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, override
 
@@ -17,7 +17,15 @@ import jax
 import jax.numpy as jnp
 import optax
 from goal.geometry import Diagonal
-from goal.models import AnalyticMixture, Normal, differentiable_hmog
+from goal.models import (
+    AnalyticHMoG,
+    AnalyticMixture,
+    FullNormal,
+    Normal,
+    NormalCovarianceEmbedding,
+    analytic_hmog,
+    differentiable_hmog,
+)
 from jax import Array
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
@@ -35,8 +43,9 @@ from apps.interface.clustering.protocols import (
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
+from apps.runtime.metrics import add_ll_metrics
+from apps.runtime.util import MetricDict
 
-from .metrics import log_epoch_metrics
 from .trainers import LGMPreTrainer
 from .types import DiagonalHMoG, DiagonalLGM
 
@@ -44,19 +53,43 @@ from .types import DiagonalHMoG, DiagonalLGM
 log = logging.getLogger(__name__)
 
 
-def to_differentiable(
+def embed_to_full_mix(
+    diag_mix: AnalyticMixture[Normal[Diagonal]],
+    full_mix: AnalyticMixture[FullNormal],
+    mix_params: Array,
+) -> Array:
+    """Embed diagonal GMM natural params into FullNormal GMM natural params.
+
+    Converts AnalyticMixture[Normal[Diagonal]] natural params to
+    AnalyticMixture[FullNormal] natural params. Off-diagonal precision entries
+    are zero (diagonal covariance embedded into full covariance space).
+    """
+    cov_emb = NormalCovarianceEmbedding(diag_mix.obs_man, full_mix.obs_man)
+    comp_params, cat_params = diag_mix.split_natural_mixture(mix_params)
+    # Apply cov_emb to each component: (n_clusters, diag_dim) → (n_clusters, full_dim)
+    comp_params_2d = diag_mix.cmp_man.to_2d(comp_params)
+    full_comp_params = jax.vmap(cov_emb.embed)(comp_params_2d).ravel()
+    return full_mix.join_natural_mixture(full_comp_params, cat_params)
+
+
+def to_analytic_params(
     lgm: DiagonalLGM,
-    hmog: DiagonalHMoG,
+    diag_mix: AnalyticMixture[Normal[Diagonal]],
+    analytic_manifold: AnalyticHMoG[Diagonal],
     lgm_params: Array,
     mix_params: Array,
 ) -> Array:
-    """Combine LGM params and trained mixture params into full DiagonalHMoG params.
+    """Assemble AnalyticHMoG params from LGM params and diagonal GMM params.
 
-    The LGM provides observable (obs) and interaction (int) parameters.
-    The mixture provides the posterior (pst) parameters for the latent space.
+    Uses join_conjugated to correctly account for the conjugation correction,
+    ensuring the effective prior in the HMoG equals mix_params (not mix_params + rho).
+    The obs and int params from the Diagonal LGM are compatible with AnalyticHMoG's
+    lkl_fun_man since both share the same obs/int manifold structure.
     """
     obs_params, int_params, _ = lgm.split_coords(lgm_params)
-    return hmog.join_coords(obs_params, int_params, mix_params)
+    lkl_params = jnp.concatenate([obs_params, int_params])
+    full_mix_params = embed_to_full_mix(diag_mix, analytic_manifold.upr_hrm, mix_params)
+    return analytic_manifold.join_conjugated(lkl_params, full_mix_params)
 
 
 @dataclass(frozen=True)
@@ -64,7 +97,8 @@ class ProjectionTrainer:
     """Trainer for projection-based training of mixture models.
 
     Projects data to the latent space using a pre-trained LGM,
-    then trains a mixture model on the projected data.
+    then trains a standalone diagonal Gaussian mixture on the projected data.
+    Conjugation correction is applied at assembly time via join_conjugated.
     """
 
     # Training hyperparameters
@@ -93,51 +127,111 @@ class ProjectionTrainer:
 
         return jax.lax.map(posterior_mean, data, batch_size=256)
 
+    def kmeans_init(
+        self,
+        lgm: DiagonalLGM,
+        lgm_params: Array,
+        data: Array,
+        mix: AnalyticMixture[Normal[Diagonal]],
+    ) -> Array:
+        """Initialize mixture parameters using k-means on projected data.
+
+        Uses conjugation-safe component variance: the HMoG prior second-order =
+        mix_η₂ + ρ_second must be negative, so var_k < 1/(2 * max(ρ_second)).
+        """
+        import numpy as np
+        from sklearn.cluster import KMeans
+
+        log.info("Initializing mixture with k-means on projected data")
+        projected = self.project_data(lgm, lgm_params, data)
+        data_np = np.array(projected)
+
+        n_clusters = mix.n_categories
+        lat_dim = mix.obs_man.data_dim
+
+        kmeans = KMeans(n_clusters=n_clusters, n_init=10)  # pyright: ignore[reportArgumentType]
+        kmeans.fit(data_np)
+
+        centers = jnp.array(kmeans.cluster_centers_)
+        labels = kmeans.labels_
+
+        # Compute conjugation constraint: valid HMoG prior requires
+        # mix_η₂_i < -ρ_second_i, i.e. var_k_i < 1/(2 * ρ_second_i)
+        obs_params, int_params, _ = lgm.split_coords(lgm_params)
+        lkl_params = jnp.concatenate([obs_params, int_params])
+        rho = lgm.conjugation_parameters(lkl_params)  # FullNormal natural params
+        rho_diag = lgm.pst_prr_emb.project(rho)  # Diagonal Normal natural params
+        rho_second = rho_diag[lat_dim:]  # positive conjugation second-order per dim
+        # Use 10x safety margin below the validity boundary
+        safe_var = 0.1 / (jnp.abs(rho_second) + 1e-10)
+        log.info(
+            f"Conjugation-safe var range: {float(jnp.min(safe_var)):.2e} - {float(jnp.max(safe_var)):.2e}"
+        )
+
+        comp_means_list = []
+        for k in range(n_clusters):
+            mu_k = centers[k]
+            # Use conjugation-safe variance (not empirical variance)
+            var_k = safe_var
+            comp_means_list.append(jnp.concatenate([mu_k, var_k + mu_k**2]))
+
+        comp_means = jnp.concatenate(comp_means_list)
+        sizes = jnp.array(
+            [np.sum(labels == k) for k in range(n_clusters)], dtype=jnp.float32
+        )
+        probs = sizes / sizes.sum()
+        prob_means = mix.lat_man.from_probs(probs)
+
+        return mix.to_natural(mix.join_mean_mixture(comp_means, prob_means))
+
     def bound_mixture_means(
         self, model: AnalyticMixture[Normal[Diagonal]], means: Array
     ) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
-        comp_means, prob_means = model.split_mean_mixture(means)
+        with model as uh:
+            comp_means, prob_means = uh.split_mean_mixture(means)
+            lat_obs_means, _, _ = uh.split_coords(means)
 
-        bounded_comp_means = model.cmp_man.map(
-            lambda m: model.obs_man.regularize_covariance(
-                m, self.lat_jitter_var, self.lat_min_var
-            ),
-            comp_means,
-            flatten=True,
-        )
+            def whiten_and_bound(comp_m: Array) -> Array:
+                whitened = uh.obs_man.whiten(comp_m, lat_obs_means)
+                return uh.obs_man.regularize_covariance(
+                    whitened, self.lat_jitter_var, self.lat_min_var
+                )
 
-        probs = model.lat_man.to_probs(prob_means)
-        bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
-        bounded_probs = bounded_probs / jnp.sum(bounded_probs)
-        bounded_prob_means = model.lat_man.from_probs(bounded_probs)
+            bounded_comp_means = uh.cmp_man.map(whiten_and_bound, comp_means, flatten=True)
 
-        return model.join_mean_mixture(bounded_comp_means, bounded_prob_means)
+            probs = uh.lat_man.to_probs(prob_means)
+            bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
+            bounded_probs = bounded_probs / jnp.sum(bounded_probs)
+            bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
 
-    def make_regularizer(self) -> Callable[[Array], Array]:
-        """Create a regularizer for the mixture model."""
+            return uh.join_mean_mixture(bounded_comp_means, bounded_prob_means)
 
-        def loss_fn(params: Array) -> Array:
-            return self.l2_reg * jnp.sum(jnp.square(params))
+    def prior_statistics(
+        self, mix: AnalyticMixture[Normal[Diagonal]], mix_params: Array
+    ) -> Array:
+        """Compute prior statistics for the M-step gradient."""
+        return mix.to_mean(mix_params)
 
-        return loss_fn
+    def make_regularizer(self, mix_params: Array) -> Array:
+        """Compute L2 regularization gradient."""
+        return self.l2_reg * 2.0 * mix_params
 
-    def train(
+    def train_on_projections(
         self,
         key: Array,
-        handler: RunHandler,
-        dataset: ClusteringDataset,
-        lgm: DiagonalLGM,
-        lgm_params: Array,
-        logger: Logger,
-        epoch_offset: int,
+        latent_locations: Array,
         mix: AnalyticMixture[Normal[Diagonal]],
-        hmog: DiagonalHMoG,
         params0: Array,
+        n_epochs: int | None = None,
     ) -> Array:
-        """Train a mixture model on data projected to the latent space."""
-        train_data = dataset.train_data
-        projected_data = self.project_data(lgm, lgm_params, train_data)
+        """Run mixture EM on precomputed latent projections for n_epochs epochs.
+
+        Core training loop — call this when latent_locations are already computed
+        to avoid repeating the projection step. Uses standalone mixture EM with
+        conjugation correction applied at assembly time via join_conjugated.
+        """
+        n_epochs_to_run = n_epochs if n_epochs is not None else self.n_epochs
 
         # Setup optimizer
         if self.grad_clip > 0.0:
@@ -152,107 +246,101 @@ class ProjectionTrainer:
 
         # Determine batch size and number of batches
         if self.batch_size is None:
-            batch_size = projected_data.shape[0]
+            batch_size = latent_locations.shape[0]
             n_batches = 1
         else:
             batch_size = self.batch_size
-            n_batches = projected_data.shape[0] // batch_size
-
-        log.info(f"Training mixture on projected data for {self.n_epochs} epochs")
-
-        regularizer = self.make_regularizer()
+            n_batches = latent_locations.shape[0] // batch_size
 
         def batch_step(
             carry: tuple[optax.OptState, Array],
-            batch: Array,
-        ) -> tuple[tuple[optax.OptState, Array], Array]:
-            opt_state, params = carry
+            batch_locs: Array,
+        ):
+            opt_state, mix_params = carry
 
-            posterior_stats = mix.mean_posterior_statistics(params, batch)
+            # E-step: compute posterior sufficient statistics using standalone mixture.
+            posterior_stats = mix.mean_posterior_statistics(mix_params, batch_locs)
             bounded_posterior_stats = self.bound_mixture_means(mix, posterior_stats)
 
             def inner_step(
                 carry: tuple[optax.OptState, Array],
                 _: None,
-            ) -> tuple[tuple[optax.OptState, Array], Array]:
+            ):
                 current_opt_state, current_params = carry
 
-                prior_stats = mix.to_mean(current_params)
+                # M-step: natural gradient = prior mean params - posterior mean params
+                prior_stats = self.prior_statistics(mix, current_params)
                 grad = prior_stats - bounded_posterior_stats
-
-                reg_grad = jax.grad(regularizer)(current_params)
+                reg_grad = self.make_regularizer(current_params)
                 grad = grad + reg_grad
 
                 updates, new_opt_state = optimizer.update(
                     grad, current_opt_state, current_params
                 )
-                new_params = optax.apply_updates(current_params, updates)
+                new_params: Array = optax.apply_updates(current_params, updates)  # pyright: ignore[reportAssignmentType]
 
-                logger.monitor_params(
-                    {
-                        "original_params": current_params,
-                        "updated_params": new_params,
-                        "batch": batch,
-                        "posterior_stats": posterior_stats,
-                        "bounded_posterior_stats": bounded_posterior_stats,
-                        "prior_stats": prior_stats,
-                        "grad": grad,
-                    },
-                    handler,
-                    context="PROJECTION",
-                )
+                return (new_opt_state, new_params), None
 
-                return (new_opt_state, new_params), grad
-
-            (final_opt_state, final_params), all_grads = jax.lax.scan(
+            (final_opt_state, final_params), _ = jax.lax.scan(
                 inner_step,
-                (opt_state, params),
+                (opt_state, mix_params),
                 None,
                 length=self.batch_steps,
             )
 
-            return (final_opt_state, final_params), all_grads
+            return (final_opt_state, final_params), None
 
         def epoch_step(
             epoch: Array,
             carry: tuple[optax.OptState, Array, Array],
         ) -> tuple[optax.OptState, Array, Array]:
-            opt_state, params, epoch_key = carry
+            opt_state, mix_params, epoch_key = carry
 
             shuffle_key, next_key = jax.random.split(epoch_key)
 
             shuffled_indices = jax.random.permutation(
-                shuffle_key, projected_data.shape[0]
+                shuffle_key, latent_locations.shape[0]
             )
             batched_indices = shuffled_indices[: n_batches * batch_size]
-            batched_data = projected_data[batched_indices].reshape(
+            batched_locs = latent_locations[batched_indices].reshape(
                 (n_batches, batch_size, -1)
             )
 
-            (opt_state, new_params), _ = jax.lax.scan(
-                batch_step, (opt_state, params), batched_data
+            (opt_state, new_mix_params), _ = jax.lax.scan(
+                batch_step, (opt_state, mix_params), batched_locs
             )
 
-            hmog_params = to_differentiable(lgm, hmog, lgm_params, new_params)
+            return opt_state, new_mix_params, next_key
 
-            log_epoch_metrics(
-                dataset,
-                hmog,
-                logger,
-                hmog_params,
-                epoch + epoch_offset,
-                {},
-                None,
-                log_freq=10,
-            )
-
-            return opt_state, new_params, next_key
-
-        (_, params_final, _) = jax.lax.fori_loop(
-            0, self.n_epochs, epoch_step, (opt_state, params0, key)
+        (_, mix_params_final, _) = jax.lax.fori_loop(
+            0, n_epochs_to_run, epoch_step, (opt_state, params0, key)
         )
 
-        return params_final
+        return mix_params_final
+
+    def train(
+        self,
+        key: Array,
+        handler: RunHandler,
+        dataset: ClusteringDataset,
+        lgm: DiagonalLGM,
+        lgm_params: Array,
+        logger: Logger,
+        epoch_offset: int,
+        mix: AnalyticMixture[Normal[Diagonal]],
+        params0: Array,
+    ) -> Array:
+        """Train diagonal GMM params on projected latent data (LGM fixed).
+
+        Convenience wrapper: precomputes latent projections then calls
+        train_on_projections for self.n_epochs epochs.
+        """
+        log.info("Precomputing latent projections for all training data")
+        latent_locations = self.project_data(lgm, lgm_params, dataset.train_data)
+        log.info(
+            f"Training mixture with conjugation-aware EM for {self.n_epochs} epochs"
+        )
+        return self.train_on_projections(key, latent_locations, mix, params0)
 
 
 class ProjectionHMoGModel(
@@ -266,11 +354,14 @@ class ProjectionHMoGModel(
 
     Trains in two phases:
     1. Use PreTrainer to learn a Linear Gaussian Model (LGM)
-    2. Project data to latent space using the trained LGM
-    3. Train a mixture model on the projected data
+    2. Project data to latent space, train a standalone diagonal GMM
+    3. Assemble into AnalyticHMoG via join_conjugated for correct conjugation
+
+    Evaluations use the AnalyticHMoG which correctly accounts for conjugation.
     """
 
     manifold: DiagonalHMoG
+    analytic_manifold: AnalyticHMoG[Diagonal]
     pre: LGMPreTrainer
     projection: ProjectionTrainer
     lgm_noise_scale: float
@@ -298,6 +389,13 @@ class ProjectionHMoGModel(
             n_components=n_clusters,
         )
 
+        self.analytic_manifold = analytic_hmog(
+            obs_dim=data_dim,
+            obs_rep=Diagonal(),
+            lat_dim=latent_dim,
+            n_components=n_clusters,
+        )
+
         self.pre = pre
         self.projection = pro
         self.lgm_noise_scale = lgm_noise_scale
@@ -305,7 +403,7 @@ class ProjectionHMoGModel(
         self.analyses_config = analyses
 
         log.info(
-            f"Initialized Projection DiagonalHMoG model with dimension {self.manifold.dim}."
+            f"Initialized Projection DiagonalHMoG model with dimension {self.analytic_manifold.dim}."
         )
 
     # Properties
@@ -327,6 +425,8 @@ class ProjectionHMoGModel(
     @property
     @override
     def n_parameters(self) -> int:
+        # Use DiagonalHMoG dim (free params) rather than AnalyticHMoG dim
+        # (which includes zero off-diagonal elements from the embedding)
         return self.manifold.dim
 
     # Initialization
@@ -336,8 +436,13 @@ class ProjectionHMoGModel(
         key_lgm, key_mix = jax.random.split(key)
         lgm_params = self._initialize_lgm(key_lgm, data)
         mix_params = self._initialize_mixture(key_mix)
-        obs_params, int_params, _ = self.manifold.lwr_hrm.split_coords(lgm_params)
-        return self.manifold.join_coords(obs_params, int_params, mix_params)
+        return to_analytic_params(
+            self.manifold.lwr_hrm,
+            self.manifold.pst_man,
+            self.analytic_manifold,
+            lgm_params,
+            mix_params,
+        )
 
     def _initialize_lgm(self, key: Array, data: Array) -> Array:
         lgm = self.manifold.lwr_hrm
@@ -363,26 +468,46 @@ class ProjectionHMoGModel(
 
     @override
     def log_likelihood(self, params: Array, data: Array) -> float:
-        return float(self.manifold.average_log_observable_density(params, data))
+        return float(self.analytic_manifold.average_log_observable_density(params, data))
 
     @override
     def posterior_soft_assignments(self, params: Array, data: Array) -> Array:
         return jax.lax.map(
-            lambda x: self.manifold.posterior_soft_assignments(params, x),
+            lambda x: self.analytic_manifold.posterior_assignments(params, x),
             data,
             batch_size=2048,
         )
 
     @override
     def compute_cluster_prototypes(self, params: Array) -> list[Array]:
-        from .analyses.base import get_component_prototypes
+        # Recover actual prior mixture params (stored as prior - rho; add rho back)
+        lkl_params, lat_stored = self.analytic_manifold.split_conjugated(params)
+        rho = self.analytic_manifold.conjugation_parameters(lkl_params)
+        full_mix_params = lat_stored + rho  # actual AnalyticMixture[FullNormal] params
 
-        return get_component_prototypes(self.manifold, params)
+        comp_lats, _ = self.analytic_manifold.upr_hrm.split_natural_mixture(full_mix_params)
+
+        ana_lgm = self.analytic_manifold.lwr_hrm
+        prototypes: list[Array] = []
+
+        for i in range(self.analytic_manifold.upr_hrm.n_categories):
+            comp_lat_params = self.analytic_manifold.upr_hrm.cmp_man.get_replicate(
+                comp_lats, i
+            )
+            lwr_hrm_params = ana_lgm.join_conjugated(lkl_params, comp_lat_params)
+            lwr_hrm_means = ana_lgm.to_mean(lwr_hrm_params)
+            lwr_hrm_obs = ana_lgm.split_coords(lwr_hrm_means)[0]
+            obs_means = ana_lgm.obs_man.split_mean_second_moment(lwr_hrm_obs)[0]
+            prototypes.append(obs_means)
+
+        return prototypes
 
     @override
     def cluster_assignments(self, params: Array, data: Array) -> Array:
         return jax.lax.map(
-            lambda x: self.manifold.posterior_hard_assignment(params, x),
+            lambda x: jnp.argmax(
+                self.analytic_manifold.posterior_assignments(params, x)
+            ),
             data,
             batch_size=2048,
         )
@@ -425,7 +550,7 @@ class ProjectionHMoGModel(
 
     @override
     def generate(self, params: Array, key: Array, n_samples: int) -> Array:
-        return self.manifold.observable_sample(key, params, n_samples)
+        return self.analytic_manifold.observable_sample(key, params, n_samples)
 
     @override
     def analyze(
@@ -481,35 +606,72 @@ class ProjectionHMoGModel(
                 lgm_params,
             )
             epoch += self.pre.n_epochs
-            # Save intermediate LGM as full model params
+            # Save intermediate state as AnalyticHMoG params
             mix_params = self._initialize_mixture(key_proj)
-            obs_params, int_params, _ = lgm.split_coords(lgm_params)
-            full_params = self.manifold.join_coords(obs_params, int_params, mix_params)
+            full_params = to_analytic_params(
+                lgm, mixture, self.analytic_manifold, lgm_params, mix_params
+            )
             handler.save_params(full_params, epoch)
 
         # Phase 2: Train the mixture model on projected data
         if self.projection.n_epochs > 0:
             log.info("Phase 2: Training mixture model on projected data")
 
-            mix_params = self._initialize_mixture(key_proj)
-
-            trained_mix_params = self.projection.train(
-                key_proj,
-                handler,
-                dataset,
-                lgm,
-                lgm_params,
-                logger,
-                epoch,
-                mixture,
-                self.manifold,
-                mix_params,
+            mix_params = self.projection.kmeans_init(
+                lgm, lgm_params, dataset.train_data, mixture
             )
 
-            final_params = to_differentiable(
-                lgm, self.manifold, lgm_params, trained_mix_params
+            # Verify initial HMoG LL is finite before training
+            initial_hmog = to_analytic_params(
+                lgm, mixture, self.analytic_manifold, lgm_params, mix_params
+            )
+            initial_ll = float(
+                self.analytic_manifold.average_log_observable_density(
+                    initial_hmog, dataset.test_data[:500]
+                )
+            )
+            log.info(f"Initial HMoG LL (before phase-2 training): {initial_ll:.4f}")
+
+            # Precompute latent projections once for all chunks
+            log.info("Precomputing latent projections for all training data")
+            latent_locations = self.projection.project_data(
+                lgm, lgm_params, dataset.train_data
             )
 
+            # Train in Python chunks so we can log HMoG LL periodically.
+            # Each chunk runs log_freq epochs via fori_loop (JIT-compiled),
+            # then we assemble AnalyticHMoG params via join_conjugated and log LL.
+            log_freq = max(self.projection.n_epochs // 10, 1)
+            log.info(
+                f"Training mixture with conjugation-aware EM for {self.projection.n_epochs} epochs (logging every {log_freq})"
+            )
+
+            for chunk_start in range(0, self.projection.n_epochs, log_freq):
+                n_chunk = min(log_freq, self.projection.n_epochs - chunk_start)
+                key_proj, key_chunk = jax.random.split(key_proj)
+                mix_params = self.projection.train_on_projections(
+                    key_chunk, latent_locations, mixture, mix_params, n_epochs=n_chunk
+                )
+                chunk_epoch = jnp.array(epoch + chunk_start + n_chunk)
+                hmog_params = to_analytic_params(
+                    lgm, mixture, self.analytic_manifold, lgm_params, mix_params
+                )
+                train_ll = self.analytic_manifold.average_log_observable_density(
+                    hmog_params, dataset.train_data[:2000]
+                )
+                test_ll = self.analytic_manifold.average_log_observable_density(
+                    hmog_params, dataset.test_data[:500]
+                )
+                metrics: MetricDict = {}
+                add_ll_metrics(
+                    metrics, self.n_parameters, train_ll, test_ll,
+                    dataset.train_data.shape[0]
+                )
+                logger.log_metrics(metrics, chunk_epoch)
+
+            final_params = to_analytic_params(
+                lgm, mixture, self.analytic_manifold, lgm_params, mix_params
+            )
             final_epoch = epoch + self.projection.n_epochs
 
             self.process_checkpoint(
