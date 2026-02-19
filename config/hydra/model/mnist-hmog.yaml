@@ -5,8 +5,7 @@ defaults:
 latent_dim: 50
 n_clusters: 200
 
-lr_scales: [1,0.2,0.1]
-num_cycles: 5
+num_cycles: 2
 
 lgm_noise_scale: 0.01
 mix_noise_scale: 0.01
@@ -21,8 +20,8 @@ mix:
   n_epochs: 0
 
 full:
-  lr: 3e-4
-  n_epochs: 100
+  lr: 1e-4
+  n_epochs: 500
   batch_steps: 1000
   grad_clip: 1
   min_prob: 1e-5
