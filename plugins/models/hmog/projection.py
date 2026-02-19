@@ -30,6 +30,7 @@ from jax import Array
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
+from apps.interface.clustering import cluster_accuracy, clustering_nmi
 from apps.interface.clustering.analyses import (
     ClusterStatisticsAnalysis,
     CoAssignmentHierarchyAnalysis,
@@ -43,7 +44,6 @@ from apps.interface.clustering.protocols import (
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
-from apps.interface.clustering import cluster_accuracy, clustering_nmi
 from apps.runtime.metrics import add_clustering_metrics, add_ll_metrics
 from apps.runtime.util import MetricDict
 
@@ -117,6 +117,16 @@ class ProjectionTrainer:
     lat_min_var: float = 1e-6
     lat_jitter_var: float = 0.0
 
+    # Optimizer behaviour
+    reset_optimizer_each_epoch: bool = True
+    """Reset Adam state at the start of each epoch (each new E-step).
+
+    Prevents stale momentum from one E-step's gradient direction carrying over
+    into the next E-step when the posterior landscape has shifted.  Particularly
+    useful with large batch_steps, where Adam can accumulate significant momentum
+    between E-step refreshes.
+    """
+
     def project_data(self, lgm: FactorAnalysis, params: Array, data: Array) -> Array:
         """Project data to the latent space using the LGM posterior means."""
 
@@ -162,7 +172,9 @@ class ProjectionTrainer:
         rho = lgm.conjugation_parameters(lkl_params)  # FullNormal natural params
         # Extract diagonal elements from upper-triangular precision part of rho
         rho_second_flat = rho[lat_dim:]
-        diag_indices = jnp.array([i * lat_dim - i * (i - 1) // 2 for i in range(lat_dim)])
+        diag_indices = jnp.array(
+            [i * lat_dim - i * (i - 1) // 2 for i in range(lat_dim)]
+        )
         rho_second = rho_second_flat[diag_indices]  # shape (lat_dim,)
         # Use 10x safety margin below the validity boundary
         safe_var = 0.1 / (jnp.abs(rho_second) + 1e-10)
@@ -192,7 +204,9 @@ class ProjectionTrainer:
         """Apply bounds to posterior statistics for numerical stability."""
         comp_means, prob_means = model.split_mean_mixture(means)
         bounded_comp_means = model.cmp_man.map(
-            lambda m: model.obs_man.regularize_covariance(m, self.lat_jitter_var, self.lat_min_var),
+            lambda m: model.obs_man.regularize_covariance(
+                m, self.lat_jitter_var, self.lat_min_var
+            ),
             comp_means,
             flatten=True,
         )
@@ -290,6 +304,11 @@ class ProjectionTrainer:
             carry: tuple[optax.OptState, Array, Array],
         ) -> tuple[optax.OptState, Array, Array]:
             opt_state, mix_params, epoch_key = carry
+
+            # Optionally reset optimizer state so stale momentum from the
+            # previous E-step does not bias this epoch's M-steps.
+            if self.reset_optimizer_each_epoch:
+                opt_state = optimizer.init(mix_params)
 
             shuffle_key, next_key = jax.random.split(epoch_key)
 
@@ -460,7 +479,9 @@ class ProjectionHMoGModel(
 
     @override
     def log_likelihood(self, params: Array, data: Array) -> float:
-        return float(self.analytic_manifold.average_log_observable_density(params, data))
+        return float(
+            self.analytic_manifold.average_log_observable_density(params, data)
+        )
 
     @override
     def posterior_soft_assignments(self, params: Array, data: Array) -> Array:
@@ -477,7 +498,9 @@ class ProjectionHMoGModel(
         rho = self.analytic_manifold.conjugation_parameters(lkl_params)
         full_mix_params = lat_stored + rho  # actual AnalyticMixture[FullNormal] params
 
-        comp_lats, _ = self.analytic_manifold.upr_hrm.split_natural_mixture(full_mix_params)
+        comp_lats, _ = self.analytic_manifold.upr_hrm.split_natural_mixture(
+            full_mix_params
+        )
 
         ana_lgm = self.analytic_manifold.lwr_hrm
         prototypes: list[Array] = []
@@ -656,12 +679,19 @@ class ProjectionHMoGModel(
                 )
                 metrics: MetricDict = {}
                 add_ll_metrics(
-                    metrics, self.n_parameters, train_ll, test_ll,
-                    dataset.train_data.shape[0]
+                    metrics,
+                    self.n_parameters,
+                    train_ll,
+                    test_ll,
+                    dataset.train_data.shape[0],
                 )
                 if dataset.has_labels:
-                    train_clusters = self.cluster_assignments(hmog_params, dataset.train_data)
-                    test_clusters = self.cluster_assignments(hmog_params, dataset.test_data)
+                    train_clusters = self.cluster_assignments(
+                        hmog_params, dataset.train_data
+                    )
+                    test_clusters = self.cluster_assignments(
+                        hmog_params, dataset.test_data
+                    )
                     add_clustering_metrics(
                         metrics,
                         n_clusters=self.n_clusters,
