@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, override
+from typing import Any, TypeAlias, cast, override
 
 import jax
 import jax.numpy as jnp
@@ -26,6 +26,7 @@ from goal.models import (
     Normal,
     NormalCovarianceEmbedding,
     analytic_hmog,
+    full_normal,
 )
 from jax import Array
 
@@ -44,13 +45,23 @@ from apps.interface.clustering.protocols import (
     HasSoftAssignments,
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
-from apps.runtime import Logger, RunHandler, add_clustering_metrics, add_ll_metrics, log_with_frequency
+from apps.runtime import (
+    Logger,
+    RunHandler,
+    add_clustering_metrics,
+    add_ll_metrics,
+    log_with_frequency,
+)
 from apps.runtime.util import MetricDict
 
 from .trainers import LGMPreTrainer
 
 # Start logger
 log = logging.getLogger(__name__)
+
+LatentMixture: TypeAlias = (
+    AnalyticMixture[Normal[Diagonal]] | AnalyticMixture[FullNormal]
+)
 
 
 def embed_to_full_mix(
@@ -74,12 +85,13 @@ def embed_to_full_mix(
 
 def to_analytic_params(
     lgm: FactorAnalysis,
-    diag_mix: AnalyticMixture[Normal[Diagonal]],
+    lat_mix: LatentMixture,
     analytic_manifold: AnalyticHMoG[Diagonal],
     lgm_params: Array,
     mix_params: Array,
+    diagonal_latent: bool = True,
 ) -> Array:
-    """Assemble AnalyticHMoG params from LGM params and diagonal GMM params.
+    """Assemble AnalyticHMoG params from LGM params and latent GMM params.
 
     Uses join_conjugated to correctly account for the conjugation correction,
     ensuring the effective prior in the HMoG equals mix_params (not mix_params + rho).
@@ -88,7 +100,14 @@ def to_analytic_params(
     """
     obs_params, int_params, _ = lgm.split_coords(lgm_params)
     lkl_params = jnp.concatenate([obs_params, int_params])
-    full_mix_params = embed_to_full_mix(diag_mix, analytic_manifold.upr_hrm, mix_params)
+    if diagonal_latent:
+        full_mix_params = embed_to_full_mix(
+            cast(AnalyticMixture[Normal[Diagonal]], lat_mix),
+            analytic_manifold.upr_hrm,
+            mix_params,
+        )
+    else:
+        full_mix_params = mix_params  # already FullNormal space
     return analytic_manifold.join_conjugated(lkl_params, full_mix_params)
 
 
@@ -109,7 +128,6 @@ class ProjectionTrainer:
     grad_clip: float = 1.0
 
     # Regularization parameters
-    l1_reg: float = 0.0
     l2_reg: float = 0.0
 
     # Parameter bounds
@@ -137,9 +155,7 @@ class ProjectionTrainer:
 
         return jax.lax.map(posterior_mean, data, batch_size=256)
 
-    def bound_mixture_means(
-        self, model: AnalyticMixture[Normal[Diagonal]], means: Array
-    ) -> Array:
+    def bound_mixture_means(self, model: LatentMixture, means: Array) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
         comp_means, prob_means = model.split_mean_mixture(means)
         bounded_comp_means = model.cmp_man.map(
@@ -156,16 +172,14 @@ class ProjectionTrainer:
         return model.join_mean_mixture(bounded_comp_means, bounded_prob_means)
 
     def make_regularizer(self, mix_params: Array) -> Array:
-        """Compute L1 + L2 regularization gradient."""
-        l1_grad = self.l1_reg * jnp.sign(mix_params)
-        l2_grad = self.l2_reg * 2.0 * mix_params
-        return l1_grad + l2_grad
+        """Compute L2 regularization gradient."""
+        return self.l2_reg * 2.0 * mix_params
 
     def train_on_projections(
         self,
         key: Array,
         latent_locations: Array,
-        mix: AnalyticMixture[Normal[Diagonal]],
+        mix: LatentMixture,
         params0: Array,
         n_epochs: int | None = None,
         log_callback: Callable[[Array, Array], None] | None = None,
@@ -280,7 +294,7 @@ class ProjectionTrainer:
         lgm_params: Array,
         logger: Logger,
         epoch_offset: int,
-        mix: AnalyticMixture[Normal[Diagonal]],
+        mix: LatentMixture,
         params0: Array,
     ) -> Array:
         """Train diagonal GMM params on projected latent data (LGM fixed).
@@ -314,8 +328,9 @@ class ProjectionHMoGModel(
     """
 
     lgm: FactorAnalysis
-    mixture: AnalyticMixture[Normal[Diagonal]]
+    mixture: LatentMixture
     analytic_manifold: AnalyticHMoG[Diagonal]
+    diagonal_latent: bool
     pre: LGMPreTrainer
     projection: ProjectionTrainer
     lgm_noise_scale: float
@@ -332,14 +347,22 @@ class ProjectionHMoGModel(
         lgm_noise_scale: float,
         mix_noise_scale: float,
         analyses: ClusteringAnalysesConfig,
+        diagonal_latent: bool = True,
     ) -> None:
         super().__init__()
 
         self.lgm = FactorAnalysis(obs_dim=data_dim, lat_dim=latent_dim)
-        self.mixture = AnalyticMixture(
-            obs_man=Normal(latent_dim, Diagonal()),
-            n_categories=n_clusters,
-        )
+        self.diagonal_latent = diagonal_latent
+        if diagonal_latent:
+            self.mixture = AnalyticMixture(
+                obs_man=Normal(latent_dim, Diagonal()),
+                n_categories=n_clusters,
+            )
+        else:
+            self.mixture = AnalyticMixture(
+                obs_man=full_normal(latent_dim),
+                n_categories=n_clusters,
+            )
 
         self.analytic_manifold = analytic_hmog(
             obs_dim=data_dim,
@@ -392,6 +415,7 @@ class ProjectionHMoGModel(
             self.analytic_manifold,
             lgm_params,
             mix_params,
+            diagonal_latent=self.diagonal_latent,
         )
 
     def _initialize_lgm(self, key: Array, data: Array) -> Array:
@@ -427,7 +451,7 @@ class ProjectionHMoGModel(
         return jax.lax.map(
             lambda x: self.analytic_manifold.posterior_assignments(params, x),
             data,
-            batch_size=2048,
+            batch_size=256,
         )
 
     @override
@@ -463,7 +487,7 @@ class ProjectionHMoGModel(
                 self.analytic_manifold.posterior_assignments(params, x)
             ),
             data,
-            batch_size=2048,
+            batch_size=256,
         )
 
     @override
@@ -563,7 +587,12 @@ class ProjectionHMoGModel(
             # Save intermediate state as AnalyticHMoG params
             mix_params = self._initialize_mixture(key_proj)
             full_params = to_analytic_params(
-                lgm, mixture, self.analytic_manifold, lgm_params, mix_params
+                lgm,
+                mixture,
+                self.analytic_manifold,
+                lgm_params,
+                mix_params,
+                diagonal_latent=self.diagonal_latent,
             )
             handler.save_params(full_params, epoch)
 
@@ -587,13 +616,18 @@ class ProjectionHMoGModel(
             def log_proj(mix_ps: Array, ep: Array) -> None:
                 def compute_metrics() -> MetricDict:
                     hmog_params = to_analytic_params(
-                        lgm, mixture, self.analytic_manifold, lgm_params, mix_ps
+                        lgm,
+                        mixture,
+                        self.analytic_manifold,
+                        lgm_params,
+                        mix_ps,
+                        diagonal_latent=self.diagonal_latent,
                     )
                     train_ll = self.analytic_manifold.average_log_observable_density(
-                        hmog_params, dataset.train_data
+                        hmog_params, dataset.train_data, batch_size=256
                     )
                     test_ll = self.analytic_manifold.average_log_observable_density(
-                        hmog_params, dataset.test_data
+                        hmog_params, dataset.test_data, batch_size=256
                     )
                     metrics: MetricDict = {}
                     add_ll_metrics(
@@ -635,7 +669,12 @@ class ProjectionHMoGModel(
             )
 
             final_params = to_analytic_params(
-                lgm, mixture, self.analytic_manifold, lgm_params, mix_params
+                lgm,
+                mixture,
+                self.analytic_manifold,
+                lgm_params,
+                mix_params,
+                diagonal_latent=self.diagonal_latent,
             )
             final_epoch = epoch + self.projection.n_epochs
 

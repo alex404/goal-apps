@@ -28,7 +28,7 @@ class PreTrainerConfig:
     grad_clip: float = 8.0
     min_var: float = 1e-5
     jitter_var: float = 0.0
-    epoch_reset: bool = False
+    epoch_reset: bool = True
 
 
 @dataclass
@@ -50,6 +50,7 @@ class GradientTrainerConfig:
     lat_jitter_var: float = 0.0
     upr_prs_reg: float = 1e-3
     lwr_prs_reg: float = 1e-3
+    epoch_reset: bool = True
 
 
 @dataclass
@@ -86,7 +87,6 @@ class MixtureGradientTrainerConfig:
     grad_clip: float = 8.0
 
     # Regularization parameters
-    l1_reg: float = 0
     l2_reg: float = 0
 
     # Parameter bounds for mixture components
@@ -97,7 +97,7 @@ class MixtureGradientTrainerConfig:
     # Precision matrix regularization
     upr_prs_reg: float = 1e-3
     lwr_prs_reg: float = 1e-3
-    epoch_reset: bool = False
+    epoch_reset: bool = True
 
 
 ### Main Configuration ###
@@ -151,13 +151,12 @@ class ProjectionTrainerConfig:
     n_epochs: int = 1000
     batch_size: int | None = None
     batch_steps: int = 1000
-    l1_reg: float = 0
     l2_reg: float = 0
     grad_clip: float = 1.0
     min_prob: float = 1e-4
     lat_min_var: float = 1e-6
     lat_jitter_var: float = 0.0
-    epoch_reset: bool = False
+    epoch_reset: bool = True
 
 
 @dataclass
@@ -172,6 +171,7 @@ class ProjectionHMoGConfig(ClusteringModelConfig):
     n_clusters: int = 10
     lgm_noise_scale: float = 0.01
     mix_noise_scale: float = 0.01
+    diagonal_latent: bool = True
 
     # Training configuration
     pre: PreTrainerConfig = field(default=MISSING)
@@ -183,6 +183,14 @@ class ProjectionHMoGConfig(ClusteringModelConfig):
     defaults: list[Any] = field(
         default_factory=lambda: [{"pre": "gradient_pre"}, "_self_"]
     )
+
+
+@dataclass
+class ProjectionFullHMoGConfig(ProjectionHMoGConfig):
+    """ProjectionHMoG with full (PositiveDefinite) latent covariance."""
+
+    _target_: str = "plugins.models.hmog.projection.ProjectionHMoGModel"
+    diagonal_latent: bool = False
 
 
 ### Config Registration ###
@@ -198,3 +206,4 @@ cs.store(group="model/full", name="gradient_full", node=FullGradientTrainerConfi
 # Register model configs
 cs.store(group="model", name="hmog", node=DifferentiableHMoGConfig)
 cs.store(group="model", name="hmog_proj", node=ProjectionHMoGConfig)
+cs.store(group="model", name="hmog_proj_full", node=ProjectionFullHMoGConfig)

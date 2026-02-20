@@ -165,7 +165,7 @@ class FullGradientTrainer:
     from accumulating over many training steps, improving stability.
     """
 
-    epoch_reset: bool = False
+    epoch_reset: bool = True
 
     def bound_means(
         self,
@@ -493,7 +493,7 @@ class LGMPreTrainer:
     min_var: float
     jitter_var: float
 
-    epoch_reset: bool = False
+    epoch_reset: bool = True
 
     def bound_means(self, model: DiagonalLGM, means: Array) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
@@ -720,7 +720,6 @@ class MixtureGradientTrainer:
     grad_clip: float
 
     # Regularization parameters
-    l1_reg: float
     l2_reg: float
 
     # Parameter bounds
@@ -739,7 +738,7 @@ class MixtureGradientTrainer:
     from accumulating over many training steps, improving stability.
     """
 
-    epoch_reset: bool = False
+    epoch_reset: bool = True
 
     def precompute_observable_mappings(
         self,

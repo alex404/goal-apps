@@ -114,7 +114,7 @@ class GradientTrainer:
     batch_size: int | None = None
     """Batch size (None = full batch)."""
 
-    batch_steps: int = 1
+    batch_steps: int = 1000
     """Number of gradient steps per batch."""
 
     grad_clip: float = 1.0
@@ -152,7 +152,7 @@ class GradientTrainer:
     lat_jitter_var: float = 0.0
     """Jitter for latent variance (currently unused - latents reset to standard normal)."""
 
-    epoch_reset: bool = False
+    epoch_reset: bool = True
     """Reset optimizer state at the start of each epoch."""
 
     def bound_means(self, mfa: MFA, means: Array) -> Array:

@@ -25,7 +25,7 @@ class GradientTrainerConfig:
     batch_size: int | None = None
     """Batch size (None = full batch)."""
 
-    batch_steps: int = 1
+    batch_steps: int = 1000
     """Number of gradient steps per batch."""
 
     grad_clip: float = 1.0
@@ -63,7 +63,7 @@ class GradientTrainerConfig:
     lat_jitter_var: float = 0.0
     """Jitter to add to latent variance."""
 
-    epoch_reset: bool = False
+    epoch_reset: bool = True
     """Reset optimizer state at the start of each epoch."""
 
 
