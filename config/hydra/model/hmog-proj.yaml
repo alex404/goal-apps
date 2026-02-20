@@ -22,6 +22,7 @@ pro:
   batch_steps: 1000
   grad_clip: 1
   min_prob: 1e-5
+  l1_reg: 1e-4
   l2_reg: 1e-4
   lat_min_var: 1e-6
   lat_jitter_var: 0

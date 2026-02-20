@@ -15,8 +15,6 @@ from goal.models.graphical.mixture import (
     CompleteMixtureOfSymmetric,
 )
 from goal.models.harmonium.lgm import NormalLGM
-
-from .types import MFA
 from jax import Array
 from sklearn.cluster import KMeans
 
@@ -38,6 +36,7 @@ from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
 
 from .trainers import GradientTrainer
+from .types import MFA
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +103,6 @@ class MFAModel(
             self.mfa = CompleteMixtureOfSymmetric(
                 n_categories=n_clusters, bas_hrm=base_fa
             )
-
 
     # Properties
 

@@ -109,6 +109,7 @@ class ProjectionTrainer:
     grad_clip: float = 1.0
 
     # Regularization parameters
+    l1_reg: float = 0.0
     l2_reg: float = 0.0
 
     # Parameter bounds
@@ -155,8 +156,10 @@ class ProjectionTrainer:
         return model.join_mean_mixture(bounded_comp_means, bounded_prob_means)
 
     def make_regularizer(self, mix_params: Array) -> Array:
-        """Compute L2 regularization gradient."""
-        return self.l2_reg * 2.0 * mix_params
+        """Compute L1 + L2 regularization gradient."""
+        l1_grad = self.l1_reg * jnp.sign(mix_params)
+        l2_grad = self.l2_reg * 2.0 * mix_params
+        return l1_grad + l2_grad
 
     def train_on_projections(
         self,
