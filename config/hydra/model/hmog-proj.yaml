@@ -9,9 +9,9 @@ n_clusters: 20
 pre:
   lr: 1e-4
   n_epochs: 1000
-  batch_steps: 100
+  batch_steps: 1000
   l1_reg: 0
-  l2_reg: 0
+  l2_reg: 1e-4
   grad_clip: 1
   min_var: 1e-5
   jitter_var: 0
@@ -19,8 +19,9 @@ pre:
 pro:
   lr: 1e-4
   n_epochs: 1000
-  batch_steps: 100
+  batch_steps: 1000
   grad_clip: 1
-  min_prob: 1e-4
+  min_prob: 1e-5
+  l2_reg: 1e-4
   lat_min_var: 1e-6
   lat_jitter_var: 0
