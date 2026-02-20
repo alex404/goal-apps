@@ -22,11 +22,12 @@ mix:
 full:
   lr: 1e-4
   n_epochs: 1000
-  batch_steps: 1000
+  batch_steps: 1
+  batch_size: 128
   grad_clip: 1
   min_prob: 1e-5
-  obs_min_var: 1e-6
-  lat_min_var: 1e-6
+  obs_min_var: 1e-5
+  lat_min_var: 1e-5
   l1_reg: 0
   l2_reg: 1e-4
   upr_prs_reg: 3e-4

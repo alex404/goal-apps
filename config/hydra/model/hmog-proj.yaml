@@ -11,8 +11,8 @@ pre:
   n_epochs: 500
   batch_steps: 1
   batch_size: 128
-  l1_reg: 1e-3
-  l2_reg: 1e-3
+  l1_reg: 0
+  l2_reg: 1e-4
   grad_clip: 1
   min_var: 1e-5
   jitter_var: 0
@@ -24,7 +24,7 @@ pro:
   batch_steps: 1000
   grad_clip: 1
   min_prob: 1e-5
-  l2_reg: 1e-3
+  l2_reg: 1e-4
   lat_min_var: 1e-5
   lat_jitter_var: 0
   epoch_reset: false
