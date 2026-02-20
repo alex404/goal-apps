@@ -151,7 +151,6 @@ class ProjectionTrainerConfig:
     n_epochs: int = 1000
     batch_size: int | None = None
     batch_steps: int = 1000
-    l1_reg: float = 0
     l2_reg: float = 0
     grad_clip: float = 1.0
     min_prob: float = 1e-4

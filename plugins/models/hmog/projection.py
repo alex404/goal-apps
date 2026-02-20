@@ -10,6 +10,7 @@ Trains in two phases:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, override
 
@@ -43,8 +44,7 @@ from apps.interface.clustering.protocols import (
     HasSoftAssignments,
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
-from apps.runtime import Logger, RunHandler
-from apps.runtime.metrics import add_clustering_metrics, add_ll_metrics
+from apps.runtime import Logger, RunHandler, add_clustering_metrics, add_ll_metrics, log_with_frequency
 from apps.runtime.util import MetricDict
 
 from .trainers import LGMPreTrainer
@@ -109,7 +109,6 @@ class ProjectionTrainer:
     grad_clip: float = 1.0
 
     # Regularization parameters
-    l1_reg: float = 0.0
     l2_reg: float = 0.0
 
     # Parameter bounds
@@ -137,67 +136,6 @@ class ProjectionTrainer:
 
         return jax.lax.map(posterior_mean, data, batch_size=256)
 
-    def kmeans_init(
-        self,
-        lgm: FactorAnalysis,
-        lgm_params: Array,
-        data: Array,
-        mix: AnalyticMixture[Normal[Diagonal]],
-    ) -> Array:
-        """Initialize mixture parameters using k-means on projected data.
-
-        Uses conjugation-safe component variance: the HMoG prior second-order =
-        mix_η₂ + ρ_second must be negative, so var_k < 1/(2 * max(ρ_second)).
-        """
-        import numpy as np
-        from sklearn.cluster import KMeans
-
-        log.info("Initializing mixture with k-means on projected data")
-        projected = self.project_data(lgm, lgm_params, data)
-        data_np = np.array(projected)
-
-        n_clusters = mix.n_categories
-        lat_dim = mix.obs_man.data_dim
-
-        kmeans = KMeans(n_clusters=n_clusters, n_init=10)  # pyright: ignore[reportArgumentType]
-        kmeans.fit(data_np)
-
-        centers = jnp.array(kmeans.cluster_centers_)
-        labels = kmeans.labels_
-
-        # Compute conjugation constraint: valid HMoG prior requires
-        # mix_η₂_i < -ρ_second_i, i.e. var_k_i < 1/(2 * ρ_second_i)
-        obs_params, int_params, _ = lgm.split_coords(lgm_params)
-        lkl_params = jnp.concatenate([obs_params, int_params])
-        rho = lgm.conjugation_parameters(lkl_params)  # FullNormal natural params
-        # Extract diagonal elements from upper-triangular precision part of rho
-        rho_second_flat = rho[lat_dim:]
-        diag_indices = jnp.array(
-            [i * lat_dim - i * (i - 1) // 2 for i in range(lat_dim)]
-        )
-        rho_second = rho_second_flat[diag_indices]  # shape (lat_dim,)
-        # Use 10x safety margin below the validity boundary
-        safe_var = 0.1 / (jnp.abs(rho_second) + 1e-10)
-        log.info(
-            f"Conjugation-safe var range: {float(jnp.min(safe_var)):.2e} - {float(jnp.max(safe_var)):.2e}"
-        )
-
-        comp_means_list = []
-        for k in range(n_clusters):
-            mu_k = centers[k]
-            # Use conjugation-safe variance (not empirical variance)
-            var_k = safe_var
-            comp_means_list.append(jnp.concatenate([mu_k, var_k + mu_k**2]))
-
-        comp_means = jnp.concatenate(comp_means_list)
-        sizes = jnp.array(
-            [np.sum(labels == k) for k in range(n_clusters)], dtype=jnp.float32
-        )
-        probs = sizes / sizes.sum()
-        prob_means = mix.lat_man.from_probs(probs)
-
-        return mix.to_natural(mix.join_mean_mixture(comp_means, prob_means))
-
     def bound_mixture_means(
         self, model: AnalyticMixture[Normal[Diagonal]], means: Array
     ) -> Array:
@@ -216,12 +154,6 @@ class ProjectionTrainer:
         bounded_prob_means = model.lat_man.from_probs(bounded_probs)
         return model.join_mean_mixture(bounded_comp_means, bounded_prob_means)
 
-    def prior_statistics(
-        self, mix: AnalyticMixture[Normal[Diagonal]], mix_params: Array
-    ) -> Array:
-        """Compute prior statistics for the M-step gradient."""
-        return mix.to_mean(mix_params)
-
     def make_regularizer(self, mix_params: Array) -> Array:
         """Compute L2 regularization gradient."""
         return self.l2_reg * 2.0 * mix_params
@@ -233,6 +165,8 @@ class ProjectionTrainer:
         mix: AnalyticMixture[Normal[Diagonal]],
         params0: Array,
         n_epochs: int | None = None,
+        log_callback: Callable[[Array, Array], None] | None = None,
+        epoch_offset: int = 0,
     ) -> Array:
         """Run mixture EM on precomputed latent projections for n_epochs epochs.
 
@@ -278,8 +212,7 @@ class ProjectionTrainer:
                 current_opt_state, current_params = carry
 
                 # M-step: natural gradient = prior mean params - posterior mean params
-                prior_stats = self.prior_statistics(mix, current_params)
-                grad = prior_stats - bounded_posterior_stats
+                grad = mix.to_mean(current_params) - bounded_posterior_stats
                 reg_grad = self.make_regularizer(current_params)
                 grad = grad + reg_grad
 
@@ -323,6 +256,9 @@ class ProjectionTrainer:
             (opt_state, new_mix_params), _ = jax.lax.scan(
                 batch_step, (opt_state, mix_params), batched_locs
             )
+
+            if log_callback is not None:
+                log_callback(new_mix_params, epoch + epoch_offset)
 
             return opt_state, new_mix_params, next_key
 
@@ -632,78 +568,68 @@ class ProjectionHMoGModel(
         if self.projection.n_epochs > 0:
             log.info("Phase 2: Training mixture model on projected data")
 
-            mix_params = self.projection.kmeans_init(
-                lgm, lgm_params, dataset.train_data, mixture
-            )
+            key_proj, key_mix_init = jax.random.split(key_proj)
+            mix_params = self._initialize_mixture(key_mix_init)
 
-            # Verify initial HMoG LL is finite before training
-            initial_hmog = to_analytic_params(
-                lgm, mixture, self.analytic_manifold, lgm_params, mix_params
-            )
-            initial_ll = float(
-                self.analytic_manifold.average_log_observable_density(
-                    initial_hmog, dataset.test_data[:500]
-                )
-            )
-            log.info(f"Initial HMoG LL (before phase-2 training): {initial_ll:.4f}")
-
-            # Precompute latent projections once for all chunks
+            # Precompute latent projections once
             log.info("Precomputing latent projections for all training data")
             latent_locations = self.projection.project_data(
                 lgm, lgm_params, dataset.train_data
             )
 
-            # Train in Python chunks so we can log HMoG LL periodically.
-            # Each chunk runs log_freq epochs via fori_loop (JIT-compiled),
-            # then we assemble AnalyticHMoG params via join_conjugated and log LL.
-            log_freq = max(self.projection.n_epochs // 10, 1)
             log.info(
-                f"Training mixture with conjugation-aware EM for {self.projection.n_epochs} epochs (logging every {log_freq})"
+                f"Training mixture with conjugation-aware EM for {self.projection.n_epochs} epochs"
             )
 
-            for chunk_start in range(0, self.projection.n_epochs, log_freq):
-                n_chunk = min(log_freq, self.projection.n_epochs - chunk_start)
-                key_proj, key_chunk = jax.random.split(key_proj)
-                mix_params = self.projection.train_on_projections(
-                    key_chunk, latent_locations, mixture, mix_params, n_epochs=n_chunk
-                )
-                chunk_epoch = jnp.array(epoch + chunk_start + n_chunk)
-                hmog_params = to_analytic_params(
-                    lgm, mixture, self.analytic_manifold, lgm_params, mix_params
-                )
-                train_ll = self.analytic_manifold.average_log_observable_density(
-                    hmog_params, dataset.train_data
-                )
-                test_ll = self.analytic_manifold.average_log_observable_density(
-                    hmog_params, dataset.test_data
-                )
-                metrics: MetricDict = {}
-                add_ll_metrics(
-                    metrics,
-                    self.n_parameters,
-                    train_ll,
-                    test_ll,
-                    dataset.train_data.shape[0],
-                )
-                if dataset.has_labels:
-                    train_clusters = self.cluster_assignments(
+            def log_proj(mix_ps: Array, ep: Array) -> None:
+                def compute_metrics() -> MetricDict:
+                    hmog_params = to_analytic_params(
+                        lgm, mixture, self.analytic_manifold, lgm_params, mix_ps
+                    )
+                    train_ll = self.analytic_manifold.average_log_observable_density(
                         hmog_params, dataset.train_data
                     )
-                    test_clusters = self.cluster_assignments(
+                    test_ll = self.analytic_manifold.average_log_observable_density(
                         hmog_params, dataset.test_data
                     )
-                    add_clustering_metrics(
+                    metrics: MetricDict = {}
+                    add_ll_metrics(
                         metrics,
-                        n_clusters=self.n_clusters,
-                        n_classes=dataset.n_classes,
-                        train_labels=dataset.train_labels,
-                        test_labels=dataset.test_labels,
-                        train_clusters=train_clusters,
-                        test_clusters=test_clusters,
-                        cluster_accuracy_fn=cluster_accuracy,
-                        clustering_nmi_fn=clustering_nmi,
+                        self.n_parameters,
+                        train_ll,
+                        test_ll,
+                        dataset.train_data.shape[0],
                     )
-                logger.log_metrics(metrics, chunk_epoch)
+                    if dataset.has_labels:
+                        train_clusters = self.cluster_assignments(
+                            hmog_params, dataset.train_data
+                        )
+                        test_clusters = self.cluster_assignments(
+                            hmog_params, dataset.test_data
+                        )
+                        add_clustering_metrics(
+                            metrics,
+                            n_clusters=self.n_clusters,
+                            n_classes=dataset.n_classes,
+                            train_labels=dataset.train_labels,
+                            test_labels=dataset.test_labels,
+                            train_clusters=train_clusters,
+                            test_clusters=test_clusters,
+                            cluster_accuracy_fn=cluster_accuracy,
+                            clustering_nmi_fn=clustering_nmi,
+                        )
+                    return metrics
+
+                log_with_frequency(logger, ep, 10, compute_metrics)
+
+            mix_params = self.projection.train_on_projections(
+                key_proj,
+                latent_locations,
+                mixture,
+                mix_params,
+                log_callback=log_proj,
+                epoch_offset=epoch,
+            )
 
             final_params = to_analytic_params(
                 lgm, mixture, self.analytic_manifold, lgm_params, mix_params
