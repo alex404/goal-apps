@@ -1,28 +1,42 @@
-# MNIST two-stage projection experiment configuration
+# Two-stage HMoG: pre-train LGM then train mixture only (LGM frozen).
+# Quantifies the gap from not jointly adapting the LGM to the cluster structure.
 defaults:
-  - hmog_proj
+  - hmog
   - _self_
 
-latent_dim: 20
-n_clusters: 50
+latent_dim: 50
+n_clusters: 20
+
+num_cycles: 1
+lgm_noise_scale: 0.01
+mix_noise_scale: 0.01
 
 pre:
   lr: 1e-4
   n_epochs: 500
   batch_steps: 1000
-  l1_reg: 0
-  l2_reg: 0
+  l1_reg: 1e-3
+  l2_reg: 1e-4
   grad_clip: 1
   min_var: 1e-5
   jitter_var: 0
+  epoch_reset: true
 
-pro:
+lgm:
+  n_epochs: 0
+
+mix:
   lr: 1e-4
-  n_epochs: 1000
+  n_epochs: 500
   batch_steps: 1000
   grad_clip: 1
   min_prob: 1e-5
   lat_min_var: 1e-5
-  l1_reg: 0
-  l2_reg: 0
+  obs_min_var: 1e-5
+  l2_reg: 1e-4
+  upr_prs_reg: 3e-4
+  lwr_prs_reg: 3e-4
   epoch_reset: true
+
+full:
+  n_epochs: 0

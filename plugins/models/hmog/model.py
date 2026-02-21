@@ -13,8 +13,6 @@ from goal.geometry import Diagonal
 from goal.models import differentiable_hmog
 from jax import Array
 
-from .types import DiagonalHMoG
-
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
 from apps.interface.clustering.analyses import (
@@ -38,6 +36,7 @@ from .trainers import (
     LGMPreTrainer,
     MixtureGradientTrainer,
 )
+from .types import DiagonalHMoG
 
 ### Preamble ###
 
@@ -120,7 +119,6 @@ class HMoGModel(
             pst_rep=Diagonal(),
             n_components=n_clusters,
         )
-
 
         self.pre = pre
         self.lgm = lgm
@@ -292,7 +290,9 @@ class HMoGModel(
     ) -> None:
         """Train HMoG model using alternating optimization."""
         # Split PRNG key for different training phases
-        init_key, pre_key, *cycle_keys = jax.random.split(key, self.num_cycles + 2)
+        init_key, pre_key, mix_reinit_key, *cycle_keys = jax.random.split(
+            key, self.num_cycles + 3
+        )
 
         params = self.prepare_model(init_key, handler, dataset.train_data)
 
@@ -319,9 +319,7 @@ class HMoGModel(
 
         if self.pre.n_epochs > epoch:
             obs_params, int_params, lat_params = self.manifold.split_coords(params)
-            lat_obs_params, lat_int_params, cat_params = (
-                self.manifold.pst_man.split_coords(lat_params)
-            )
+            lat_obs_params, _, _ = self.manifold.pst_man.split_coords(lat_params)
             lgm = self.manifold.lwr_hrm
             lgm_params = lgm.join_coords(obs_params, int_params, lat_obs_params)
             # Construct path to the pretrained file
@@ -338,8 +336,16 @@ class HMoGModel(
                 lgm_params,
             )
             obs_params, int_params, lat_obs_params = lgm.split_coords(lgm_params)
+
+            # Re-initialize the mixture-specific params (lat_int and cat) now that
+            # the latent space has settled. The params from before pre-training are
+            # meaningless in the trained latent space and cause analysis crashes.
+            fresh_mix = self.manifold.pst_man.initialize(
+                mix_reinit_key, shape=self.mix_noise_scale
+            )
+            _, fresh_lat_int, fresh_cat = self.manifold.pst_man.split_coords(fresh_mix)
             lat_params = self.manifold.pst_man.join_coords(
-                lat_obs_params, lat_int_params, cat_params
+                lat_obs_params, fresh_lat_int, fresh_cat
             )
             params = self.manifold.join_coords(obs_params, int_params, lat_params)
             epoch = self.pre.n_epochs

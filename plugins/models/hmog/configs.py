@@ -70,6 +70,19 @@ class FullGradientTrainerConfig(GradientTrainerConfig):
 
 
 @dataclass
+class MixtureMaskGradientTrainerConfig(GradientTrainerConfig):
+    """FullGradientTrainer configured to update only mixture parameters.
+
+    Uses the full HMoG gradient but masks out LGM parameter updates,
+    giving the correct mixture gradient without the MixtureGradientTrainer
+    precomputation machinery.
+    """
+
+    _target_: str = "plugins.models.hmog.trainers.FullGradientTrainer"
+    mask_type: str = "MIXTURE"
+
+
+@dataclass
 class MixtureGradientTrainerConfig:
     """Configuration for fixed observable trainer.
 
@@ -157,6 +170,8 @@ class ProjectionTrainerConfig:
     lat_min_var: float = 1e-6
     lat_jitter_var: float = 0.0
     epoch_reset: bool = True
+    upr_prs_reg: float = 1e-3
+    lwr_prs_reg: float = 1e-3
 
 
 @dataclass
@@ -200,7 +215,8 @@ cs = ConfigStore.instance()
 # Register base configs
 cs.store(group="model/pre", name="gradient_pre", node=PreTrainerConfig)
 cs.store(group="model/lgm", name="gradient_lgm", node=LGMGradientTrainerConfig)
-cs.store(group="model/mix", name="gradient_mixture", node=MixtureGradientTrainerConfig)
+cs.store(group="model/mix", name="gradient_mixture", node=MixtureMaskGradientTrainerConfig)
+cs.store(group="model/mix", name="gradient_mixture_legacy", node=MixtureGradientTrainerConfig)
 cs.store(group="model/full", name="gradient_full", node=FullGradientTrainerConfig)
 
 # Register model configs

@@ -129,6 +129,11 @@ class ProjectionTrainer:
 
     # Regularization parameters
     l2_reg: float = 0.0
+    upr_prs_reg: float = 1e-3
+    """Upper bound regularization on precision eigenvalues (trace penalty)."""
+
+    lwr_prs_reg: float = 1e-3
+    """Lower bound regularization on precision eigenvalues (log-det penalty)."""
 
     # Parameter bounds
     min_prob: float = 1e-4
@@ -171,9 +176,36 @@ class ProjectionTrainer:
         bounded_prob_means = model.lat_man.from_probs(bounded_probs)
         return model.join_mean_mixture(bounded_comp_means, bounded_prob_means)
 
-    def make_regularizer(self, mix_params: Array) -> Array:
-        """Compute L2 regularization gradient."""
-        return self.l2_reg * 2.0 * mix_params
+    def make_regularizer(self, mix: LatentMixture) -> Callable[[Array], Array]:
+        """Create regularization gradient function for the latent mixture.
+
+        Combines L2 regularization with precision eigenvalue regularization:
+            R = l2_reg * ||params||^2
+              + upr_prs_reg * sum_k tr(Lambda_k)       (trace penalty: caps large precisions)
+              - lwr_prs_reg * sum_k log|Lambda_k|       (log-det penalty: prevents collapse)
+
+        Equilibrium eigenvalue: lambda* = lwr_prs_reg / upr_prs_reg.
+        When both equal, all component variances are pushed toward 1.
+        """
+
+        def loss(params: Array) -> Array:
+            l2_loss = self.l2_reg * jnp.sum(jnp.square(params))
+
+            comp_params, _ = mix.split_natural_mixture(params)
+
+            def comp_prs_loss(comp: Array) -> Array:
+                _, prs = mix.obs_man.split_location_precision(comp)
+                prs_dense = mix.obs_man.cov_man.to_matrix(prs)
+                trace = jnp.trace(prs_dense)
+                logdet = jnp.linalg.slogdet(prs_dense)[1]
+                return self.upr_prs_reg * trace - self.lwr_prs_reg * logdet
+
+            prs_losses = mix.cmp_man.map(comp_prs_loss, comp_params)
+            prs_loss = jnp.sum(prs_losses)
+
+            return l2_loss + prs_loss
+
+        return jax.grad(loss)
 
     def train_on_projections(
         self,
@@ -212,6 +244,8 @@ class ProjectionTrainer:
             batch_size = self.batch_size
             n_batches = latent_locations.shape[0] // batch_size
 
+        reg_fn = self.make_regularizer(mix)
+
         def batch_step(
             carry: tuple[optax.OptState, Array],
             batch_locs: Array,
@@ -230,7 +264,7 @@ class ProjectionTrainer:
 
                 # M-step: natural gradient = prior mean params - posterior mean params
                 grad = mix.to_mean(current_params) - bounded_posterior_stats
-                reg_grad = self.make_regularizer(current_params)
+                reg_grad = reg_fn(current_params)
                 grad = grad + reg_grad
 
                 updates, new_opt_state = optimizer.update(
@@ -438,6 +472,21 @@ class ProjectionHMoGModel(
     def _initialize_mixture(self, key: Array) -> Array:
         return self.mixture.initialize(key, shape=self.mix_noise_scale)
 
+    def _recover_lgm_and_mix_params(self, params: Array) -> tuple[Array, Array]:
+        """Recover (lgm_params, full_mix_params) from assembled HMoG params.
+
+        For Factor Analysis the latent prior is standard normal by definition,
+        so we reconstruct lgm_params from the likelihood parameters (obs, int)
+        plus a fresh standard-normal prior.  The full_mix_params are recovered
+        by undoing the conjugation correction stored in the HMoG params.
+        """
+        lkl_params, lat_stored = self.analytic_manifold.split_conjugated(params)
+        rho = self.analytic_manifold.conjugation_parameters(lkl_params)
+        full_mix_params = lat_stored + rho
+        lat_prior = self.lgm.pst_man.to_natural(self.lgm.pst_man.standard_normal())
+        lgm_params = jnp.concatenate([lkl_params, lat_prior])
+        return lgm_params, full_mix_params
+
     # Protocol methods
 
     @override
@@ -448,11 +497,17 @@ class ProjectionHMoGModel(
 
     @override
     def posterior_soft_assignments(self, params: Array, data: Array) -> Array:
-        return jax.lax.map(
-            lambda x: self.analytic_manifold.posterior_assignments(params, x),
-            data,
-            batch_size=256,
-        )
+        lgm_params, full_mix_params = self._recover_lgm_and_mix_params(params)
+        upr_hrm = self.analytic_manifold.upr_hrm
+
+        def assign_one(x: Array) -> Array:
+            prms = self.lgm.posterior_at(lgm_params, x)
+            with self.lgm.lat_man as lm:
+                z_star = lm.split_mean_covariance(lm.to_mean(prms))[0]
+            cat_params = upr_hrm.posterior_at(full_mix_params, z_star)
+            return upr_hrm.lat_man.to_probs(cat_params)
+
+        return jax.lax.map(assign_one, data, batch_size=256)
 
     @override
     def compute_cluster_prototypes(self, params: Array) -> list[Array]:
@@ -482,13 +537,17 @@ class ProjectionHMoGModel(
 
     @override
     def cluster_assignments(self, params: Array, data: Array) -> Array:
-        return jax.lax.map(
-            lambda x: jnp.argmax(
-                self.analytic_manifold.posterior_assignments(params, x)
-            ),
-            data,
-            batch_size=256,
-        )
+        lgm_params, full_mix_params = self._recover_lgm_and_mix_params(params)
+        upr_hrm = self.analytic_manifold.upr_hrm
+
+        def assign_one(x: Array) -> Array:
+            prms = self.lgm.posterior_at(lgm_params, x)
+            with self.lgm.lat_man as lm:
+                z_star = lm.split_mean_covariance(lm.to_mean(prms))[0]
+            cat_params = upr_hrm.posterior_at(full_mix_params, z_star)
+            return jnp.argmax(upr_hrm.lat_man.to_probs(cat_params))
+
+        return jax.lax.map(assign_one, data, batch_size=256)
 
     @override
     def get_analyses(
@@ -603,10 +662,13 @@ class ProjectionHMoGModel(
             key_proj, key_mix_init = jax.random.split(key_proj)
             mix_params = self._initialize_mixture(key_mix_init)
 
-            # Precompute latent projections once
-            log.info("Precomputing latent projections for all training data")
+            # Precompute latent projections once (LGM is fixed for all of phase 2)
+            log.info("Precomputing latent projections for train and test data")
             latent_locations = self.projection.project_data(
                 lgm, lgm_params, dataset.train_data
+            )
+            test_latent_locations = self.projection.project_data(
+                lgm, lgm_params, dataset.test_data
             )
 
             log.info(
@@ -638,11 +700,17 @@ class ProjectionHMoGModel(
                         dataset.train_data.shape[0],
                     )
                     if dataset.has_labels:
-                        train_clusters = self.cluster_assignments(
-                            hmog_params, dataset.train_data
+                        # Ad hoc assignments: classify precomputed projections
+                        # with the standalone mixture (consistent with training)
+                        def classify(z: Array) -> Array:
+                            cat_params = mixture.posterior_at(mix_ps, z)
+                            return jnp.argmax(mixture.lat_man.to_probs(cat_params))
+
+                        train_clusters = jax.lax.map(
+                            classify, latent_locations, batch_size=256
                         )
-                        test_clusters = self.cluster_assignments(
-                            hmog_params, dataset.test_data
+                        test_clusters = jax.lax.map(
+                            classify, test_latent_locations, batch_size=256
                         )
                         add_clustering_metrics(
                             metrics,

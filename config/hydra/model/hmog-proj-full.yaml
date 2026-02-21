@@ -25,3 +25,5 @@ pro:
   l2_reg: 1e-4
   lat_min_var: 1e-6
   lat_jitter_var: 0
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 1e-3
