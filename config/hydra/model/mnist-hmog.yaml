@@ -20,16 +20,16 @@ mix:
   n_epochs: 0
 
 full:
-  lr: 1e-4
+  lr: 3e-4
   n_epochs: 1000
-  batch_steps: 1000
+  batch_steps: 500
   #batch_size: 128
   grad_clip: 1
-  min_prob: 1e-5
-  obs_min_var: 1e-5
-  lat_min_var: 1e-5
+  min_prob: 1e-4
+  obs_min_var: 1e-4
+  lat_min_var: 1e-4
   l1_reg: 0
-  l2_reg: 1e-4
+  l2_reg: 1e-3
   upr_prs_reg: 3e-4
   lwr_prs_reg: 3e-4
   epoch_reset: true
