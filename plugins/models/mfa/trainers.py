@@ -23,6 +23,33 @@ log = logging.getLogger(__name__)
 STATS_LEVEL = jnp.array(STATS_NUM)
 
 
+def mixture_entropy_regularizer(
+    mfa: MFA,
+    rho: Array,
+    lat_params: Array,
+    entropy_reg: float,
+) -> tuple[Array, MetricDict]:
+    """Entropy regularization on mixture weights.
+
+    Adds entropy_reg * neg_entropy(π) to the loss, pushing the mixing
+    distribution toward uniformity (maximum entropy).
+    Default entropy_reg=0.0 disables the penalty entirely.
+    """
+    con_lat_params = mfa.pst_prr_emb.translate(rho, lat_params)
+    _, cat_nat_params = mfa.prr_man.split_natural_mixture(con_lat_params)
+
+    cat_means = mfa.prr_man.lat_man.to_mean(cat_nat_params)
+    neg_entropy = mfa.prr_man.lat_man.negative_entropy(cat_means)
+
+    entropy_loss = entropy_reg * neg_entropy
+
+    metrics: MetricDict = {
+        "Regularization/Mixture Entropy": (STATS_LEVEL, -neg_entropy),
+        "Regularization/Entropy Penalty": (STATS_LEVEL, entropy_loss),
+    }
+    return entropy_loss, metrics
+
+
 def precision_regularizer(
     mfa: MFA,
     rho: Array,
@@ -133,6 +160,9 @@ class GradientTrainer:
     lwr_prs_reg: float = 1e-3
     """Lower bound regularization on precision eigenvalues."""
 
+    mixture_entropy_reg: float = 0.0
+    """Entropy regularization on mixture weights (pushes toward uniformity)."""
+
     log_freq: int = 10
     """Log metrics every log_freq epochs."""
 
@@ -220,8 +250,13 @@ class GradientTrainer:
                 mfa, rho, lat_params, self.upr_prs_reg, self.lwr_prs_reg
             )
 
+            # Entropy regularization on mixture weights
+            ent_loss, ent_metrics = mixture_entropy_regularizer(
+                mfa, rho, lat_params, self.mixture_entropy_reg
+            )
+
             # Combine into total loss and metrics
-            total_loss = l1_loss + l2_loss + prs_loss
+            total_loss = l1_loss + l2_loss + prs_loss + ent_loss
 
             metrics: MetricDict = {
                 "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
@@ -230,6 +265,7 @@ class GradientTrainer:
                 "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
             }
             metrics.update(prs_metrics)
+            metrics.update(ent_metrics)
 
             return total_loss, metrics
 

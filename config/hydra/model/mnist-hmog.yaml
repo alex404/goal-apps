@@ -21,8 +21,8 @@ mix:
   n_epochs: 0
 
 full:
-  lr: 1e-4
-  n_epochs: 200
+  lr: 3e-4
+  n_epochs: 500
   batch_steps: 1000
   #batch_size: 128
   grad_clip: 1
@@ -30,10 +30,10 @@ full:
   obs_min_var: 1e-6
   lat_min_var: 1e-6
   l1_reg: 0
-  l2_reg: 1e-4
-  upr_prs_reg: 1e-4
-  lwr_prs_reg: 1e-4
-  mixture_entropy_reg: 1e-4
+  l2_reg: 1e-3
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 1e-3
+  mixture_entropy_reg: 1e-3
   epoch_reset: true
 
 analyses:

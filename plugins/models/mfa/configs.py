@@ -44,6 +44,9 @@ class GradientTrainerConfig:
     lwr_prs_reg: float = 1e-3
     """Lower bound regularization on precision eigenvalues (log-det penalty)."""
 
+    mixture_entropy_reg: float = 0.0
+    """Entropy regularization on mixture weights (pushes toward uniformity)."""
+
     log_freq: int = 10
     """Log metrics every log_freq epochs."""
 
