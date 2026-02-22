@@ -1,5 +1,4 @@
 # MFA configuration for MNIST
-# Hyperparameters based on Richardson & Weiss (2018) "GANs and GMMs"
 defaults:
   - mfa
   - _self_
@@ -10,19 +9,19 @@ init_scale: 0.01
 min_var: 0.01
 
 trainer:
-  lr: 2e-5
+  lr: 1e-4
   n_epochs: 200
-  batch_size: 512
-  # batch_steps: 1000
-  grad_clip: 0.0
+  batch_size: null
+  batch_steps: 1000
+  grad_clip: 1.0
 
-  # Regularization - gans-n-gmms uses none
+  # Regularization
   l1_reg: 0
-  l2_reg: 0
-  upr_prs_reg: 0
-  lwr_prs_reg: 0
+  l2_reg: 3e-4
+  upr_prs_reg: 3e-4
+  lwr_prs_reg: 3e-4
 
-  min_prob: 1e-3
+  min_prob: 1e-5
   obs_min_var: 1e-6  # gans-n-gmms clips sqrt(D) to [1e-3, 1.0], so var in [1e-6, 1.0]
   lat_min_var: 1e-6
 
@@ -40,5 +39,9 @@ analyses:
     enabled: true
   co_assignment_merge:
     enabled: true
+    filter_empty_clusters: true
+    min_cluster_size: 0.0005
   optimal_merge:
     enabled: false
+    filter_empty_clusters: true
+    min_cluster_size: 0.0005

@@ -13,7 +13,7 @@ from typing import Any, override
 
 from jax import Array
 
-from ..types import DiagonalHMoG
+from ..types import AnyHMoG
 from matplotlib.figure import Figure
 
 from apps.interface import Analysis, ClusteringDataset
@@ -58,7 +58,7 @@ class KLHierarchyAnalysis(Analysis[ClusteringDataset, Any, KLClusterHierarchy]):
         params: Array,
     ) -> KLClusterHierarchy:
         """Generate hierarchy from KL divergence between components."""
-        manifold: DiagonalHMoG = model.manifold
+        manifold: AnyHMoG = model.manifold
 
         # Get prototypes for visualization
         prototypes = get_component_prototypes(manifold, params)

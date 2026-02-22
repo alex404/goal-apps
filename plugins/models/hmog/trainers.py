@@ -1,4 +1,4 @@
-"""Trainers forDiagonalHMoG model components."""
+"""Trainers forAnyHMoG model components."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from apps.interface import (
 from apps.runtime import STATS_NUM, Logger, MetricDict, RunHandler
 
 from .metrics import log_epoch_metrics, pre_log_epoch_metrics
-from .types import DiagonalHMoG, DiagonalLGM
+from .types import AnyHMoG, AnyLGM
 
 ### Constants ###
 
@@ -42,7 +42,7 @@ INFO_LEVEL = jnp.array(logging.INFO)
 
 
 def precision_regularizer(
-    model: DiagonalHMoG,
+    model: AnyHMoG,
     rho: Array,
     mix_params: Array,
     upr_prs_reg: float,
@@ -79,7 +79,7 @@ def precision_regularizer(
     - May be useful for specific domain knowledge or computational constraints
 
     Args:
-        model:DiagonalHMoG model
+        model:AnyHMoG model
         rho: Conjugation parameters
         mix_params: Mixture parameters in natural coordinates
         upr_prs_reg: Weight for trace penalty (controls upper bound on eigenvalues)
@@ -126,12 +126,42 @@ def precision_regularizer(
     return trace_reg + logdet_reg, metrics
 
 
+def mixture_entropy_regularizer(
+    model: AnyHMoG,
+    rho: Array,
+    mix_params: Array,
+    entropy_reg: float,
+) -> tuple[Array, MetricDict]:
+    """Entropy regularization on mixture weights.
+
+    Adds entropy_reg * neg_entropy(π) to the loss, where neg_entropy = Σ πᵢ log πᵢ
+    is the Categorical.negative_entropy() from the Analytic base class (≤ 0).
+    Its gradient pushes the mixing distribution toward uniformity (maximum entropy).
+    Default entropy_reg=0.0 disables the penalty entirely.
+    """
+    con_mix_params = model.pst_prr_emb.translate(rho, mix_params)
+    _, cat_nat_params = model.prr_man.split_natural_mixture(con_mix_params)
+
+    # natural → mean params (required by negative_entropy, which is defined on Analytic)
+    cat_means = model.prr_man.lat_man.to_mean(cat_nat_params)
+    neg_entropy = model.prr_man.lat_man.negative_entropy(cat_means)
+
+    # neg_entropy ≤ 0; minimizing entropy_reg * neg_entropy pushes toward uniform
+    entropy_loss = entropy_reg * neg_entropy
+
+    metrics: MetricDict = {
+        "Regularization/Mixture Entropy": (STATS_LEVEL, -neg_entropy),
+        "Regularization/Entropy Penalty": (STATS_LEVEL, entropy_loss),
+    }
+    return entropy_loss, metrics
+
+
 ### Symmetric Gradient Trainer ###
 
 
 @dataclass(frozen=True)
 class FullGradientTrainer:
-    """Base trainer for gradient-based training ofDiagonalHMoG models."""
+    """Base trainer for gradient-based training ofAnyHMoG models."""
 
     # Training hyperparameters
     lr: float
@@ -157,6 +187,7 @@ class FullGradientTrainer:
     mask_type: MaskingStrategy
 
     # Numerical stability
+    mixture_entropy_reg: float = 0.0
     reset_latent_to_standard: bool = True
     """Explicitly reset overall latent to standard_normal after whitening.
 
@@ -169,7 +200,7 @@ class FullGradientTrainer:
 
     def bound_means(
         self,
-        model: DiagonalHMoG,
+        model: AnyHMoG,
         means: Array,
     ) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
@@ -223,7 +254,7 @@ class FullGradientTrainer:
         return model.join_coords(bounded_obs_means, int_means, bounded_lat_means)
 
     def make_regularizer(
-        self, model: DiagonalHMoG
+        self, model: AnyHMoG
     ) -> Callable[
         [Array],
         tuple[Array, MetricDict],
@@ -251,8 +282,13 @@ class FullGradientTrainer:
                 model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
             )
 
+            # Entropy penalty on mixture weights
+            ent_loss, ent_metrics = mixture_entropy_regularizer(
+                model, rho, mix_params, self.mixture_entropy_reg
+            )
+
             # Combine into total loss and metrics
-            total_loss = l1_loss + l2_loss + prs_loss
+            total_loss = l1_loss + l2_loss + prs_loss + ent_loss
 
             metrics = {
                 "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
@@ -261,13 +297,14 @@ class FullGradientTrainer:
                 "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
             }
             metrics.update(prs_metrics)
+            metrics.update(ent_metrics)
 
             return total_loss, metrics
 
         # Create a function that computes loss, metrics, and gradients in one pass
         return jax.grad(loss_with_metrics, has_aux=True)
 
-    def create_gradient_mask(self, model: DiagonalHMoG) -> Callable[[Array], Array]:
+    def create_gradient_mask(self, model: AnyHMoG) -> Callable[[Array], Array]:
         """Create a function that masks gradients for specific training regimes."""
         if self.mask_type == MaskingStrategy.LGM:
             # Only update LGM parameters (obs_params and int_params)
@@ -300,7 +337,7 @@ class FullGradientTrainer:
     def make_batch_step(
         self,
         handler: RunHandler,
-        model: DiagonalHMoG,
+        model: AnyHMoG,
         logger: Logger,
         optimizer: optax.GradientTransformation,
     ) -> Callable[
@@ -387,7 +424,7 @@ class FullGradientTrainer:
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: DiagonalHMoG,
+        model: AnyHMoG,
         logger: Logger,
         learning_rate_scale: float,
         epoch_offset: int,
@@ -476,7 +513,7 @@ class FullGradientTrainer:
 
 @dataclass(frozen=True)
 class LGMPreTrainer:
-    """Base trainer for gradient-based training ofDiagonalHMoG models."""
+    """Base trainer for gradient-based training ofAnyHMoG models."""
 
     # Training hyperparameters
     lr: float
@@ -495,7 +532,7 @@ class LGMPreTrainer:
 
     epoch_reset: bool = True
 
-    def bound_means(self, model: DiagonalLGM, means: Array) -> Array:
+    def bound_means(self, model: AnyLGM, means: Array) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
         # Split posterior statistics
         obs_means, int_means, _ = model.split_coords(means)
@@ -510,7 +547,7 @@ class LGMPreTrainer:
         return model.join_coords(bounded_obs_means, int_means, z)
 
     def make_regularizer(
-        self, model: DiagonalLGM
+        self, model: AnyLGM
     ) -> Callable[[Array], tuple[Array, MetricDict]]:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
@@ -544,7 +581,7 @@ class LGMPreTrainer:
     def make_batch_step(
         self,
         handler: RunHandler,
-        model: DiagonalLGM,
+        model: AnyLGM,
         logger: Logger,
         optimizer: optax.GradientTransformation,
     ) -> Callable[
@@ -618,7 +655,7 @@ class LGMPreTrainer:
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: DiagonalLGM,
+        model: AnyLGM,
         logger: Logger,
         epoch_offset: int,
         params0: Array,
@@ -728,6 +765,7 @@ class MixtureGradientTrainer:
     lat_jitter_var: float
     upr_prs_reg: float
     lwr_prs_reg: float
+    mixture_entropy_reg: float = 0.0
 
     # Numerical stability
     reset_latent_to_standard: bool = True
@@ -742,7 +780,7 @@ class MixtureGradientTrainer:
 
     def precompute_observable_mappings(
         self,
-        model: DiagonalHMoG,
+        model: AnyHMoG,
         params: Array,
         data: Array,
     ) -> tuple[Array, Array]:
@@ -760,7 +798,7 @@ class MixtureGradientTrainer:
 
     def mean_posterior_statistics(
         self,
-        model: DiagonalHMoG,
+        model: AnyHMoG,
         mix_params: Array,
         latent_locations: Array,
     ) -> Array:
@@ -777,7 +815,7 @@ class MixtureGradientTrainer:
 
     def prior_statistics(
         self,
-        model: DiagonalHMoG,
+        model: AnyHMoG,
         mix_params: Array,
         rho: Array,
     ) -> Array:
@@ -792,7 +830,7 @@ class MixtureGradientTrainer:
 
         return jax.grad(log_partition_function)(mix_params)
 
-    def bound_mixture_means(self, model: DiagonalHMoG, mix_means: Array) -> Array:
+    def bound_mixture_means(self, model: AnyHMoG, mix_means: Array) -> Array:
         """Apply bounds to mixture components for numerical stability."""
         with model.pst_man as uh:
             # Bound component means
@@ -832,7 +870,7 @@ class MixtureGradientTrainer:
             return bounded_mix_means
 
     def make_regularizer(
-        self, model: DiagonalHMoG, rho: Array
+        self, model: AnyHMoG, rho: Array
     ) -> Callable[[Array], tuple[Array, MetricDict]]:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
@@ -850,14 +888,20 @@ class MixtureGradientTrainer:
                 model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
             )
 
+            # Entropy penalty on mixture weights
+            ent_loss, ent_metrics = mixture_entropy_regularizer(
+                model, rho, mix_params, self.mixture_entropy_reg
+            )
+
             # Combine into total loss and metrics
-            total_loss = l2_loss + prs_loss
+            total_loss = l2_loss + prs_loss + ent_loss
 
             metrics = {
                 "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
                 "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
             }
             metrics.update(prs_metrics)
+            metrics.update(ent_metrics)
 
             return total_loss, metrics
 
@@ -869,7 +913,7 @@ class MixtureGradientTrainer:
         key: Array,
         handler: RunHandler,
         dataset: ClusteringDataset,
-        model: DiagonalHMoG,
+        model: AnyHMoG,
         logger: Logger,
         learning_rate_scale: float,
         epoch_offset: int,
@@ -881,7 +925,7 @@ class MixtureGradientTrainer:
             key: Random key
             handler: Run handler for saving artifacts
             dataset: Dataset for training
-            model:DiagonalHMoG model
+            model:AnyHMoG model
             logger: Logger
             learning_rate_scale: Scale factor for learning rate
             epoch_offset: Offset for epoch numbering

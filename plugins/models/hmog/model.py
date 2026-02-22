@@ -9,7 +9,7 @@ from typing import Any, override
 import jax
 import jax.numpy as jnp
 import numpy as np
-from goal.geometry import Diagonal
+from goal.geometry import Diagonal, PositiveDefinite
 from goal.models import differentiable_hmog
 from jax import Array
 
@@ -31,12 +31,13 @@ from apps.interface.clustering.protocols import (
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
 
+from .analyses.loadings import LoadingMatrixAnalysis
 from .trainers import (
     FullGradientTrainer,
     LGMPreTrainer,
     MixtureGradientTrainer,
 )
-from .types import DiagonalHMoG
+from .types import AnyHMoG
 
 ### Preamble ###
 
@@ -80,7 +81,7 @@ class HMoGModel(
     """Model framework for HMoGs."""
 
     # Training configuration
-    manifold: DiagonalHMoG
+    manifold: AnyHMoG
     pre: LGMPreTrainer
     lgm: FullGradientTrainer
     mix: MixtureGradientTrainer
@@ -109,6 +110,7 @@ class HMoGModel(
         lgm_noise_scale: float,
         mix_noise_scale: float,
         analyses: ClusteringAnalysesConfig,
+        diagonal_latent: bool = True,
     ) -> None:
         super().__init__()
 
@@ -116,7 +118,7 @@ class HMoGModel(
             obs_dim=data_dim,
             obs_rep=Diagonal(),
             lat_dim=latent_dim,
-            pst_rep=Diagonal(),
+            pst_rep=Diagonal() if diagonal_latent else PositiveDefinite(),
             n_components=n_clusters,
         )
 
@@ -220,6 +222,8 @@ class HMoGModel(
 
         if cfg.co_assignment_hierarchy.enabled:
             analyses.append(CoAssignmentHierarchyAnalysis())
+
+        analyses.append(LoadingMatrixAnalysis())
 
         # Merge analyses require ground truth labels
         if dataset.has_labels:

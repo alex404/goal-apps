@@ -7,13 +7,13 @@ import jax.numpy as jnp
 from goal.models import FullNormal, NormalAnalyticLGM
 from jax import Array
 
-from ..types import DiagonalHMoG
+from ..types import AnyHMoG
 
 
 ### HMoG-specific Analysis ###
 
 
-def cluster_assignments(model: DiagonalHMoG, params: Array, data: Array) -> Array:
+def cluster_assignments(model: AnyHMoG, params: Array, data: Array) -> Array:
     """Assign data points to clusters using the model.
 
     Args:
@@ -30,7 +30,7 @@ def cluster_assignments(model: DiagonalHMoG, params: Array, data: Array) -> Arra
 
 
 def symmetric_kl_matrix(
-    model: DiagonalHMoG,
+    model: AnyHMoG,
     params: Array,
 ) -> Array:
     mix_params = model.prior(params)
@@ -56,7 +56,7 @@ def symmetric_kl_matrix(
 
 
 def get_component_prototypes(
-    model: DiagonalHMoG,
+    model: AnyHMoG,
     params: Array,
 ) -> list[Array]:
     # Split into likelihood and mixture parameters
@@ -88,7 +88,7 @@ def get_component_prototypes(
 
 
 def cluster_probabilities(
-    model: DiagonalHMoG, params: Array, data: Array
+    model: AnyHMoG, params: Array, data: Array
 ) -> Array:
     """Get cluster probability distributions for each data point.
 

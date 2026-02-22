@@ -50,6 +50,7 @@ class GradientTrainerConfig:
     lat_jitter_var: float = 0.0
     upr_prs_reg: float = 1e-3
     lwr_prs_reg: float = 1e-3
+    mixture_entropy_reg: float = 0.0
     epoch_reset: bool = True
 
 
@@ -110,6 +111,7 @@ class MixtureGradientTrainerConfig:
     # Precision matrix regularization
     upr_prs_reg: float = 1e-3
     lwr_prs_reg: float = 1e-3
+    mixture_entropy_reg: float = 0.0
     epoch_reset: bool = True
 
 
@@ -149,7 +151,16 @@ class DifferentiableHMoGConfig(HMoGConfig):
     _target_: str = "plugins.models.hmog.model.HMoGModel"
     num_cycles: int = 10
     lr_scales: list[float] = field(default_factory=lambda: [])
+    diagonal_latent: bool = True
     defaults: list[Any] = field(default_factory=lambda: cycle_defaults)
+
+
+@dataclass
+class FullLatentDifferentiableHMoGConfig(DifferentiableHMoGConfig):
+    """HMoG with full (PositiveDefinite) latent covariance."""
+
+    _target_: str = "plugins.models.hmog.model.HMoGModel"
+    diagonal_latent: bool = False
 
 
 ### Projection Trainer Config ###
@@ -221,5 +232,6 @@ cs.store(group="model/full", name="gradient_full", node=FullGradientTrainerConfi
 
 # Register model configs
 cs.store(group="model", name="hmog", node=DifferentiableHMoGConfig)
+cs.store(group="model", name="hmog-full", node=FullLatentDifferentiableHMoGConfig)
 cs.store(group="model", name="hmog_proj", node=ProjectionHMoGConfig)
 cs.store(group="model", name="hmog_proj_full", node=ProjectionFullHMoGConfig)

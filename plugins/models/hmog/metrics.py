@@ -9,7 +9,7 @@ from goal.geometry import Replicated
 from goal.models import FactorAnalysis, FullNormal
 from jax import Array
 
-from .types import DiagonalHMoG, DiagonalLGM
+from .types import AnyHMoG, AnyLGM
 
 from apps.interface import ClusteringDataset
 from apps.interface.clustering import cluster_accuracy, clustering_nmi
@@ -52,7 +52,7 @@ def add_conjugation_metrics(
 
 def pre_log_epoch_metrics(
     dataset: ClusteringDataset,
-    model: DiagonalLGM | FactorAnalysis,
+    model: AnyLGM | FactorAnalysis,
     logger: Logger,
     params: Array,
     epoch: Array,
@@ -133,7 +133,7 @@ def pre_log_epoch_metrics(
 
 def log_epoch_metrics(
     dataset: ClusteringDataset,
-    model: DiagonalHMoG,
+    model: AnyHMoG,
     logger: Logger,
     params: Array,
     epoch: Array,
