@@ -10,16 +10,16 @@ min_var: 0.01
 
 trainer:
   lr: 1e-4
-  n_epochs: 200
-  batch_size: null
+  n_epochs: 500
+  # batch_size: null
   batch_steps: 1000
   grad_clip: 1.0
 
   # Regularization
   l1_reg: 0
-  l2_reg: 3e-4
-  upr_prs_reg: 3e-4
-  lwr_prs_reg: 3e-4
+  l2_reg: 1e-3
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 1e-3
 
   min_prob: 1e-5
   obs_min_var: 1e-6  # gans-n-gmms clips sqrt(D) to [1e-3, 1.0], so var in [1e-6, 1.0]
