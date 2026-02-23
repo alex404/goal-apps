@@ -66,8 +66,14 @@ class GradientTrainerConfig:
     lat_jitter_var: float = 0.0
     """Jitter to add to latent variance."""
 
+    obs_max_var: float = 0.0
+    """Maximum observable variance (0.0 = disabled). Set to 1.0 to match reference sqrt_D ≤ 1.0."""
+
     epoch_reset: bool = True
     """Reset optimizer state at the start of each epoch."""
+
+    use_adamw: bool = False
+    """Use AdamW (with weight decay) instead of plain Adam. Default False matches reference."""
 
 
 @dataclass

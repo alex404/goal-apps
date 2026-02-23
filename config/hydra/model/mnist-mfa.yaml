@@ -9,11 +9,13 @@ init_scale: 0.01
 min_var: 0.01
 
 trainer:
-  lr: 1e-4
-  n_epochs: 500
-  # batch_size: null
-  batch_steps: 1000
-  grad_clip: 1.0
+  lr: 2e-5           # matches reference (was 1e-4)
+  n_epochs: 51       # ~6000 gradient steps with batch_size=512 (matches reference budget)
+  batch_size: 512    # matches reference
+  batch_steps: 1     # one step per batch (was 1000 — caused catastrophic collapse)
+  epoch_reset: false # persist optimizer state across epochs (matches reference)
+  grad_clip: 0.0     # no gradient clipping (matches reference)
+  use_adamw: false   # plain Adam (matches reference optax.adam)
 
   # Regularization
   l1_reg: 0
@@ -24,6 +26,7 @@ trainer:
 
   min_prob: 1e-5
   obs_min_var: 1e-6  # gans-n-gmms clips sqrt(D) to [1e-3, 1.0], so var in [1e-6, 1.0]
+  obs_max_var: 1.0   # matches reference sqrt_D ≤ 1.0 → var ≤ 1.0
   lat_min_var: 1e-6
 
   # Jitter (optional, for additional stability)

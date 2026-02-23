@@ -11,12 +11,13 @@ import jax.numpy as jnp
 import optax
 from jax import Array
 
-from .types import MFA
+from goal.models.graphical.mixture import CompleteMixtureOfSymmetric
 
 from apps.interface import ClusteringDataset
 from apps.runtime import STATS_NUM, Logger, MetricDict
 
 from .metrics import log_epoch_metrics
+from .types import MFA
 
 log = logging.getLogger(__name__)
 
@@ -182,8 +183,14 @@ class GradientTrainer:
     lat_jitter_var: float = 0.0
     """Jitter for latent variance (currently unused - latents reset to standard normal)."""
 
+    obs_max_var: float = 0.0
+    """Maximum observable variance (0.0 = disabled). Matches reference sqrt_D ≤ 1.0 when set to 1.0."""
+
     epoch_reset: bool = True
     """Reset optimizer state at the start of each epoch."""
+
+    use_adamw: bool = False
+    """Use AdamW (with weight decay) instead of plain Adam. Default False matches reference."""
 
     def bound_means(self, mfa: MFA, means: Array) -> Array:
         """Apply bounds to posterior/prior statistics in mean coordinates.
@@ -197,10 +204,19 @@ class GradientTrainer:
         """
         obs_means, int_means, lat_means = mfa.split_coords(means)
 
-        # Bound observable covariance
+        # Bound observable covariance (minimum variance)
         bounded_obs_means = mfa.bas_hrm.obs_man.regularize_covariance(
             obs_means, self.obs_jitter_var, self.obs_min_var
         )
+
+        # Bound observable covariance (maximum variance, optional)
+        if self.obs_max_var > 0.0:
+            obs_man = mfa.bas_hrm.obs_man
+            obs_mean_vec, obs_cov = obs_man.split_mean_covariance(bounded_obs_means)
+            clipped_cov = obs_man.cov_man.map_diagonal(
+                obs_cov, lambda x: jnp.minimum(x, self.obs_max_var)
+            )
+            bounded_obs_means = obs_man.join_mean_covariance(obs_mean_vec, clipped_cov)
 
         # Bound latent mixture parameters
         pst_man = mfa.pst_man  # CompleteMixture[Normal] - posterior manifold
@@ -225,6 +241,64 @@ class GradientTrainer:
         )
 
         return mfa.join_coords(bounded_obs_means, int_means, bounded_lat_means)
+
+    def bound_obs_means(self, mfa: MFA, means: Array) -> Array:
+        """Apply bounds to observable statistics only; leave int and lat unchanged.
+
+        Used for full MFA in place of bound_means, since the latent prior is
+        enforced via the hard join_conjugated projection instead.
+        """
+        obs_means, int_means, lat_means = mfa.split_coords(means)
+
+        bounded_obs_means = mfa.bas_hrm.obs_man.regularize_covariance(
+            obs_means, self.obs_jitter_var, self.obs_min_var
+        )
+
+        if self.obs_max_var > 0.0:
+            obs_man = mfa.bas_hrm.obs_man
+            obs_mean_vec, obs_cov = obs_man.split_mean_covariance(bounded_obs_means)
+            clipped_cov = obs_man.cov_man.map_diagonal(
+                obs_cov, lambda x: jnp.minimum(x, self.obs_max_var)
+            )
+            bounded_obs_means = obs_man.join_mean_covariance(obs_mean_vec, clipped_cov)
+
+        return mfa.join_coords(bounded_obs_means, int_means, lat_means)
+
+    def enforce_standard_normal_prior(
+        self, mfa: CompleteMixtureOfSymmetric, params: Array
+    ) -> Array:
+        """Hard-project params so each component's effective z-prior is N(0,I).
+
+        Uses join_conjugated to set lat_nat = desired_prior_nat - rho, which
+        makes the effective prior (lat_nat + rho) exactly equal to N(0,I) per
+        component. Categorical weights (mixing proportions) are preserved from
+        the optimizer update, with probability clipping for stability.
+        """
+        # Extract likelihood params (obs + int) and current prior natural params
+        lkl_params, prior_nat = mfa.split_conjugated(params)
+
+        # Extract current categorical natural params to preserve mixing proportions
+        _, cat_nat = mfa.prr_man.split_natural_mixture(prior_nat)
+
+        # Bound categorical probabilities for stability
+        cat_means = mfa.prr_man.lat_man.to_mean(cat_nat)
+        probs = mfa.prr_man.lat_man.to_probs(cat_means)
+        bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
+        bounded_probs = bounded_probs / jnp.sum(bounded_probs)
+        bounded_cat_means = mfa.prr_man.lat_man.from_probs(bounded_probs)
+        bounded_cat_nat = mfa.prr_man.lat_man.to_natural(bounded_cat_means)
+
+        # N(0,I) natural params tiled across K components
+        z_nat_single = mfa.bas_hrm.lat_man.to_natural(
+            mfa.bas_hrm.lat_man.standard_normal()
+        )
+        z_nat_k = jnp.tile(z_nat_single, mfa.n_categories)
+
+        # Desired prior: N(0,I) per component + bounded categorical weights
+        desired_prior_nat = mfa.prr_man.join_natural_mixture(z_nat_k, bounded_cat_nat)
+
+        # Hard projection: lat_nat = desired_prior_nat - rho
+        return mfa.join_conjugated(lkl_params, desired_prior_nat)
 
     def make_regularizer(
         self, mfa: MFA
@@ -302,13 +376,14 @@ class GradientTrainer:
             n_batches = n_samples // batch_size
 
         # Create optimizer
+        base_optimizer = optax.adamw(learning_rate=self.lr) if self.use_adamw else optax.adam(self.lr)
         if self.grad_clip > 0.0:
             optimizer = optax.chain(
                 optax.clip_by_global_norm(self.grad_clip),
-                optax.adamw(learning_rate=self.lr),
+                base_optimizer,
             )
         else:
-            optimizer = optax.adamw(learning_rate=self.lr)
+            optimizer = base_optimizer
         opt_state = optimizer.init(params0)
 
         # Create regularizer
@@ -326,7 +401,12 @@ class GradientTrainer:
             posterior_stats = mfa.mean_posterior_statistics(params, batch)
 
             # Bound posterior statistics in mean space
-            bounded_posterior_stats = self.bound_means(mfa, posterior_stats)
+            # Full MFA: only bound obs (lat prior enforced via join_conjugated below)
+            # Diagonal MFA: bound all including lat (join_conjugated unavailable)
+            if isinstance(mfa, CompleteMixtureOfSymmetric):
+                bounded_posterior_stats = self.bound_obs_means(mfa, posterior_stats)
+            else:
+                bounded_posterior_stats = self.bound_means(mfa, posterior_stats)
 
             def inner_step(
                 carry: tuple[optax.OptState, Array],
@@ -351,6 +431,10 @@ class GradientTrainer:
                 )
                 new_params = optax.apply_updates(current_params, updates)
 
+                # Full MFA: enforce N(0,I) z-priors via hard join_conjugated projection
+                if isinstance(mfa, CompleteMixtureOfSymmetric):
+                    new_params = self.enforce_standard_normal_prior(mfa, new_params)
+
                 return (new_opt_state, new_params), grad
 
             # Run inner steps
@@ -365,8 +449,8 @@ class GradientTrainer:
 
         def epoch_step(
             epoch: Array,
-            carry: tuple[OptState, Array, Array],
-        ) -> tuple[OptState, Array, Array]:
+            carry: tuple[optax.OptState, Array, Array],
+        ) -> tuple[optax.OptState, Array, Array]:
             opt_state, params, epoch_key = carry
 
             if self.epoch_reset:
