@@ -9,13 +9,14 @@ init_scale: 0.01
 min_var: 0.01
 
 trainer:
-  lr: 2e-5           # matches reference (was 1e-4)
-  n_epochs: 51       # ~6000 gradient steps with batch_size=512 (matches reference budget)
-  batch_size: 512    # matches reference
-  batch_steps: 1     # one step per batch (was 1000 — caused catastrophic collapse)
-  epoch_reset: false # persist optimizer state across epochs (matches reference)
-  grad_clip: 0.0     # no gradient clipping (matches reference)
-  use_adamw: false   # plain Adam (matches reference optax.adam)
+  lr: 2e-5
+  n_epochs: 100
+  # batch_size: 512  # commented out = full dataset E-step (approximate EM)
+  batch_steps: 1000
+  epoch_reset: false
+  grad_clip: 0.0
+  use_adamw: false
+  log_freq: 10
 
   # Regularization
   l1_reg: 0

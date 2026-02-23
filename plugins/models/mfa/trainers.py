@@ -431,10 +431,6 @@ class GradientTrainer:
                 )
                 new_params = optax.apply_updates(current_params, updates)
 
-                # Full MFA: enforce N(0,I) z-priors via hard join_conjugated projection
-                if isinstance(mfa, CompleteMixtureOfSymmetric):
-                    new_params = self.enforce_standard_normal_prior(mfa, new_params)
-
                 return (new_opt_state, new_params), grad
 
             # Run inner steps
@@ -453,7 +449,8 @@ class GradientTrainer:
         ) -> tuple[optax.OptState, Array, Array]:
             opt_state, params, epoch_key = carry
 
-            if self.epoch_reset:
+            # Diagonal MFA: optionally reset Adam at start of epoch
+            if not isinstance(mfa, CompleteMixtureOfSymmetric) and self.epoch_reset:
                 opt_state = optimizer.init(params)
 
             shuffle_key, next_key = jax.random.split(epoch_key)
@@ -467,6 +464,13 @@ class GradientTrainer:
             (opt_state, new_params), gradss = jax.lax.scan(
                 batch_step, (opt_state, params), batched_data
             )
+
+            # Full MFA: enforce N(0,I) prior + reset Adam together after all gradient
+            # steps. Adam is reset from the projected params so its second-moment
+            # estimates are always calibrated to the clean post-projection state.
+            if isinstance(mfa, CompleteMixtureOfSymmetric):
+                new_params = self.enforce_standard_normal_prior(mfa, new_params)
+                opt_state = optimizer.init(new_params)
 
             # Compute regularization metrics for logging (at final params)
             # make_regularizer returns jax.grad(loss_with_metrics, has_aux=True)
