@@ -9,7 +9,7 @@ init_scale: 0.01
 min_var: 0.01
 
 trainer:
-  lr: 1e-4
+  lr: 2e-5
   n_epochs: 100
   # batch_size: 512  # commented out = full dataset E-step (approximate EM)
   batch_steps: 1000

@@ -139,58 +139,62 @@ class GradientTrainer:
     n_epochs: int
     """Number of training epochs."""
 
-    batch_size: int | None = None
+    batch_size: int | None
     """Batch size (None = full batch)."""
 
-    batch_steps: int = 1000
+    batch_steps: int
     """Number of gradient steps per batch."""
 
-    grad_clip: float = 1.0
+    grad_clip: float
     """Maximum gradient norm for clipping."""
 
     # Regularization parameters
-    l1_reg: float = 0.0
+    l1_reg: float
     """L1 regularization on interaction parameters."""
 
-    l2_reg: float = 0.0
+    l2_reg: float
     """L2 regularization on all parameters."""
 
-    upr_prs_reg: float = 1e-3
+    upr_prs_reg: float
     """Upper bound regularization on precision eigenvalues."""
 
-    lwr_prs_reg: float = 1e-3
+    lwr_prs_reg: float
     """Lower bound regularization on precision eigenvalues."""
 
-    mixture_entropy_reg: float = 0.0
+    mixture_entropy_reg: float
     """Entropy regularization on mixture weights (pushes toward uniformity)."""
 
-    log_freq: int = 10
+    log_freq: int
     """Log metrics every log_freq epochs."""
 
     # Parameter bounds (applied in mean space)
-    min_prob: float = 1e-4
+    min_prob: float
     """Minimum cluster probability."""
 
-    obs_min_var: float = 1e-5
+    obs_min_var: float
     """Minimum observable variance."""
 
-    lat_min_var: float = 1e-6
+    lat_min_var: float
     """Minimum latent variance (currently unused - latents reset to standard normal)."""
 
-    obs_jitter_var: float = 0.0
+    obs_jitter_var: float
     """Jitter for observable variance."""
 
-    lat_jitter_var: float = 0.0
+    lat_jitter_var: float
     """Jitter for latent variance (currently unused - latents reset to standard normal)."""
 
-    obs_max_var: float = 0.0
+    obs_max_var: float
     """Maximum observable variance (0.0 = disabled). Matches reference sqrt_D ≤ 1.0 when set to 1.0."""
 
-    epoch_reset: bool = True
+    epoch_reset: bool
     """Reset optimizer state at the start of each epoch."""
 
-    use_adamw: bool = False
-    """Use AdamW (with weight decay) instead of plain Adam. Default False matches reference."""
+    enforce_prior: bool
+    """Hard-project z-prior to N(0,I) via join_conjugated after each epoch (full MFA only).
+    When False, use soft gradient-whitening (bound_means) instead."""
+
+    use_adamw: bool
+    """Use AdamW (with weight decay) instead of plain Adam."""
 
     def bound_means(self, mfa: MFA, means: Array) -> Array:
         """Apply bounds to posterior/prior statistics in mean coordinates.
@@ -403,7 +407,7 @@ class GradientTrainer:
             # Bound posterior statistics in mean space
             # Full MFA: only bound obs (lat prior enforced via join_conjugated below)
             # Diagonal MFA: bound all including lat (join_conjugated unavailable)
-            if isinstance(mfa, CompleteMixtureOfSymmetric):
+            if isinstance(mfa, CompleteMixtureOfSymmetric) and self.enforce_prior:
                 bounded_posterior_stats = self.bound_obs_means(mfa, posterior_stats)
             else:
                 bounded_posterior_stats = self.bound_means(mfa, posterior_stats)
@@ -449,8 +453,8 @@ class GradientTrainer:
         ) -> tuple[optax.OptState, Array, Array]:
             opt_state, params, epoch_key = carry
 
-            # Diagonal MFA: optionally reset Adam at start of epoch
-            if not isinstance(mfa, CompleteMixtureOfSymmetric) and self.epoch_reset:
+            # Diagonal, or full MFA without enforce_prior: optionally reset Adam at start of epoch
+            if (not isinstance(mfa, CompleteMixtureOfSymmetric) or not self.enforce_prior) and self.epoch_reset:
                 opt_state = optimizer.init(params)
 
             shuffle_key, next_key = jax.random.split(epoch_key)
@@ -465,10 +469,10 @@ class GradientTrainer:
                 batch_step, (opt_state, params), batched_data
             )
 
-            # Full MFA: enforce N(0,I) prior + reset Adam together after all gradient
-            # steps. Adam is reset from the projected params so its second-moment
+            # Full MFA with enforce_prior: hard-project prior + unconditional Adam reset at end.
+            # Adam is reset from the projected params so its second-moment
             # estimates are always calibrated to the clean post-projection state.
-            if isinstance(mfa, CompleteMixtureOfSymmetric):
+            if isinstance(mfa, CompleteMixtureOfSymmetric) and self.enforce_prior:
                 new_params = self.enforce_standard_normal_prior(mfa, new_params)
                 opt_state = optimizer.init(new_params)
 

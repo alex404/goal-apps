@@ -72,8 +72,12 @@ class GradientTrainerConfig:
     epoch_reset: bool = True
     """Reset optimizer state at the start of each epoch."""
 
-    use_adamw: bool = False
-    """Use AdamW (with weight decay) instead of plain Adam. Default False matches reference."""
+    enforce_prior: bool = False
+    """Hard-project z-prior to N(0,I) via join_conjugated after each epoch (full MFA only).
+    When False, use soft gradient-whitening (bound_means) instead."""
+
+    use_adamw: bool = True
+    """Use AdamW (with weight decay) instead of plain Adam."""
 
 
 @dataclass
