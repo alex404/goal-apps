@@ -157,12 +157,20 @@ class MFAModel(
         centers = jax.numpy.asarray(kmeans.cluster_centers_)
         log.info("K-means initialization complete")
 
-        # Compute uniform variance for covariance initialization
-        # Using mean variance across dimensions gives isotropic-like behavior
-        # that matches k-means' Euclidean distance assumption
-        data_var = jnp.var(data, axis=0)
-        mean_var = jnp.maximum(jnp.mean(data_var), self.min_var)
-        reg_var = jnp.full(data_var.shape, mean_var)
+        # Capture labels and compute per-cluster statistics (numpy, before JAX loop)
+        assert kmeans.labels_ is not None
+        labels = kmeans.labels_  # shape (n_samples,)
+        data_np = np.asarray(data)  # shape (n_samples, data_dim)
+        cluster_counts = np.bincount(labels, minlength=self.n_clusters)  # shape (n_clusters,)
+
+        cluster_vars_np = np.zeros((self.n_clusters, self.data_dim))
+        for k in range(self.n_clusters):
+            mask = labels == k
+            if mask.sum() > 1:
+                cluster_vars_np[k] = np.var(data_np[mask], axis=0)
+            # else: leave as 0.0 — will be clipped to min_var below
+
+        cluster_vars = jnp.maximum(jnp.array(cluster_vars_np), self.min_var)  # (n_clusters, data_dim)
 
         # Build each FA component in natural coordinates
         obs_man_fa = self.mfa.bas_hrm.obs_man  # Diagonal Normal for observables
@@ -172,7 +180,7 @@ class MFAModel(
         int_key = keys[1]
         for k in range(self.n_clusters):
             # Observable: mean=center, cov=diag(reg_var) -> convert to natural
-            obs_cov_params = obs_man_fa.cov_man.from_matrix(jnp.diag(reg_var))
+            obs_cov_params = cluster_vars[k]  # 1D variance vector — correct cov_man coords for Diagonal
             obs_means = obs_man_fa.join_mean_covariance(centers[k], obs_cov_params)
             obs_params = obs_man_fa.to_natural(obs_means)
 
@@ -192,8 +200,9 @@ class MFAModel(
 
         components_nat = jnp.concatenate(component_nat_list)
 
-        # Categorical: uniform weights (natural params are log-odds, all zero for uniform)
-        cat_nat = jnp.zeros(self.n_clusters - 1)
+        # Categorical: weights proportional to cluster sizes (log-odds from empirical counts)
+        cluster_probs = cluster_counts / cluster_counts.sum()
+        cat_nat = jnp.log(jnp.array(cluster_probs[1:] / cluster_probs[0]))
 
         # Join into mixture natural params and convert to MFA params
         mix_params = self.mfa.mix_man.join_natural_mixture(components_nat, cat_nat)
