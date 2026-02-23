@@ -10,7 +10,7 @@ min_var: 0.01
 
 trainer:
   lr: 2e-5
-  n_epochs: 100
+  n_epochs: 1000
   # batch_size: 512  # commented out = full dataset E-step (approximate EM)
   batch_steps: 1000
   grad_clip: 0.0
@@ -21,7 +21,7 @@ trainer:
   l2_reg: 0
   upr_prs_reg: 0
   lwr_prs_reg: 0
-  mixture_entropy_reg: 0
+  mixture_entropy_reg: 1e-4
 
   min_prob: 1e-5
   obs_min_var: 1e-6  # gans-n-gmms clips sqrt(D) to [1e-3, 1.0], so var in [1e-6, 1.0]
