@@ -198,6 +198,7 @@ class ProjectionHMoGConfig(ClusteringModelConfig):
     lgm_noise_scale: float = 0.01
     mix_noise_scale: float = 0.01
     diagonal_latent: bool = True
+    kmeans_init: bool = True
 
     # Training configuration
     pre: PreTrainerConfig = field(default=MISSING)

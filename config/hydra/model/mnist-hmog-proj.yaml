@@ -1,0 +1,6 @@
+# Projection-based HMoG configuration for MNIST
+defaults:
+  - hmog-proj
+  - _self_
+
+n_clusters: 50

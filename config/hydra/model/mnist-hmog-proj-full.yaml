@@ -1,0 +1,14 @@
+# Full-covariance projection HMoG for MNIST
+defaults:
+  - hmog-proj-full
+  - _self_
+
+n_clusters: 50
+kmeans_init: true
+
+pro:
+  n_epochs: 500
+  upr_prs_reg: 1e-5
+  lwr_prs_reg: 1e-4
+  l2_reg: 0
+  epoch_reset: true

@@ -16,6 +16,7 @@ from typing import Any, TypeAlias, cast, override
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 from goal.geometry import Diagonal
 from goal.models import (
@@ -29,6 +30,8 @@ from goal.models import (
     full_normal,
 )
 from jax import Array
+
+from sklearn.cluster import KMeans
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
@@ -382,6 +385,7 @@ class ProjectionHMoGModel(
         mix_noise_scale: float,
         analyses: ClusteringAnalysesConfig,
         diagonal_latent: bool = True,
+        kmeans_init: bool = True,
     ) -> None:
         super().__init__()
 
@@ -410,6 +414,7 @@ class ProjectionHMoGModel(
         self.lgm_noise_scale = lgm_noise_scale
         self.mix_noise_scale = mix_noise_scale
         self.analyses_config = analyses
+        self.kmeans_init = kmeans_init
 
         log.info(
             f"Initialized Projection DiagonalHMoG model with dimension {self.analytic_manifold.dim}."
@@ -471,6 +476,71 @@ class ProjectionHMoGModel(
 
     def _initialize_mixture(self, key: Array) -> Array:
         return self.mixture.initialize(key, shape=self.mix_noise_scale)
+
+    def _initialize_mixture_from_data_normal(
+        self, key: Array, latent_locations: Array
+    ) -> Array:
+        """Initialize mixture by sampling means from a normal fitted to projected data.
+
+        Computes the empirical mean and per-dimension variance of latent_locations,
+        then samples K component means from N(data_mean, diag(data_var)).
+        Component covariances are set to the mean empirical variance.
+        """
+        mix = self.mixture
+        data_mean = jnp.mean(latent_locations, axis=0)
+        data_var = jnp.var(latent_locations, axis=0)
+        data_std = jnp.sqrt(data_var)
+
+        centers = data_mean + data_std * jax.random.normal(
+            key, shape=(self.n_clusters, self.lgm.lat_dim)
+        )
+
+        mean_var = float(jnp.maximum(jnp.mean(data_var), 1e-5))
+        cov_mat = jnp.diag(jnp.full(self.lgm.lat_dim, mean_var))
+        cov_params = mix.obs_man.cov_man.from_matrix(cov_mat)
+
+        nat_list = [
+            mix.obs_man.to_natural(
+                mix.obs_man.join_mean_covariance(centers[i], cov_params)
+            )
+            for i in range(self.n_clusters)
+        ]
+        return mix.join_natural_mixture(
+            jnp.concatenate(nat_list), jnp.zeros(self.n_clusters - 1)
+        )
+
+    def _initialize_mixture_from_projections(
+        self, key: Array, latent_locations: Array
+    ) -> Array:
+        """Initialize mixture from k-means on projected latent data.
+
+        Each component gets mean=centroid, covariance=diag(mean_data_var).
+        Uniform mixture weights. Mirrors MFAModel.initialize_model() pattern.
+        """
+        mix = self.mixture
+        log.info("Running k-means on latent projections for mixture initialization...")
+        km = KMeans(
+            n_clusters=self.n_clusters, n_init="auto", random_state=int(key[0])
+        )
+        km.fit(np.asarray(latent_locations))
+        centers = jnp.array(km.cluster_centers_)
+        log.info("K-means mixture initialization complete")
+
+        mean_var = float(
+            jnp.maximum(jnp.mean(jnp.var(latent_locations, axis=0)), 1e-5)
+        )
+        cov_mat = jnp.diag(jnp.full(self.lgm.lat_dim, mean_var))
+        cov_params = mix.obs_man.cov_man.from_matrix(cov_mat)
+
+        nat_list = [
+            mix.obs_man.to_natural(
+                mix.obs_man.join_mean_covariance(centers[i], cov_params)
+            )
+            for i in range(self.n_clusters)
+        ]
+        return mix.join_natural_mixture(
+            jnp.concatenate(nat_list), jnp.zeros(self.n_clusters - 1)
+        )
 
     def _recover_lgm_and_mix_params(self, params: Array) -> tuple[Array, Array]:
         """Recover (lgm_params, full_mix_params) from assembled HMoG params.
@@ -660,7 +730,6 @@ class ProjectionHMoGModel(
             log.info("Phase 2: Training mixture model on projected data")
 
             key_proj, key_mix_init = jax.random.split(key_proj)
-            mix_params = self._initialize_mixture(key_mix_init)
 
             # Precompute latent projections once (LGM is fixed for all of phase 2)
             log.info("Precomputing latent projections for train and test data")
@@ -670,6 +739,16 @@ class ProjectionHMoGModel(
             test_latent_locations = self.projection.project_data(
                 lgm, lgm_params, dataset.test_data
             )
+
+            # Initialize mixture (k-means or sample means from fitted normal)
+            if self.kmeans_init:
+                mix_params = self._initialize_mixture_from_projections(
+                    key_mix_init, latent_locations
+                )
+            else:
+                mix_params = self._initialize_mixture_from_data_normal(
+                    key_mix_init, latent_locations
+                )
 
             log.info(
                 f"Training mixture with conjugation-aware EM for {self.projection.n_epochs} epochs"
