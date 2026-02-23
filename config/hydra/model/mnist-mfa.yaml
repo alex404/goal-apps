@@ -15,6 +15,7 @@ trainer:
   batch_steps: 1000
   grad_clip: 0.0
   log_freq: 10
+  enforce_prior: true
 
   # Regularization
   l1_reg: 0
