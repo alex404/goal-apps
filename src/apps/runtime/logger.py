@@ -3,7 +3,8 @@
 import logging
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,9 +30,10 @@ _metric_buffer: MetricHistory = {}
 ### Artifacts ###
 
 
-# TODO: Make sure wall clock time skips, or tracks seperately, heavy duty analyses and plotting.
 # Global wall clock start time (set when Logger is initialized)
 _wall_clock_start: float = 0.0
+# Accumulated duration spent in analyses/checkpointing (excluded from training time)
+_paused_duration: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -73,10 +75,11 @@ class Logger:
 
     def __post_init__(self) -> None:
         """Initialize logger with desired logging destinations."""
-        global _metric_buffer, _wall_clock_start
+        global _metric_buffer, _wall_clock_start, _paused_duration
 
         # Start wall clock timer for tracking training duration
         _wall_clock_start = time.perf_counter()
+        _paused_duration = 0.0
 
         # Clear or load metric buffer based on whether we're resuming
         if self.use_local:
@@ -126,6 +129,17 @@ class Logger:
             )
             log.info("Configuration logged to Weights & Biases.")
 
+    @staticmethod
+    @contextmanager
+    def pause_timing() -> Generator[None, None, None]:
+        """Context manager that excludes elapsed time from wall clock training time."""
+        global _paused_duration
+        pause_start = time.perf_counter()
+        try:
+            yield
+        finally:
+            _paused_duration += time.perf_counter() - pause_start
+
     def log_metrics(self, metrics: MetricDict, epoch: Array) -> None:
         """Log metrics. Safe to call within jax.jit-compiled functions."""
         # Capture variables for closure
@@ -141,8 +155,8 @@ class Logger:
                 for key, (level, value) in metrics_dict.items()
             }
 
-            # Automatically inject wall clock elapsed time
-            elapsed = time.perf_counter() - _wall_clock_start
+            # Automatically inject wall clock elapsed time (excluding analysis/checkpoint time)
+            elapsed = time.perf_counter() - _wall_clock_start - _paused_duration
             float_metrics["Timing/Wall Clock (s)"] = (logging.INFO, elapsed)
 
             if use_local:

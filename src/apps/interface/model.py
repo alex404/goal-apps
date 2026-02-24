@@ -95,11 +95,12 @@ class Model[D: Dataset](ABC):
         params: Array | None = None,
     ) -> None:
         """Complete epoch checkpointing: save params, run analyses, save metrics."""
-        if params is not None:
-            handler.save_params(params, epoch)
+        with logger.pause_timing():
+            if params is not None:
+                handler.save_params(params, epoch)
 
-        for analysis in self.get_analyses(dataset):
-            analysis.process(key, handler, logger, dataset, model, epoch, params)
+            for analysis in self.get_analyses(dataset):
+                analysis.process(key, handler, logger, dataset, model, epoch, params)
 
-        handler.save_metrics(logger.get_metric_buffer())
+            handler.save_metrics(logger.get_metric_buffer())
         log.info(f"Epoch {epoch} checkpoint complete.")
