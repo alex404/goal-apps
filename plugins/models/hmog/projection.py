@@ -477,37 +477,6 @@ class ProjectionHMoGModel(
     def _initialize_mixture(self, key: Array) -> Array:
         return self.mixture.initialize(key, shape=self.mix_noise_scale)
 
-    def _initialize_mixture_from_data_normal(
-        self, key: Array, latent_locations: Array
-    ) -> Array:
-        """Initialize mixture by sampling means from a normal fitted to projected data.
-
-        Computes the empirical mean and per-dimension variance of latent_locations,
-        then samples K component means from N(data_mean, diag(data_var)).
-        Component covariances are set to the mean empirical variance.
-        """
-        mix = self.mixture
-        data_mean = jnp.mean(latent_locations, axis=0)
-        data_var = jnp.var(latent_locations, axis=0)
-        data_std = jnp.sqrt(data_var)
-
-        centers = data_mean + data_std * jax.random.normal(
-            key, shape=(self.n_clusters, self.lgm.lat_dim)
-        )
-
-        mean_var = float(jnp.maximum(jnp.mean(data_var), 1e-5))
-        cov_mat = jnp.diag(jnp.full(self.lgm.lat_dim, mean_var))
-        cov_params = mix.obs_man.cov_man.from_matrix(cov_mat)
-
-        nat_list = [
-            mix.obs_man.to_natural(
-                mix.obs_man.join_mean_covariance(centers[i], cov_params)
-            )
-            for i in range(self.n_clusters)
-        ]
-        return mix.join_natural_mixture(
-            jnp.concatenate(nat_list), jnp.zeros(self.n_clusters - 1)
-        )
 
     def _initialize_mixture_from_projections(
         self, key: Array, latent_locations: Array
@@ -746,8 +715,8 @@ class ProjectionHMoGModel(
                     key_mix_init, latent_locations
                 )
             else:
-                mix_params = self._initialize_mixture_from_data_normal(
-                    key_mix_init, latent_locations
+                mix_params = self.mixture.initialize_from_sample(
+                    key_mix_init, latent_locations, shape=self.mix_noise_scale
                 )
 
             log.info(

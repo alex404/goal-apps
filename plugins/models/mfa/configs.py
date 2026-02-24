@@ -95,6 +95,9 @@ class MFAConfig(ClusteringModelConfig):
     diagonal: bool = False
     """Use diagonal covariance MFA (NormalLGM with Diagonal) instead of FactorAnalysis."""
 
+    kmeans_init: bool = True
+    """Use k-means initialization. If False, uses goal-jax initialize_from_sample (random)."""
+
     init_scale: float = 0.01
     """Scale for parameter initialization (smaller for high-dim data)."""
 

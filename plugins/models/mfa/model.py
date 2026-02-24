@@ -63,6 +63,7 @@ class MFAModel(
         trainer: GradientTrainer,
         analyses: ClusteringAnalysesConfig,
         diagonal: bool = False,
+        kmeans_init: bool = True,
         init_scale: float = 0.01,
         min_var: float = 0.01,
     ):
@@ -84,6 +85,7 @@ class MFAModel(
         self.trainer: GradientTrainer = trainer
         self.analyses_config: ClusteringAnalysesConfig = analyses
         self.diagonal: bool = diagonal
+        self.kmeans_init: bool = kmeans_init
         self.init_scale: float = init_scale
         self.min_var: float = min_var
 
@@ -146,6 +148,10 @@ class MFAModel(
         Returns:
             Initial model parameters (natural coordinates)
         """
+        if not self.kmeans_init:
+            log.info("Using initialize_from_sample initialization")
+            return self.mfa.initialize_from_sample(key, data, shape=self.init_scale)
+
         keys = jax.random.split(key, 3)
 
         # Run k-means to get cluster centers

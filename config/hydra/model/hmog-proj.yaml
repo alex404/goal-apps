@@ -5,7 +5,7 @@ defaults:
 
 latent_dim: 50
 n_clusters: 20
-kmeans_init: true
+kmeans_init: false
 
 pre:
   lr: 1e-4
@@ -14,7 +14,7 @@ pre:
   l1_reg: 0
   l2_reg: 1e-4
   grad_clip: 1
-  min_var: 1e-5
+  min_var: 1e-4
   jitter_var: 0
   epoch_reset: true
 
@@ -23,10 +23,10 @@ pro:
   n_epochs: 500
   batch_steps: 1000
   grad_clip: 1
-  min_prob: 1e-5
-  lat_min_var: 0.01
-  l2_reg: 0
+  min_prob: 1e-4
+  lat_min_var: 1e-4
+  l2_reg: 1e-4
   lat_jitter_var: 0
   epoch_reset: true
-  upr_prs_reg: 0
-  lwr_prs_reg: 1e-5
+  upr_prs_reg: 1e-4
+  lwr_prs_reg: 1e-4
