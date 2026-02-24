@@ -9,18 +9,18 @@ init_scale: 0.01
 min_var: 0.01
 
 trainer:
-  lr: 2e-5
+  lr: 1e-4
   n_epochs: 1000
   # batch_size: 512  # commented out = full dataset E-step (approximate EM)
   batch_steps: 1000
-  grad_clip: 0.0
+  grad_clip: 1
   log_freq: 10
 
   # Regularization
-  l1_reg: 1e-4
-  l2_reg: 0
-  upr_prs_reg: 0
-  lwr_prs_reg: 0
+  l1_reg: 0
+  l2_reg: 1e-3
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 1e-3
   mixture_entropy_reg: 1e-4
 
   min_prob: 1e-4

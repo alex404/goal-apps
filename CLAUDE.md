@@ -16,7 +16,7 @@ source .venv/bin/activate
 
 All tools (basedpyright, ruff, the `goal` CLI, Python itself) are installed in this venv. Do **not** use system Python or install packages outside the venv.
 
-If you need to access goal-jax code for reference, it is typically under `../goal-jax`
+If you need to access goal-jax code for reference, it is typically under `/home/alex404/code/goal-jax`
 
 ## Common Commands
 
