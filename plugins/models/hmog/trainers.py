@@ -188,13 +188,6 @@ class FullGradientTrainer:
 
     # Numerical stability
     mixture_entropy_reg: float = 0.0
-    reset_latent_to_standard: bool = True
-    """Explicitly reset overall latent to standard_normal after whitening.
-
-    While mathematically redundant (whitening + join_mean_mixture produces ~standard
-    normal to ~1e-7 precision), the explicit reset prevents small numerical errors
-    from accumulating over many training steps, improving stability.
-    """
 
     epoch_reset: bool = True
 
@@ -204,54 +197,26 @@ class FullGradientTrainer:
         means: Array,
     ) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
-        # Split posterior statistics
         obs_means, int_means, lat_means = model.split_coords(means)
 
-        # For observable parameters, bound the variances
         bounded_obs_means = model.lwr_hrm.obs_man.regularize_covariance(
             obs_means, self.obs_jitter_var, self.obs_min_var
         )
 
-        # Bound latent parameters
+        whitened_means = model.whiten_prior(
+            model.join_coords(bounded_obs_means, int_means, lat_means)
+        )
+
+        obs_w, int_w, lat_w = model.split_coords(whitened_means)
         with model.pst_man as uh:
-            # Component means and probabilities
-            comp_meanss, prob_means = uh.split_mean_mixture(lat_means)
-            # Average latent means for whitening
-            lat_obs_means, _, _ = model.pst_man.split_coords(lat_means)
+            comp_w, prob_w = uh.split_mean_mixture(lat_w)
+            probs = uh.lat_man.to_probs(prob_w)
+            bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
+            bounded_probs = bounded_probs / jnp.sum(bounded_probs)
+            bounded_prob_w = uh.lat_man.from_probs(bounded_probs)
+            bounded_lat_w = uh.join_mean_mixture(comp_w, bounded_prob_w)
 
-            # Whiten component means relative to average of component means
-            def whiten_and_bound(
-                comp_means: Array,
-            ) -> Array:
-                whitened_comp_means = uh.obs_man.whiten(comp_means, lat_obs_means)
-                return uh.obs_man.regularize_covariance(
-                    whitened_comp_means, self.lat_jitter_var, self.lat_min_var
-                )
-
-            bounded_comp_meanss = uh.cmp_man.map(
-                whiten_and_bound, comp_meanss, flatten=True
-            )
-
-            # Bound probabilities
-            probs = uh.lat_man.to_probs(prob_means)
-            bounded_probs0 = jnp.clip(probs, self.min_prob, 1.0)
-            bounded_probs = bounded_probs0 / jnp.sum(bounded_probs0)
-            bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
-
-            # Reassemble regularized mean mixture.
-            bounded_lat_means = uh.join_mean_mixture(
-                bounded_comp_meanss, bounded_prob_means
-            )
-
-            # Optionally reset overall to exact standard_normal (mathematically redundant
-            # since whitening already produces ~standard_normal, but prevents error accumulation)
-            if self.reset_latent_to_standard:
-                _, bounded_lat_int, bounded_lat_cat = uh.split_coords(bounded_lat_means)
-                z = uh.obs_man.standard_normal()
-                bounded_lat_means = uh.join_coords(z, bounded_lat_int, bounded_lat_cat)
-
-        # Rejoin all parameters
-        return model.join_coords(bounded_obs_means, int_means, bounded_lat_means)
+        return model.join_coords(obs_w, int_w, bounded_lat_w)
 
     def make_regularizer(
         self, model: AnyHMoG
@@ -534,17 +499,11 @@ class LGMPreTrainer:
 
     def bound_means(self, model: AnyLGM, means: Array) -> Array:
         """Apply bounds to posterior statistics for numerical stability."""
-        # Split posterior statistics
-        obs_means, int_means, _ = model.split_coords(means)
-
-        # For observable parameters, bound the variances
+        obs_means, int_means, lat_means = model.split_coords(means)
         bounded_obs_means = model.obs_man.regularize_covariance(
             obs_means, self.jitter_var, self.min_var
         )
-        z = model.pst_man.standard_normal()
-
-        # Rejoin all parameters
-        return model.join_coords(bounded_obs_means, int_means, z)
+        return model.join_coords(bounded_obs_means, int_means, lat_means)
 
     def make_regularizer(
         self, model: AnyLGM
@@ -716,6 +675,8 @@ class LGMPreTrainer:
             # gradss_array shape: (n_batches, n_steps, param_dim)
             batch_grads = gradss_array.reshape(-1, *gradss_array.shape[2:])
 
+            opt_state = optimizer.init(new_params)
+
             reg_fn = self.make_regularizer(model)
             metrics = reg_fn(new_params)[1]
 
@@ -766,15 +727,6 @@ class MixtureGradientTrainer:
     upr_prs_reg: float
     lwr_prs_reg: float
     mixture_entropy_reg: float = 0.0
-
-    # Numerical stability
-    reset_latent_to_standard: bool = True
-    """Explicitly reset overall latent to standard_normal after whitening.
-
-    While mathematically redundant (whitening + join_mean_mixture produces ~standard
-    normal to ~1e-7 precision), the explicit reset prevents small numerical errors
-    from accumulating over many training steps, improving stability.
-    """
 
     epoch_reset: bool = True
 
@@ -831,43 +783,14 @@ class MixtureGradientTrainer:
         return jax.grad(log_partition_function)(mix_params)
 
     def bound_mixture_means(self, model: AnyHMoG, mix_means: Array) -> Array:
-        """Apply bounds to mixture components for numerical stability."""
+        """Apply bounds to mixture weights for numerical stability."""
         with model.pst_man as uh:
-            # Bound component means
-            cmp_meanss, cat_means = uh.split_mean_mixture(mix_means)
-            lat_obs_means, _, _ = model.pst_man.split_coords(mix_means)
-
-            def whiten_and_bound(
-                comp_means: Array,
-            ) -> Array:
-                whitened_comp_means = uh.obs_man.whiten(comp_means, lat_obs_means)
-                return uh.obs_man.regularize_covariance(
-                    whitened_comp_means, self.lat_jitter_var, self.lat_min_var
-                )
-
-            # map() returns 2D by default, but join_mean_mixture expects flat
-            bounded_cmp_meanss = uh.cmp_man.map(
-                whiten_and_bound, cmp_meanss, flatten=True
-            )
-
-            # Bound probabilities
+            comp_meanss, cat_means = uh.split_mean_mixture(mix_means)
             probs = uh.lat_man.to_probs(cat_means)
             bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
             bounded_probs = bounded_probs / jnp.sum(bounded_probs)
             bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
-
-            bounded_mix_means = uh.join_mean_mixture(
-                bounded_cmp_meanss, bounded_prob_means
-            )
-
-            # Optionally reset overall to exact standard_normal (mathematically redundant
-            # since whitening already produces ~standard_normal, but prevents error accumulation)
-            if self.reset_latent_to_standard:
-                _, bounded_lat_int, bounded_lat_cat = uh.split_coords(bounded_mix_means)
-                z = uh.obs_man.standard_normal()
-                bounded_mix_means = uh.join_coords(z, bounded_lat_int, bounded_lat_cat)
-
-            return bounded_mix_means
+            return uh.join_mean_mixture(comp_meanss, bounded_prob_means)
 
     def make_regularizer(
         self, model: AnyHMoG, rho: Array

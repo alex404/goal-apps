@@ -15,17 +15,16 @@ trainer:
   batch_steps: 1000
   grad_clip: 0.0
   log_freq: 10
-  enforce_prior: true
 
   # Regularization
-  l1_reg: 0
+  l1_reg: 1e-4
   l2_reg: 0
   upr_prs_reg: 0
   lwr_prs_reg: 0
   mixture_entropy_reg: 1e-4
 
-  min_prob: 1e-3
-  obs_min_var: 1e-3  # gans-n-gmms clips sqrt(D) to [1e-3, 1.0], so var in [1e-6, 1.0]
+  min_prob: 1e-4
+  obs_min_var: 1e-4  # gans-n-gmms clips sqrt(D) to [1e-3, 1.0], so var in [1e-6, 1.0]
   obs_max_var: 10.0   # matches reference sqrt_D ≤ 1.0 → var ≤ 1.0
   lat_min_var: 1e-4
 

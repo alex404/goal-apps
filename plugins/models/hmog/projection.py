@@ -30,7 +30,6 @@ from goal.models import (
     full_normal,
 )
 from jax import Array
-
 from sklearn.cluster import KMeans
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
@@ -112,39 +111,6 @@ def to_analytic_params(
     else:
         full_mix_params = mix_params  # already FullNormal space
     return analytic_manifold.join_conjugated(lkl_params, full_mix_params)
-
-
-def unnormalize_mix_params(
-    mix: LatentMixture,
-    mix_params: Array,
-    z_mean: Array,
-    z_std: Array,
-) -> Array:
-    """Convert GMM natural params from normalised (z' = (z-mean)/std) to original space.
-
-    If latent locations were normalised before training, this function converts
-    the resulting mix_params back so they describe distributions in the original
-    latent coordinate system, as required by to_analytic_params / join_conjugated.
-
-    Works for both Normal[Diagonal] and FullNormal components:
-        μ_orig   = μ' * std + mean
-        Σ_orig   = Σ' * outer(std, std)   (diagonal case: Σ_orig_jj = Σ'_jj * std_j²)
-    """
-    comp_params, cat_params = mix.split_natural_mixture(mix_params)
-    comp_params_2d = mix.cmp_man.to_2d(comp_params)
-
-    def unnorm_comp(comp_nat_k: Array) -> Array:
-        mean_k = mix.obs_man.to_mean(comp_nat_k)
-        mu, cov = mix.obs_man.split_mean_covariance(mean_k)
-        cov_mat = mix.obs_man.cov_man.to_matrix(cov)
-        mu_orig = mu * z_std + z_mean
-        cov_mat_orig = cov_mat * jnp.outer(z_std, z_std)
-        cov_orig = mix.obs_man.cov_man.from_matrix(cov_mat_orig)
-        mean_orig = mix.obs_man.join_mean_covariance(mu_orig, cov_orig)
-        return mix.obs_man.to_natural(mean_orig)
-
-    unnorm_comp_2d = jax.vmap(unnorm_comp)(comp_params_2d)
-    return mix.join_natural_mixture(unnorm_comp_2d.ravel(), cat_params)
 
 
 @dataclass(frozen=True)
@@ -503,9 +469,9 @@ class ProjectionHMoGModel(
         )
         int_params = lgm.int_man.rep.from_matrix(int_noise)
 
-        lat_params = lgm.pst_man.to_natural(lgm.pst_man.standard_normal())
-
-        return lgm.join_coords(obs_params, int_params, lat_params)
+        lkl_params = lgm.lkl_fun_man.join_coords(obs_params, int_params)
+        z = lgm.lat_man.to_natural(lgm.lat_man.standard_normal())
+        return lgm.join_conjugated(lkl_params, z)
 
     def _initialize_mixture(self, key: Array) -> Array:
         return self.mixture.initialize(key, shape=self.mix_noise_scale)
@@ -552,9 +518,7 @@ class ProjectionHMoGModel(
         """
         mix = self.mixture
         log.info("Running k-means on latent projections for mixture initialization...")
-        km = KMeans(
-            n_clusters=self.n_clusters, n_init="auto", random_state=int(key[0])
-        )
+        km = KMeans(n_clusters=self.n_clusters, n_init="auto", random_state=int(key[0]))
         km.fit(np.asarray(latent_locations))
         centers = jnp.array(km.cluster_centers_)
         log.info("K-means mixture initialization complete")
@@ -563,9 +527,7 @@ class ProjectionHMoGModel(
         # precision natural params (η₂ = -1/(2σ²)) stay safely negative and
         # don't cross zero after just a few gradient steps (which causes NaN).
         n_samples = latent_locations.shape[0]
-        mean_var = float(
-            max(km.inertia_ / (n_samples * self.lgm.lat_dim), 1e-3)
-        )
+        mean_var = float(max(km.inertia_ / (n_samples * self.lgm.lat_dim), 1e-3))
         cov_mat = jnp.diag(jnp.full(self.lgm.lat_dim, mean_var))
         cov_params = mix.obs_man.cov_man.from_matrix(cov_mat)
 
@@ -590,8 +552,8 @@ class ProjectionHMoGModel(
         lkl_params, lat_stored = self.analytic_manifold.split_conjugated(params)
         rho = self.analytic_manifold.conjugation_parameters(lkl_params)
         full_mix_params = lat_stored + rho
-        lat_prior = self.lgm.pst_man.to_natural(self.lgm.pst_man.standard_normal())
-        lgm_params = jnp.concatenate([lkl_params, lat_prior])
+        z = self.lgm.lat_man.to_natural(self.lgm.lat_man.standard_normal())
+        lgm_params = self.lgm.join_conjugated(lkl_params, z)
         return lgm_params, full_mix_params
 
     # Protocol methods
@@ -777,25 +739,19 @@ class ProjectionHMoGModel(
                 lgm, lgm_params, dataset.test_data
             )
 
-            # Normalise to zero mean, unit std per dimension.
-            # Keeps η₂_init ≈ -0.5 (safely negative) regardless of LGM scale.
-            z_mean = jnp.mean(latent_locations, axis=0)
-            z_std = jnp.maximum(jnp.std(latent_locations, axis=0), 1e-8)
-            latent_locations_norm = (latent_locations - z_mean) / z_std
-            test_latent_locations_norm = (test_latent_locations - z_mean) / z_std
+            lat_std = jnp.std(latent_locations, axis=0)
             log.info(
-                f"Latent locations normalised: per-dim std "
-                f"min={float(jnp.min(z_std)):.2f}  max={float(jnp.max(z_std)):.2f}"
+                f"Latent projections: per-dim std min={float(jnp.min(lat_std)):.3f}  max={float(jnp.max(lat_std)):.3f}"
             )
 
             # Initialize mixture (k-means or sample means from fitted normal)
             if self.kmeans_init:
                 mix_params = self._initialize_mixture_from_projections(
-                    key_mix_init, latent_locations_norm
+                    key_mix_init, latent_locations
                 )
             else:
                 mix_params = self._initialize_mixture_from_data_normal(
-                    key_mix_init, latent_locations_norm
+                    key_mix_init, latent_locations
                 )
 
             log.info(
@@ -804,16 +760,12 @@ class ProjectionHMoGModel(
 
             def log_proj(mix_ps: Array, ep: Array) -> None:
                 def compute_metrics() -> MetricDict:
-                    # Unnormalise before assembling HMoG (mix_ps lives in normalised space)
-                    mix_ps_orig = unnormalize_mix_params(
-                        mixture, mix_ps, z_mean, z_std
-                    )
                     hmog_params = to_analytic_params(
                         lgm,
                         mixture,
                         self.analytic_manifold,
                         lgm_params,
-                        mix_ps_orig,
+                        mix_ps,
                         diagonal_latent=self.diagonal_latent,
                     )
                     train_ll = self.analytic_manifold.average_log_observable_density(
@@ -831,16 +783,16 @@ class ProjectionHMoGModel(
                         dataset.train_data.shape[0],
                     )
                     if dataset.has_labels:
-                        # Classify normalised projections with normalised mix_ps
+
                         def classify(z: Array) -> Array:
                             cat_params = mixture.posterior_at(mix_ps, z)
                             return jnp.argmax(mixture.lat_man.to_probs(cat_params))
 
                         train_clusters = jax.lax.map(
-                            classify, latent_locations_norm, batch_size=256
+                            classify, latent_locations, batch_size=256
                         )
                         test_clusters = jax.lax.map(
-                            classify, test_latent_locations_norm, batch_size=256
+                            classify, test_latent_locations, batch_size=256
                         )
                         add_clustering_metrics(
                             metrics,
@@ -859,15 +811,12 @@ class ProjectionHMoGModel(
 
             mix_params = self.projection.train_on_projections(
                 key_proj,
-                latent_locations_norm,
+                latent_locations,
                 mixture,
                 mix_params,
                 log_callback=log_proj,
                 epoch_offset=epoch,
             )
-
-            # Unnormalise mix_params back to original latent space before assembly
-            mix_params = unnormalize_mix_params(mixture, mix_params, z_mean, z_std)
 
             final_params = to_analytic_params(
                 lgm,
