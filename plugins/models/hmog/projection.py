@@ -342,7 +342,7 @@ class ProjectionTrainer:
         log.info("Precomputing latent projections for all training data")
         latent_locations = self.project_data(lgm, lgm_params, dataset.train_data)
         log.info(
-            f"Training mixture with conjugation-aware EM for {self.n_epochs} epochs"
+            f"Training mixture on projected latent data for {self.n_epochs} epochs"
         )
         return self.train_on_projections(key, latent_locations, mix, params0)
 
@@ -547,13 +547,10 @@ class ProjectionHMoGModel(
 
         For Factor Analysis the latent prior is standard normal by definition,
         so we reconstruct lgm_params from the likelihood parameters (obs, int)
-        plus a fresh standard-normal prior.  The full_mix_params are recovered
-        by undoing the conjugation correction stored in the HMoG params.
+        plus a fresh standard-normal prior.  The full_mix_params are the actual
+        prior mixture params returned directly by split_conjugated.
         """
-        lkl_params, lat_stored = self.analytic_manifold.split_conjugated(params)
-        rho = self.analytic_manifold.conjugation_parameters(lkl_params)
-        # TODO: Are we sure this is correct? If we want the parameters themselves, we can use split_coordinates, but if we want the parameters of the prior mixture, we shouldn't add rho back on since the HMoG params are already conjugation-corrected to have the correct effective prior params. This is a bit subtle and worth double-checking.
-        full_mix_params = lat_stored + rho
+        lkl_params, full_mix_params = self.analytic_manifold.split_conjugated(params)
         z = self.lgm.lat_man.to_natural(self.lgm.lat_man.standard_normal())
         lgm_params = self.lgm.join_conjugated(lkl_params, z)
         return lgm_params, full_mix_params
@@ -582,11 +579,7 @@ class ProjectionHMoGModel(
 
     @override
     def compute_cluster_prototypes(self, params: Array) -> list[Array]:
-        # Recover actual prior mixture params (stored as prior - rho; add rho back)
-        lkl_params, lat_stored = self.analytic_manifold.split_conjugated(params)
-        rho = self.analytic_manifold.conjugation_parameters(lkl_params)
-        # TODO: Again is this what we want here? Do we want the prior parameters of the mixture, which would be lat_stored without adding rho back on since the HMoG params are already conjugation-corrected to have the correct effective prior params, or do we want the parameters stored in the HMoG which have the conjugation correction subtracted out? This is a bit subtle and worth double-checking.
-        full_mix_params = lat_stored + rho  # actual AnalyticMixture[FullNormal] params
+        lkl_params, full_mix_params = self.analytic_manifold.split_conjugated(params)
 
         comp_lats, _ = self.analytic_manifold.upr_hrm.split_natural_mixture(
             full_mix_params
@@ -621,7 +614,6 @@ class ProjectionHMoGModel(
 
         return jax.lax.map(assign_one, data, batch_size=256)
 
-    # TODO: Don't we want to add model prototypes here?
     @override
     def get_analyses(
         self, dataset: ClusteringDataset
@@ -758,9 +750,8 @@ class ProjectionHMoGModel(
                     key_mix_init, latent_locations
                 )
 
-                # TODO: This text is superficially wrong. The conjugation-awareness is only in evaluating the model LL. The NMI and cluster accuracy are based on projecting the data, then evaluating the conditional probability of the datapoint, rather than marginalizing out the latent space. Training should not rely on the conjugation structure of the HMoG. I think this code is sound but please verify.
             log.info(
-                f"Training mixture with conjugation-aware EM for {self.projection.n_epochs} epochs"
+                f"Training mixture on projected latent data for {self.projection.n_epochs} epochs"
             )
 
             def log_proj(mix_ps: Array, ep: Array) -> None:
