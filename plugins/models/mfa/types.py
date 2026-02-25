@@ -1,12 +1,9 @@
 """Shared type definitions for MFA plugin."""
 
-from goal.models import DiagonalNormal, FullNormal
-from goal.models.graphical.mixture import (
-    CompleteMixtureOfConjugated,
-    CompleteMixtureOfSymmetric,
-)
+from goal.models import DiagonalNormal, FullNormal, MixtureOfFactorAnalyzers
+from goal.models.graphical.mixture import CompleteMixtureOfConjugated
 
 type MFA = (
-    CompleteMixtureOfSymmetric[DiagonalNormal, FullNormal]
+    MixtureOfFactorAnalyzers
     | CompleteMixtureOfConjugated[DiagonalNormal, DiagonalNormal, FullNormal]
 )

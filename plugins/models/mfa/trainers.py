@@ -14,6 +14,8 @@ from jax import Array
 from apps.interface import ClusteringDataset
 from apps.runtime import STATS_NUM, Logger, MetricDict
 
+from goal.models import MixtureOfFactorAnalyzers
+
 from .metrics import log_epoch_metrics
 from .types import MFA
 
@@ -173,13 +175,13 @@ class GradientTrainer:
     """Minimum observable variance."""
 
     lat_min_var: float
-    """Minimum latent variance (currently unused - latents reset to standard normal)."""
+    """Minimum latent variance."""
 
     obs_jitter_var: float
     """Jitter for observable variance."""
 
     lat_jitter_var: float
-    """Jitter for latent variance (currently unused - latents reset to standard normal)."""
+    """Jitter for latent variance."""
 
     obs_max_var: float
     """Maximum observable variance (0.0 = disabled). Matches reference sqrt_D ≤ 1.0 when set to 1.0."""
@@ -191,7 +193,7 @@ class GradientTrainer:
     """Use AdamW (with weight decay) instead of plain Adam."""
 
     def bound_means(self, mfa: MFA, means: Array) -> Array:
-        """Apply bounds to posterior statistics: bound observable covariance and mixture weights."""
+        """Apply bounds to posterior statistics: bound observable covariance, whiten, and clip mixture weights."""
         obs_means, int_means, lat_means = mfa.split_coords(means)
 
         bounded_obs_means = mfa.bas_hrm.obs_man.regularize_covariance(
@@ -206,15 +208,22 @@ class GradientTrainer:
             )
             bounded_obs_means = obs_man.join_mean_covariance(obs_mean_vec, clipped_cov)
 
+        bounded_means = mfa.join_coords(bounded_obs_means, int_means, lat_means)
+
+        if isinstance(mfa, MixtureOfFactorAnalyzers):
+            bounded_means = mfa.whiten_prior(bounded_means)
+
+        obs_w, int_w, lat_w = mfa.split_coords(bounded_means)
+
         with mfa.pst_man as pm:
-            comp_meanss, cat_means = pm.split_mean_mixture(lat_means)
-            probs = pm.lat_man.to_probs(cat_means)
+            comp_w, cat_w = pm.split_mean_mixture(lat_w)
+            probs = pm.lat_man.to_probs(cat_w)
             bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
             bounded_probs = bounded_probs / jnp.sum(bounded_probs)
-            bounded_cat_means = pm.lat_man.from_probs(bounded_probs)
-            bounded_lat_means = pm.join_mean_mixture(comp_meanss, bounded_cat_means)
+            bounded_cat_w = pm.lat_man.from_probs(bounded_probs)
+            bounded_lat_w = pm.join_mean_mixture(comp_w, bounded_cat_w)
 
-        return mfa.join_coords(bounded_obs_means, int_means, bounded_lat_means)
+        return mfa.join_coords(obs_w, int_w, bounded_lat_w)
 
     def make_regularizer(
         self, mfa: MFA
