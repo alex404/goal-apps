@@ -30,7 +30,7 @@ full:
   obs_min_var: 1e-4
   lat_min_var: 1e-4
   l1_reg: 1e-4
-  l2_reg: 1e-3
+  l2_reg: 1e-4
   upr_prs_reg: 1e-4
   lwr_prs_reg: 1e-4
   mixture_entropy_reg: 0
