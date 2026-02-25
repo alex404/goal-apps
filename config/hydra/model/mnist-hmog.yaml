@@ -29,8 +29,8 @@ full:
   min_prob: 1e-4
   obs_min_var: 1e-4
   lat_min_var: 1e-4
-  l1_reg: 0
-  l2_reg: 0
+  l1_reg: 1e-4
+  l2_reg: 1e-3
   upr_prs_reg: 1e-4
   lwr_prs_reg: 1e-4
   mixture_entropy_reg: 0
