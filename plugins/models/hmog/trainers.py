@@ -187,7 +187,7 @@ class FullGradientTrainer:
     mask_type: MaskingStrategy
 
     # Numerical stability
-    mixture_entropy_reg: float = 0.0
+    mixture_entropy_reg: float
 
     epoch_reset: bool = True
 
@@ -203,20 +203,17 @@ class FullGradientTrainer:
             obs_means, self.obs_jitter_var, self.obs_min_var
         )
 
-        whitened_means = model.whiten_prior(
-            model.join_coords(bounded_obs_means, int_means, lat_means)
-        )
-
-        obs_w, int_w, lat_w = model.split_coords(whitened_means)
         with model.pst_man as uh:
-            comp_w, prob_w = uh.split_mean_mixture(lat_w)
-            probs = uh.lat_man.to_probs(prob_w)
+            comp_means, prob_means = uh.split_mean_mixture(lat_means)
+            probs = uh.lat_man.to_probs(prob_means)
             bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
             bounded_probs = bounded_probs / jnp.sum(bounded_probs)
-            bounded_prob_w = uh.lat_man.from_probs(bounded_probs)
-            bounded_lat_w = uh.join_mean_mixture(comp_w, bounded_prob_w)
+            bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
+            bounded_lat_means = uh.join_mean_mixture(comp_means, bounded_prob_means)
 
-        return model.join_coords(obs_w, int_w, bounded_lat_w)
+        return model.whiten_prior(
+            model.join_coords(bounded_obs_means, int_means, bounded_lat_means)
+        )
 
     def make_regularizer(
         self, model: AnyHMoG
@@ -726,7 +723,7 @@ class MixtureGradientTrainer:
     lat_jitter_var: float
     upr_prs_reg: float
     lwr_prs_reg: float
-    mixture_entropy_reg: float = 0.0
+    mixture_entropy_reg: float
 
     epoch_reset: bool = True
 
