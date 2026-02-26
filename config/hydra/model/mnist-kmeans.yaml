@@ -1,0 +1,16 @@
+defaults:
+  - pca_kmeans
+  - _self_
+
+n_clusters: 10           # One per digit class
+
+# PCA: 50 components captures ~85% variance on MNIST (standard literature choice)
+n_components: 50
+pca_random_state: 42
+
+# K-means: more restarts for better initialization
+random_state: 42
+max_iter: 300
+n_init: 20              # doubled from default 10 for more robust results
+tol: 1e-4
+algorithm: lloyd

@@ -1,18 +1,23 @@
-# 20 Newsgroups text classification configuration for HMOG
+# 20 Newsgroups configuration for HMoG
+#
+# Key finding: a single cycle converges well (~0.51 NMI peak at epoch 70);
+# additional cycles with decaying LR monotonically degrade performance.
+# n_epochs=100 captures the peak with comfortable margin.
 defaults:
   - hmog
   - _self_
 
-# Model architecture - tuned for text data
+# Model architecture
 latent_dim: 400
 n_clusters: 20
 
-# Training schedule - conservative for high-dimensional sparse text
-lr_scales: [1, 0.3, 0.1]
-num_cycles: 10
-lgm_noise_scale: 0.01  # Higher noise for sparse text
+# Single cycle — more cycles hurt on NG20
+num_cycles: 1
+lr_scales: []
+lgm_noise_scale: 0.01
 mix_noise_scale: 0.01
 
+# Pre-training phases disabled (direct full-gradient only)
 pre:
   n_epochs: 0
 
@@ -24,7 +29,7 @@ mix:
 
 full:
   lr: 1e-4
-  n_epochs: 200
+  n_epochs: 100
   batch_steps: 100
   grad_clip: 10
   min_prob: 1e-5
@@ -34,3 +39,5 @@ full:
   lwr_prs_reg: 1e-5
   l1_reg: 1e-6
   l2_reg: 1e-4
+  mixture_entropy_reg: 0.0
+  epoch_reset: true
