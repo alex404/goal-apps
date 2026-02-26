@@ -16,7 +16,7 @@ from .config import (
     OptimalMergeConfig,
 )
 from .dataset import ClusteringDataset, ClusteringDatasetConfig
-from .metrics import cluster_accuracy, clustering_nmi
+from .metrics import cluster_accuracy, clustering_nmi, fit_cluster_mapping
 from .model import ClusteringModel, ClusteringModelConfig
 from .protocols import (
     CanComputePrototypes,
@@ -44,6 +44,7 @@ __all__ = [
     # Metrics
     "cluster_accuracy",
     "clustering_nmi",
+    "fit_cluster_mapping",
     # Protocols
     "CanComputePrototypes",
     "HasClusterHierarchy",

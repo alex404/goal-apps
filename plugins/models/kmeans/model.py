@@ -140,29 +140,21 @@ class KMeansModel(ClusteringModel, CanComputePrototypes):
             nmi = normalized_mutual_info_score(true_labels, train_labels)
             ari = adjusted_rand_score(true_labels, train_labels)
 
-            # Compute accuracy with optimal cluster-to-class assignment (Hungarian algorithm)
-            def cluster_accuracy(y_true, y_pred):
-                # Create confusion matrix
-                n_clusters = len(np.unique(y_pred))
-                n_classes = len(np.unique(y_true))
-                cost_matrix = np.zeros((n_clusters, n_classes))
+            # Compute optimal cluster-to-class mapping via Hungarian algorithm on TRAIN data
+            n_clusters_k = len(np.unique(train_labels))
+            n_classes_k = len(np.unique(true_labels))
+            cost_matrix = np.zeros((n_clusters_k, n_classes_k))
+            unique_clusters_k = np.unique(train_labels)
+            unique_classes_k = np.unique(true_labels)
+            for li, ci in enumerate(unique_clusters_k):
+                for lj, cj in enumerate(unique_classes_k):
+                    cost_matrix[li, lj] = -np.sum((train_labels == ci) & (true_labels == cj))
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            cluster_to_class = np.full(self._n_clusters, -1)
+            for li, lj in zip(row_ind, col_ind):
+                cluster_to_class[unique_clusters_k[li]] = unique_classes_k[lj]
 
-                for i in range(n_clusters):
-                    for j in range(n_classes):
-                        # Cost is negative count (we want to maximize matches)
-                        cost_matrix[i, j] = -np.sum((y_pred == i) & (y_true == j))
-
-                # Solve assignment problem
-                row_indices, col_indices = linear_sum_assignment(cost_matrix)
-
-                # Calculate accuracy with optimal assignment
-                total_correct = 0
-                for i, j in zip(row_indices, col_indices):
-                    total_correct += -cost_matrix[i, j]  # Convert back to positive
-
-                return total_correct / len(y_true)
-
-            accuracy = cluster_accuracy(true_labels, train_labels)
+            accuracy = float(np.mean(cluster_to_class[train_labels] == true_labels))
 
             logger.log_metrics(
                 {"K-means/Train NMI": (20, jnp.array(nmi))}, jnp.array(0)
@@ -181,7 +173,7 @@ class KMeansModel(ClusteringModel, CanComputePrototypes):
 
             test_nmi = normalized_mutual_info_score(test_true_labels, test_labels)
             test_ari = adjusted_rand_score(test_true_labels, test_labels)
-            test_accuracy = cluster_accuracy(test_true_labels, test_labels)
+            test_accuracy = float(np.mean(cluster_to_class[test_labels] == test_true_labels))
 
             logger.log_metrics(
                 {"K-means/Test NMI": (20, jnp.array(test_nmi))}, jnp.array(0)
@@ -439,29 +431,21 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
             nmi = normalized_mutual_info_score(true_labels, train_labels)
             ari = adjusted_rand_score(true_labels, train_labels)
 
-            # Compute accuracy with optimal cluster-to-class assignment (Hungarian algorithm)
-            def cluster_accuracy(y_true, y_pred):
-                # Create confusion matrix
-                n_clusters = len(np.unique(y_pred))
-                n_classes = len(np.unique(y_true))
-                cost_matrix = np.zeros((n_clusters, n_classes))
+            # Compute optimal cluster-to-class mapping via Hungarian algorithm on TRAIN data
+            n_clusters_k = len(np.unique(train_labels))
+            n_classes_k = len(np.unique(true_labels))
+            cost_matrix = np.zeros((n_clusters_k, n_classes_k))
+            unique_clusters_k = np.unique(train_labels)
+            unique_classes_k = np.unique(true_labels)
+            for li, ci in enumerate(unique_clusters_k):
+                for lj, cj in enumerate(unique_classes_k):
+                    cost_matrix[li, lj] = -np.sum((train_labels == ci) & (true_labels == cj))
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            cluster_to_class = np.full(self._n_clusters, -1)
+            for li, lj in zip(row_ind, col_ind):
+                cluster_to_class[unique_clusters_k[li]] = unique_classes_k[lj]
 
-                for i in range(n_clusters):
-                    for j in range(n_classes):
-                        # Cost is negative count (we want to maximize matches)
-                        cost_matrix[i, j] = -np.sum((y_pred == i) & (y_true == j))
-
-                # Solve assignment problem
-                row_indices, col_indices = linear_sum_assignment(cost_matrix)
-
-                # Calculate accuracy with optimal assignment
-                total_correct = 0
-                for i, j in zip(row_indices, col_indices):
-                    total_correct += -cost_matrix[i, j]  # Convert back to positive
-
-                return total_correct / len(y_true)
-
-            accuracy = cluster_accuracy(true_labels, train_labels)
+            accuracy = float(np.mean(cluster_to_class[train_labels] == true_labels))
 
             logger.log_metrics(
                 {"PCA+K-means/Train NMI": (20, jnp.array(nmi))}, jnp.array(0)
@@ -480,7 +464,7 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
 
             test_nmi = normalized_mutual_info_score(test_true_labels, test_labels)
             test_ari = adjusted_rand_score(test_true_labels, test_labels)
-            test_accuracy = cluster_accuracy(test_true_labels, test_labels)
+            test_accuracy = float(np.mean(cluster_to_class[test_labels] == test_true_labels))
 
             logger.log_metrics(
                 {"PCA+K-means/Test NMI": (20, jnp.array(test_nmi))}, jnp.array(0)

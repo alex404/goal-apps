@@ -32,7 +32,9 @@ Paper config: K=150, L=5, 6000 iters.
 
 ## NG20 (D=5000 TF-IDF, content-only)
 
-Applied same architecture to 20 Newsgroups. TF-IDF features with max_features=5000, min_df=2, max_df=0.9 (matching the content-only PCA+KMeans baseline). 20 ground-truth classes.
+Applied same architecture to 20 Newsgroups. 20 ground-truth classes.
+
+**Preprocessing:** TF-IDF vectorization, content-only (headers/footers/quotes removed), `max_features=5000`, `min_df=2`, `max_df=0.9`. Note: the PCA+KMeans and LDA baselines use `max_features=10000`; 5000 was chosen here to keep per-step compute tractable (D×K×L dominates). The HMoG run uses `max_features=20000`.
 
 | Config | Seeds | Test NMI | Test LL/sample |
 |--------|-------|----------|----------------|

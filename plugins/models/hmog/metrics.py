@@ -12,7 +12,7 @@ from jax import Array
 from .types import AnyHMoG, AnyLGM
 
 from apps.interface import ClusteringDataset
-from apps.interface.clustering import cluster_accuracy, clustering_nmi
+from apps.interface.clustering import clustering_nmi
 from apps.runtime import (
     STATS_NUM,
     Logger,
@@ -166,7 +166,6 @@ def log_epoch_metrics(
                 test_labels=dataset.test_labels,
                 train_clusters=train_clusters,
                 test_clusters=test_clusters,
-                cluster_accuracy_fn=cluster_accuracy,
                 clustering_nmi_fn=clustering_nmi,
             )
 

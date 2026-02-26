@@ -11,43 +11,47 @@ import jax.numpy as jnp
 from jax import Array
 
 
-def cluster_accuracy(true_labels: Array, pred_clusters: Array) -> Array:
-    """Compute clustering accuracy with optimal label assignment.
+def fit_cluster_mapping(true_labels: Array, pred_clusters: Array) -> Array:
+    """Derive greedy cluster→class mapping from labeled data.
 
-    Uses a greedy assignment approach that is JIT-compatible. For each cluster,
-    assigns it to the class that has the most samples in that cluster.
+    Builds a contingency matrix and assigns each cluster to its most frequent
+    class. Returns the mapping array so it can be applied to a held-out split.
 
     Args:
-        true_labels: Ground truth labels (n_samples,)
+        true_labels: Ground truth labels used to derive the mapping (n_samples,)
         pred_clusters: Predicted cluster assignments (n_samples,)
 
     Returns:
-        Clustering accuracy after optimal label assignment
+        cluster_to_label: Array of shape (100,) mapping cluster index → class label
     """
-    # Use a fixed max size for JIT compatibility
     max_clusters = 100
-
-    # Create a fixed-size contingency matrix
     contingency = jnp.zeros((max_clusters, max_clusters))
 
-    # Fill the contingency matrix
     def body_fun(i: Array, cont: Array) -> Array:
         true_label = jnp.clip(true_labels[i], 0, max_clusters - 1)
         pred_cluster = jnp.clip(pred_clusters[i], 0, max_clusters - 1)
         return cont.at[pred_cluster, true_label].add(1)
 
     contingency = jax.lax.fori_loop(0, true_labels.shape[0], body_fun, contingency)
+    return jnp.argmax(contingency, axis=1)
 
-    # Find the best cluster-to-label assignment (greedy)
-    cluster_to_label = jnp.argmax(contingency, axis=1)
 
-    # Map each point's cluster to its best label
-    def map_fn(i: Array) -> Array:
-        cluster = jnp.clip(pred_clusters[i], 0, max_clusters - 1)
-        return cluster_to_label[cluster]
+def cluster_accuracy(true_labels: Array, pred_clusters: Array) -> Array:
+    """Compute clustering accuracy with greedy label assignment.
 
-    mapped_preds = jax.vmap(map_fn)(jnp.arange(true_labels.shape[0]))
+    Fits the cluster→class mapping from the same data it evaluates on.
+    Use fit_cluster_mapping + direct evaluation when you need to apply a
+    mapping derived from a separate (training) split.
 
+    Args:
+        true_labels: Ground truth labels (n_samples,)
+        pred_clusters: Predicted cluster assignments (n_samples,)
+
+    Returns:
+        Clustering accuracy after greedy label assignment
+    """
+    mapping = fit_cluster_mapping(true_labels, pred_clusters)
+    mapped_preds = mapping[jnp.clip(pred_clusters, 0, 99)]
     return jnp.mean(mapped_preds == true_labels)
 
 

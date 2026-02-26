@@ -34,7 +34,7 @@ from sklearn.cluster import KMeans
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
-from apps.interface.clustering import cluster_accuracy, clustering_nmi
+from apps.interface.clustering import clustering_nmi
 from apps.interface.clustering.analyses import (
     ClusterStatisticsAnalysis,
     CoAssignmentHierarchyAnalysis,
@@ -767,8 +767,7 @@ class ProjectionHMoGModel(
                             test_labels=dataset.test_labels,
                             train_clusters=train_clusters,
                             test_clusters=test_clusters,
-                            cluster_accuracy_fn=cluster_accuracy,
-                            clustering_nmi_fn=clustering_nmi,
+                                clustering_nmi_fn=clustering_nmi,
                         )
                     return metrics
 
