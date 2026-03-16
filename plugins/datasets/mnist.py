@@ -12,6 +12,7 @@ from hydra.core.config_store import ConfigStore
 from jax import Array
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.gridspec import GridSpecFromSubplotSpec
 from numpy.typing import NDArray
 from torchvision import datasets, transforms
 
@@ -166,8 +167,6 @@ Original error: {e!s}"""
             prototype_artifact: Artifact containing prototype and member digits
             axes: Matplotlib axes to draw on
         """
-        from matplotlib.gridspec import GridSpecFromSubplotSpec
-
         # Turn off the main axes frame
         axes.set_axis_off()
 

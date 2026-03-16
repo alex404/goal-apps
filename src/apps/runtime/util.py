@@ -9,6 +9,7 @@ from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
 
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import wandb as wandb
 from jax import Array
@@ -56,8 +57,6 @@ def update_stats(
         - "{group}/{name} Median"
         - "{group}/{name} Max"
     """
-    import jax.numpy as jnp
-
     level_arr = jnp.array(level)
     metrics.update(
         {

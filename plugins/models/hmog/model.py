@@ -31,6 +31,7 @@ from apps.interface.clustering.protocols import (
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
 
+from .analyses.base import get_component_prototypes
 from .analyses.loadings import LoadingMatrixAnalysis
 from .trainers import (
     FullGradientTrainer,
@@ -200,8 +201,6 @@ class HMoGModel(
     @override
     def compute_cluster_prototypes(self, params: Array) -> list[Array]:
         """Compute model-derived prototypes for each cluster."""
-        from .analyses.base import get_component_prototypes
-
         return get_component_prototypes(self.manifold, params)
 
     @override

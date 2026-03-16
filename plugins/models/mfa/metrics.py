@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import jax
 import jax.numpy as jnp
 from goal.geometry import Replicated
 from jax import Array
@@ -11,12 +12,11 @@ from jax import Array
 from .types import MFA
 
 from apps.interface import ClusteringDataset
-from apps.interface.clustering import clustering_nmi
+from apps.interface.clustering import add_clustering_metrics, clustering_nmi
 from apps.runtime import (
     STATS_NUM,
     Logger,
     MetricDict,
-    add_clustering_metrics,
     add_ll_metrics,
     log_with_frequency,
     update_stats,
@@ -30,8 +30,6 @@ INFO_LEVEL = jnp.array(logging.INFO)
 
 def cluster_assignments(mfa: MFA, params: Array, data: Array) -> Array:
     """Compute hard cluster assignments for data points."""
-    import jax
-
     return jax.lax.map(
         lambda x: mfa.posterior_hard_assignment(params, x),
         data,

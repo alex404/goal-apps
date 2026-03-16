@@ -1,16 +1,23 @@
 """Tasic et al. (2018) single-cell RNA-seq dataset implementation."""
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import override
+from urllib.request import urlretrieve
+from zipfile import ZipFile
 
+import h5py
 import jax.numpy as jnp
 import numpy as np
+import pandas as pd
 from hydra.core.config_store import ConfigStore
 from jax import Array
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpecFromSubplotSpec
+from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.preprocessing import StandardScaler
 
 from apps.interface import ClusteringDataset, ClusteringDatasetConfig
 
@@ -122,8 +129,6 @@ class TasicDataset(ClusteringDataset):
             print(f"Using cached Tasic dataset: {data_file}")
 
         # Load data from HDF5 file
-        import h5py
-
         with h5py.File(data_file, "r") as f:
             expression_data = f["expression"][:]  # cells x genes
             gene_names = [
@@ -181,8 +186,6 @@ class TasicDataset(ClusteringDataset):
 
         # Standardization
         if standardize:
-            from sklearn.preprocessing import StandardScaler
-
             scaler = StandardScaler()
             expression_data = scaler.fit_transform(expression_data)
             print("Applied standardization")
@@ -196,7 +199,6 @@ class TasicDataset(ClusteringDataset):
         
         try:
             # Try stratified split first
-            from sklearn.model_selection import StratifiedShuffleSplit
             sss = StratifiedShuffleSplit(n_splits=1, test_size=test_fraction, random_state=random_seed)
             (train_indices, test_indices), = sss.split(np.zeros(len(cell_labels)), cell_labels)
             train_indices = np.asarray(train_indices)
@@ -398,12 +400,6 @@ class TasicDataset(ClusteringDataset):
 
 def _download_tasic_data(output_path: Path) -> None:
     """Download real Tasic et al. (2018) single-cell RNA-seq dataset from Allen Institute."""
-    from urllib.request import urlretrieve
-    from zipfile import ZipFile
-
-    import h5py
-    import pandas as pd
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Skip if already processed
@@ -518,7 +514,5 @@ def _download_tasic_data(output_path: Path) -> None:
     print(f"Saved processed dataset to {output_path}")
 
     # Cleanup temporary files
-    import shutil
-
     shutil.rmtree(temp_dir)
     print("Cleanup complete.")

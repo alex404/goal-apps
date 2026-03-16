@@ -86,8 +86,6 @@ def format_config_table(name: str, params: dict[str, Any]) -> tuple[str | None, 
     Returns:
         tuple of (target implementation path, formatted table)
     """
-    from rich.table import Table
-
     # Create table of parameters
     table = Table(title=f"{name.upper()} Parameters")
     table.add_column("Parameter", style="cyan")

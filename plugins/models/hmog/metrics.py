@@ -12,12 +12,11 @@ from jax import Array
 from .types import AnyHMoG, AnyLGM
 
 from apps.interface import ClusteringDataset
-from apps.interface.clustering import clustering_nmi
+from apps.interface.clustering import add_clustering_metrics, clustering_nmi
 from apps.runtime import (
     STATS_NUM,
     Logger,
     MetricDict,
-    add_clustering_metrics,
     add_ll_metrics,
     log_with_frequency,
     update_stats,

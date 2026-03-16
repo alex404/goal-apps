@@ -17,7 +17,7 @@ import scipy.cluster.hierarchy
 import scipy.spatial.distance
 from jax import Array
 from matplotlib.figure import Figure
-from matplotlib.gridspec import GridSpec
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from numpy.typing import NDArray
 from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
@@ -191,8 +191,6 @@ class CoAssignmentMergeResults(MergeResults):
 
 def plot_merge_results(results: MergeResults, dataset: ClusteringDataset) -> Figure:
     """Plot merge results showing clusters grouped by class."""
-    from matplotlib.gridspec import GridSpecFromSubplotSpec
-
     n_classes = results.mapping.shape[1]
     n_clusters = len(results.prototypes)
 

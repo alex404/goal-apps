@@ -34,7 +34,7 @@ from sklearn.cluster import KMeans
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
-from apps.interface.clustering import clustering_nmi
+from apps.interface.clustering import add_clustering_metrics, clustering_nmi
 from apps.interface.clustering.analyses import (
     ClusterStatisticsAnalysis,
     CoAssignmentHierarchyAnalysis,
@@ -50,7 +50,6 @@ from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import (
     Logger,
     RunHandler,
-    add_clustering_metrics,
     add_ll_metrics,
     log_with_frequency,
 )

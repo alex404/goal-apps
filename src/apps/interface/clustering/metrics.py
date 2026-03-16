@@ -6,9 +6,16 @@ These can be used within jax.jit-compiled training loops.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
+
 import jax
 import jax.numpy as jnp
 from jax import Array
+
+from apps.runtime.util import MetricDict
+
+INFO_LEVEL = jnp.array(logging.INFO)
 
 
 def fit_cluster_mapping(true_labels: Array, pred_clusters: Array) -> Array:
@@ -118,3 +125,51 @@ def clustering_nmi(
 
     # Ensure NMI is in [0, 1]
     return jnp.clip(nmi, 0.0, 1.0)
+
+
+def add_clustering_metrics(
+    metrics: MetricDict,
+    n_clusters: int,
+    n_classes: int,
+    train_labels: Array,
+    test_labels: Array,
+    train_clusters: Array,
+    test_clusters: Array,
+    clustering_nmi_fn: Callable[[int, int, Array, Array], Array],
+) -> MetricDict:
+    """Add clustering evaluation metrics.
+
+    The cluster→class mapping is derived from the training split and applied
+    to both splits, so test accuracy is a proper held-out evaluation.
+
+    Args:
+        metrics: Existing metrics dict to update
+        n_clusters: Number of clusters in the model
+        n_classes: Number of ground-truth classes
+        train_labels: Ground-truth labels for training data
+        test_labels: Ground-truth labels for test data
+        train_clusters: Predicted cluster assignments for training data
+        test_clusters: Predicted cluster assignments for test data
+        clustering_nmi_fn: Function to compute normalized mutual information
+
+    Returns:
+        Updated metrics dict with:
+        - Clustering/Train Accuracy
+        - Clustering/Test Accuracy
+        - Clustering/Train NMI
+        - Clustering/Test NMI
+    """
+    train_mapping = fit_cluster_mapping(train_labels, train_clusters)
+    train_acc = jnp.mean(train_mapping[jnp.clip(train_clusters, 0, 99)] == train_labels)
+    test_acc = jnp.mean(train_mapping[jnp.clip(test_clusters, 0, 99)] == test_labels)
+
+    train_nmi = clustering_nmi_fn(n_clusters, n_classes, train_clusters, train_labels)
+    test_nmi = clustering_nmi_fn(n_clusters, n_classes, test_clusters, test_labels)
+
+    metrics.update({
+        "Clustering/Train Accuracy": (INFO_LEVEL, train_acc),
+        "Clustering/Test Accuracy": (INFO_LEVEL, test_acc),
+        "Clustering/Train NMI": (INFO_LEVEL, train_nmi),
+        "Clustering/Test NMI": (INFO_LEVEL, test_nmi),
+    })
+    return metrics
