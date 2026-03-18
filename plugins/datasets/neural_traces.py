@@ -336,8 +336,8 @@ class NeuralTracesDataset(ClusteringDataset):
         axes.figure.add_subplot(feat_ax)
 
         # Extract data
-        chirp_len = 249
-        bar_len = 32
+        chirp_len = self.chirp_len
+        bar_len = self.bar_len
         chirp_response = observable[:chirp_len]
         bar_response = observable[chirp_len : chirp_len + bar_len]
         features = observable[chirp_len + bar_len :]

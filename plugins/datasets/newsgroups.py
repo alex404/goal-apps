@@ -71,7 +71,7 @@ class NewsgroupsDataset(ClusteringDataset):
     """20 Newsgroups text classification dataset."""
 
     # Configuration
-    max_features: int
+    max_features: int | None
     min_df: int
     max_df: float
     n_top_words: int

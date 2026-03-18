@@ -62,7 +62,7 @@ class CIFAR10Dataset(ClusteringDataset):
         cls,
         cache_dir: Path,
         greyscale: bool = True,
-        normalize: bool = True,
+        normalize: bool = False,
     ) -> "CIFAR10Dataset":
         """Load CIFAR10 dataset.
 

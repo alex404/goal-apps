@@ -56,7 +56,7 @@ class SVHNDataset(ClusteringDataset):
 
     @classmethod
     def load(
-        cls, cache_dir: Path, greyscale: bool = True, crop_margin: int = 4
+        cls, cache_dir: Path, greyscale: bool = False, crop_margin: int = 0
     ) -> "SVHNDataset":
         """Load SVHN dataset.
 
@@ -163,10 +163,12 @@ Original error: {e!s}"""
         return True
 
     @property
+    @override
     def train_labels(self) -> Array:
         return self._train_labels
 
     @property
+    @override
     def test_labels(self) -> Array:
         return self._test_labels
 

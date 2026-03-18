@@ -192,9 +192,10 @@ class GradientTrainer:
     """Use AdamW (with weight decay) instead of plain Adam."""
 
     def bound_means(self, mfa: MFA, means: Array) -> Array:
-        """Apply bounds to posterior statistics: bound observable covariance, whiten, and clip mixture weights."""
+        """Apply bounds to posterior statistics: regularize covariances, clip probabilities, then whiten."""
         obs_means, int_means, lat_means = mfa.split_coords(means)
 
+        # Regularize observable covariance
         bounded_obs_means = mfa.bas_hrm.obs_man.regularize_covariance(
             obs_means, self.obs_jitter_var, self.obs_min_var
         )
@@ -207,22 +208,32 @@ class GradientTrainer:
             )
             bounded_obs_means = obs_man.join_mean_covariance(obs_mean_vec, clipped_cov)
 
-        bounded_means = mfa.join_coords(bounded_obs_means, int_means, lat_means)
-
-        if isinstance(mfa, MixtureOfFactorAnalyzers):
-            bounded_means = mfa.whiten_prior(bounded_means)
-
-        obs_w, int_w, lat_w = mfa.split_coords(bounded_means)
-
+        # Regularize per-component latent covariance
         pm = mfa.pst_man
-        comp_w, cat_w = pm.split_mean_mixture(lat_w)
+        comp_w, cat_w = pm.split_mean_mixture(lat_means)
+
+        comp_w = pm.cmp_man.map(
+            lambda c: pm.obs_man.regularize_covariance(
+                c, self.lat_jitter_var, self.lat_min_var
+            ),
+            comp_w,
+            flatten=True,
+        )
+
+        # Clip mixture probabilities
         probs = pm.lat_man.to_probs(cat_w)
         bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
         bounded_probs = bounded_probs / jnp.sum(bounded_probs)
         bounded_cat_w = pm.lat_man.from_probs(bounded_probs)
         bounded_lat_w = pm.join_mean_mixture(comp_w, bounded_cat_w)
 
-        return mfa.join_coords(obs_w, int_w, bounded_lat_w)
+        # Rejoin and whiten last
+        bounded_means = mfa.join_coords(bounded_obs_means, int_means, bounded_lat_w)
+
+        if isinstance(mfa, MixtureOfFactorAnalyzers):
+            bounded_means = mfa.whiten_prior(bounded_means)
+
+        return bounded_means
 
     def make_regularizer(
         self, mfa: MFA
