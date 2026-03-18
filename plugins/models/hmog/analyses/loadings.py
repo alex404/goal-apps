@@ -10,8 +10,6 @@ from typing import Any, override
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from jax import Array
-
-from ..types import AnyHMoG
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 
@@ -20,6 +18,8 @@ from apps.interface import (
     ClusteringDataset,
 )
 from apps.runtime import Artifact, RunHandler
+
+from ..types import AnyHMoG
 
 ### Loading Matrix Artifacts ###
 

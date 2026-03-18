@@ -9,8 +9,6 @@ import jax.numpy as jnp
 from goal.geometry import Replicated
 from jax import Array
 
-from .types import MFA
-
 from apps.interface import ClusteringDataset
 from apps.interface.clustering import add_clustering_metrics, clustering_nmi
 from apps.runtime import (
@@ -21,6 +19,8 @@ from apps.runtime import (
     log_with_frequency,
     update_stats,
 )
+
+from .types import MFA
 
 log = logging.getLogger(__name__)
 

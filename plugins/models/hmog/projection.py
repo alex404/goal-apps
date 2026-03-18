@@ -27,6 +27,7 @@ from goal.models import (
     Normal,
     NormalCovarianceEmbedding,
     analytic_hmog,
+    factor_analysis,
     full_normal,
 )
 from jax import Array
@@ -157,8 +158,8 @@ class ProjectionTrainer:
 
         def posterior_mean(x: Array) -> Array:
             prms = lgm.posterior_at(params, x)
-            with lgm.lat_man as lm:
-                return lm.split_mean_covariance(lm.to_mean(prms))[0]
+            lm = lgm.lat_man
+            return lm.split_mean_covariance(lm.to_mean(prms))[0]
 
         return jax.lax.map(posterior_mean, data, batch_size=256)
 
@@ -388,7 +389,7 @@ class ProjectionHMoGModel(
     ) -> None:
         super().__init__()
 
-        self.lgm = FactorAnalysis(obs_dim=data_dim, lat_dim=latent_dim)
+        self.lgm = factor_analysis(obs_dim=data_dim, lat_dim=latent_dim)
         self.diagonal_latent = diagonal_latent
         if diagonal_latent:
             self.mixture = AnalyticMixture(
@@ -496,6 +497,7 @@ class ProjectionHMoGModel(
         # precision natural params (η₂ = -1/(2σ²)) stay safely negative and
         # don't cross zero after just a few gradient steps (which causes NaN).
         n_samples = latent_locations.shape[0]
+        assert km.inertia_ is not None
         mean_var = float(max(km.inertia_ / (n_samples * self.lgm.lat_dim), 1e-3))
         cov_mat = jnp.diag(jnp.full(self.lgm.lat_dim, mean_var))
         cov_params = mix.obs_man.cov_man.from_matrix(cov_mat)
@@ -538,8 +540,8 @@ class ProjectionHMoGModel(
 
         def assign_one(x: Array) -> Array:
             prms = self.lgm.posterior_at(lgm_params, x)
-            with self.lgm.lat_man as lm:
-                z_star = lm.split_mean_covariance(lm.to_mean(prms))[0]
+            lm = self.lgm.lat_man
+            z_star = lm.split_mean_covariance(lm.to_mean(prms))[0]
             cat_params = upr_hrm.posterior_at(full_mix_params, z_star)
             return upr_hrm.lat_man.to_probs(cat_params)
 
@@ -575,8 +577,8 @@ class ProjectionHMoGModel(
 
         def assign_one(x: Array) -> Array:
             prms = self.lgm.posterior_at(lgm_params, x)
-            with self.lgm.lat_man as lm:
-                z_star = lm.split_mean_covariance(lm.to_mean(prms))[0]
+            lm = self.lgm.lat_man
+            z_star = lm.split_mean_covariance(lm.to_mean(prms))[0]
             cat_params = upr_hrm.posterior_at(full_mix_params, z_star)
             return jnp.argmax(upr_hrm.lat_man.to_probs(cat_params))
 

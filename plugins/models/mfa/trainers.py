@@ -9,12 +9,11 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import optax
+from goal.models import MixtureOfFactorAnalyzers
 from jax import Array
 
 from apps.interface import ClusteringDataset
 from apps.runtime import STATS_NUM, Logger, MetricDict
-
-from goal.models import MixtureOfFactorAnalyzers
 
 from .metrics import log_epoch_metrics
 from .types import MFA
@@ -215,13 +214,13 @@ class GradientTrainer:
 
         obs_w, int_w, lat_w = mfa.split_coords(bounded_means)
 
-        with mfa.pst_man as pm:
-            comp_w, cat_w = pm.split_mean_mixture(lat_w)
-            probs = pm.lat_man.to_probs(cat_w)
-            bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
-            bounded_probs = bounded_probs / jnp.sum(bounded_probs)
-            bounded_cat_w = pm.lat_man.from_probs(bounded_probs)
-            bounded_lat_w = pm.join_mean_mixture(comp_w, bounded_cat_w)
+        pm = mfa.pst_man
+        comp_w, cat_w = pm.split_mean_mixture(lat_w)
+        probs = pm.lat_man.to_probs(cat_w)
+        bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
+        bounded_probs = bounded_probs / jnp.sum(bounded_probs)
+        bounded_cat_w = pm.lat_man.from_probs(bounded_probs)
+        bounded_lat_w = pm.join_mean_mixture(comp_w, bounded_cat_w)
 
         return mfa.join_coords(obs_w, int_w, bounded_lat_w)
 
@@ -352,7 +351,7 @@ class GradientTrainer:
                 updates, new_opt_state = optimizer.update(
                     grad, current_opt_state, current_params
                 )
-                new_params = optax.apply_updates(current_params, updates)
+                new_params: Array = optax.apply_updates(current_params, updates)  # pyright: ignore[reportAssignmentType]
 
                 return (new_opt_state, new_params), grad
 
@@ -387,7 +386,7 @@ class GradientTrainer:
                 batch_step, (opt_state, params), batched_data
             )
 
-            _, reg_metrics = reg_fn(new_params)
+            _, (_, reg_metrics) = reg_fn(new_params)
 
             # Log metrics using the new metrics module
             # gradss shape is (n_batches, batch_steps, param_dim)

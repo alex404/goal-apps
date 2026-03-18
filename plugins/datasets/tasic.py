@@ -196,7 +196,7 @@ class TasicDataset(ClusteringDataset):
 
         # Create train/test split - try stratified first, fallback to random
         n_cells = expression_data.shape[0]
-        
+
         try:
             # Try stratified split first
             sss = StratifiedShuffleSplit(n_splits=1, test_size=test_fraction, random_state=random_seed)
@@ -226,7 +226,7 @@ class TasicDataset(ClusteringDataset):
 
         # Select genes for global profile (highest variance from log-normalized space)
         global_gene_indices = jnp.argsort(gene_stds)[-n_global_genes:]
-        
+
         # Convert visualization stats to JAX arrays
         gene_means = jnp.array(gene_means)
         gene_stds = jnp.array(gene_stds)
@@ -401,7 +401,7 @@ class TasicDataset(ClusteringDataset):
 def _download_tasic_data(output_path: Path) -> None:
     """Download real Tasic et al. (2018) single-cell RNA-seq dataset from Allen Institute."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Skip if already processed
     if output_path.exists():
         print(f"Tasic dataset already exists at {output_path}")

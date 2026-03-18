@@ -9,8 +9,6 @@ from goal.geometry import Replicated
 from goal.models import FactorAnalysis, FullNormal
 from jax import Array
 
-from .types import AnyHMoG, AnyLGM
-
 from apps.interface import ClusteringDataset
 from apps.interface.clustering import add_clustering_metrics, clustering_nmi
 from apps.runtime import (
@@ -23,6 +21,7 @@ from apps.runtime import (
 )
 
 from .analyses.base import analyze_component, cluster_assignments
+from .types import AnyHMoG, AnyLGM
 
 log = logging.getLogger(__name__)
 

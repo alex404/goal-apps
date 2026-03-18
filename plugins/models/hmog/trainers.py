@@ -94,10 +94,10 @@ def precision_regularizer(
     def compute_trace(
         nor_params: Array,
     ) -> Array:
-        with model.prr_man as cuh:
-            prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
-            prs_dense = cuh.obs_man.cov_man.to_matrix(prs_params)
-            return jnp.trace(prs_dense)
+        cuh = model.prr_man
+        prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
+        prs_dense = cuh.obs_man.cov_man.to_matrix(prs_params)
+        return jnp.trace(prs_dense)
 
     traces = model.prr_man.cmp_man.map(compute_trace, cmp_params)
     trace_sum = jnp.sum(traces)
@@ -106,10 +106,10 @@ def precision_regularizer(
     def compute_logdet(
         nor_params: Array,
     ) -> Array:
-        with model.prr_man as cuh:
-            prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
-            prs_dense = cuh.obs_man.cov_man.to_matrix(prs_params)
-            return -jnp.linalg.slogdet(prs_dense)[1]
+        cuh = model.prr_man
+        prs_params = cuh.obs_man.split_location_precision(nor_params)[1]
+        prs_dense = cuh.obs_man.cov_man.to_matrix(prs_params)
+        return -jnp.linalg.slogdet(prs_dense)[1]
 
     logdets = model.prr_man.cmp_man.map(compute_logdet, cmp_params)
     logdet_sum = jnp.sum(logdets)
@@ -203,13 +203,13 @@ class FullGradientTrainer:
             obs_means, self.obs_jitter_var, self.obs_min_var
         )
 
-        with model.pst_man as uh:
-            comp_means, prob_means = uh.split_mean_mixture(lat_means)
-            probs = uh.lat_man.to_probs(prob_means)
-            bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
-            bounded_probs = bounded_probs / jnp.sum(bounded_probs)
-            bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
-            bounded_lat_means = uh.join_mean_mixture(comp_means, bounded_prob_means)
+        uh = model.pst_man
+        comp_means, prob_means = uh.split_mean_mixture(lat_means)
+        probs = uh.lat_man.to_probs(prob_means)
+        bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
+        bounded_probs = bounded_probs / jnp.sum(bounded_probs)
+        bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
+        bounded_lat_means = uh.join_mean_mixture(comp_means, bounded_prob_means)
 
         return model.whiten_prior(
             model.join_coords(bounded_obs_means, int_means, bounded_lat_means)
@@ -347,7 +347,7 @@ class FullGradientTrainer:
                 updates, new_opt_state = optimizer.update(
                     masked_grad, current_opt_state, current_params
                 )
-                new_params = optax.apply_updates(current_params, updates)
+                new_params: Array = optax.apply_updates(current_params, updates)  # pyright: ignore[reportAssignmentType]
 
                 # new_params = self.reset_non_pd(model, new_params)
 
@@ -575,7 +575,7 @@ class LGMPreTrainer:
                 updates, new_opt_state = optimizer.update(
                     grad, current_opt_state, current_params
                 )
-                new_params = optax.apply_updates(current_params, updates)
+                new_params: Array = optax.apply_updates(current_params, updates)  # pyright: ignore[reportAssignmentType]
 
                 # Monitor parameters for debugging
                 logger.monitor_params(
@@ -781,13 +781,13 @@ class MixtureGradientTrainer:
 
     def bound_mixture_means(self, model: AnyHMoG, mix_means: Array) -> Array:
         """Apply bounds to mixture weights for numerical stability."""
-        with model.pst_man as uh:
-            comp_meanss, cat_means = uh.split_mean_mixture(mix_means)
-            probs = uh.lat_man.to_probs(cat_means)
-            bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
-            bounded_probs = bounded_probs / jnp.sum(bounded_probs)
-            bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
-            return uh.join_mean_mixture(comp_meanss, bounded_prob_means)
+        uh = model.pst_man
+        comp_meanss, cat_means = uh.split_mean_mixture(mix_means)
+        probs = uh.lat_man.to_probs(cat_means)
+        bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
+        bounded_probs = bounded_probs / jnp.sum(bounded_probs)
+        bounded_prob_means = uh.lat_man.from_probs(bounded_probs)
+        return uh.join_mean_mixture(comp_meanss, bounded_prob_means)
 
     def make_regularizer(
         self, model: AnyHMoG, rho: Array
@@ -927,7 +927,7 @@ class MixtureGradientTrainer:
                 updates, new_opt_state = optimizer.update(
                     grad, current_opt_state, current_params
                 )
-                new_params = optax.apply_updates(current_params, updates)
+                new_params: Array = optax.apply_updates(current_params, updates)  # pyright: ignore[reportAssignmentType]
                 full_params = model.join_coords(
                     obs_params0, int_params0, current_params
                 )

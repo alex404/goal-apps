@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from goal.geometry import Diagonal
-from goal.models import FactorAnalysis, MixtureOfFactorAnalyzers
+from goal.models import MixtureOfFactorAnalyzers, factor_analysis
 from goal.models.graphical.mixture import CompleteMixtureOfConjugated
 from goal.models.harmonium.lgm import NormalLGM
 from jax import Array
@@ -98,7 +98,7 @@ class MFAModel(
                 n_categories=n_clusters, bas_hrm=base_lgm
             )
         else:
-            base_fa = FactorAnalysis(obs_dim=data_dim, lat_dim=latent_dim)
+            base_fa = factor_analysis(obs_dim=data_dim, lat_dim=latent_dim)
             self.mfa = MixtureOfFactorAnalyzers(
                 n_categories=n_clusters, bas_hrm=base_fa
             )
@@ -209,9 +209,7 @@ class MFAModel(
 
         # Join into mixture natural params and convert to MFA params
         mix_params = self.mfa.mix_man.join_natural_mixture(components_nat, cat_nat)
-        mfa_params = self.mfa.from_mixture_coords(mix_params)
-
-        return mfa_params
+        return self.mfa.from_mixture_coords(mix_params)
 
     @override
     def log_likelihood(self, params: Array, data: Array) -> float:

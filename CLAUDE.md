@@ -8,35 +8,49 @@ goal-apps is a Python CLI application framework for training, analyzing, and eva
 
 ## Environment
 
-This project uses **uv** with a virtual environment at `.venv/`. All commands must be run inside this environment. Always activate it before running anything:
-
-```bash
-source .venv/bin/activate
-```
-
-All tools (basedpyright, ruff, the `goal` CLI, Python itself) are installed in this venv. Do **not** use system Python or install packages outside the venv.
+This project uses `uv` for environment and dependency management. Use `uv run` to
+execute project commands — do not manually activate the venv.
 
 If you need to access goal-jax code for reference, it is typically under `/home/alex404/code/goal-jax`
+
+### Package management strategy
+
+- `pyproject.toml` — source of truth for deps (bare names, no version pins)
+- `uv.lock` — committed lockfile; regenerate with `uv sync --all-extras`
+- Do not `uv pip install` into the project env — use `uv add` for permanent deps,
+  `uvx`/`uv run --with` for one-off tools
+
+### Local dependencies
+
+goal-jax is resolved from `../goal-jax` via `[tool.uv.sources]` in pyproject.toml.
+This is a uv-specific override — standard tools (pip, build) resolve from PyPI.
+Contributors must clone goal-jax as a sibling directory (`../goal-jax`) before
+running `uv sync`. This override can be removed once a usable version is published
+to PyPI.
+
+### Dev tools
+
+basedpyright and ruff are not project dependencies — run them via `uvx`:
+- `uvx basedpyright`
+- `uvx ruff check .`
+- `uvx ruff format .`
 
 ## Common Commands
 
 ### Installation and Setup
 ```bash
-# Install the package in editable mode
-uv pip install -e .
+# Sync all dependencies (core + all extras)
+uv sync --all-extras
 
-# Install with GPU support
-uv pip install -e ".[gpu]"
-
-# Install with dataset support (torchvision, h5py)
-uv pip install -e ".[datasets]"
+# Sync core dependencies only
+uv sync
 
 # Type checking (basedpyright, not pyright)
-basedpyright
+uvx basedpyright
 
 # Linting and formatting
-ruff check .
-ruff format .
+uvx ruff check .
+uvx ruff format .
 ```
 
 ### Running Experiments
@@ -45,42 +59,42 @@ The CLI entry point is `goal` (defined in pyproject.toml as `apps.cli.main:main`
 
 ```bash
 # Train a model on a dataset
-goal train dataset=mnist model=hmog
+uv run goal train dataset=mnist model=hmog
 
 # Train with custom parameters
-goal train dataset=mnist model=hmog latent_dim=50 n_clusters=200
+uv run goal train dataset=mnist model=hmog latent_dim=50 n_clusters=200
 
 # Analyze a trained model
-goal analyze run_name=<run_name>
+uv run goal analyze run_name=<run_name>
 
 # View trained run results (stored in runs/)
 ls runs/<run_name>/
 
 # Launch hyperparameter sweep (comma-separated, no brackets)
-goal sweep dataset=mnist model=mnist-hmog latent_dim=4,8,12,16 n_clusters=50,100,200
+uv run goal sweep dataset=mnist model=mnist-hmog latent_dim=4,8,12,16 n_clusters=50,100,200
 
 # Dry run to view configuration
-goal train dataset=mnist model=hmog --dry-run
+uv run goal train dataset=mnist model=hmog --dry-run
 
 # List available plugins
-goal plugins list
+uv run goal plugins list
 
 # Inspect plugin configuration
-goal plugins inspect hmog
-goal plugins inspect mnist
+uv run goal plugins inspect hmog
+uv run goal plugins inspect mnist
 ```
 
 ### Resuming and Retraining
 
 ```bash
 # Resume training from latest checkpoint
-goal train run_name=<existing_run>
+uv run goal train run_name=<existing_run>
 
 # Resume from specific epoch
-goal train run_name=<existing_run> resume_epoch=50
+uv run goal train run_name=<existing_run> resume_epoch=50
 
 # Force restart from epoch 0
-goal train run_name=<existing_run> resume_epoch=0
+uv run goal train run_name=<existing_run> resume_epoch=0
 ```
 
 ### Configuration Overrides
@@ -92,7 +106,7 @@ Configuration follows Hydra's composition pattern:
 
 Override any parameter via CLI:
 ```bash
-goal train dataset=mnist model=hmog device=cpu jit=false use_wandb=false
+uv run goal train dataset=mnist model=hmog device=cpu jit=false use_wandb=false
 ```
 
 ## Architecture
@@ -155,8 +169,10 @@ The `plugins/register_plugins()` function discovers and imports all plugins at s
 
 **Runtime Metrics** (`src/apps/runtime/metrics.py`):
 - `add_ll_metrics()` - Log-likelihood and BIC metrics
-- `add_clustering_metrics()` - NMI and accuracy metrics
 - `log_with_frequency()` - JIT-compatible frequency-gated logging
+
+**Clustering Metrics** (`src/apps/interface/clustering/metrics.py`):
+- `add_clustering_metrics()` - NMI and accuracy metrics
 
 ### Directory Structure
 
@@ -278,16 +294,16 @@ Common config parameters:
 Sweeps use Weights & Biases:
 ```bash
 # Create sweep (comma-separated values, no brackets)
-goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 n_clusters=50,100,200
+uv run goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 n_clusters=50,100,200
 
 # Validate a sample config without launching
-goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --validate
+uv run goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --validate
 
 # Dry run to view sweep config tree
-goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --dry-run
+uv run goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --dry-run
 
 # Specify W&B project
-goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --project my-project
+uv run goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --project my-project
 
 # After launching, run agents to execute the sweep:
 wandb agent <sweep_id>
@@ -363,7 +379,7 @@ Ignored rules:
 
 ## Key Dependencies
 
-- **JAX** (goal-jax): Numerical computing with autodiff
+- **goal-jax**: Geometric optimization library (local dev dependency, see above). Brings in JAX as a transitive dependency
 - **Hydra + OmegaConf**: Configuration management
 - **Typer**: CLI framework
 - **wandb**: Experiment tracking and sweeps

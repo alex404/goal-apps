@@ -2,6 +2,7 @@
 name = "goal-apps"
 version="0.0.1"
 description = "High-level applications built on GOAL"
+requires-python = ">=3.12"
 dependencies = [
     "goal-jax",
     "matplotlib",
@@ -35,11 +36,12 @@ datasets = [
 ]
 
 [build-system]
-# These are standard for modern Python projects:
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
-requires-python = ">=3.12"
-# Add your dependencies:
+
+[tool.uv.sources]
+goal-jax = { path = "../goal-jax", editable = true }
+
 [tool.setuptools.packages.find]
 where = ["src", "."]
 include =["apps*", "plugins*"]

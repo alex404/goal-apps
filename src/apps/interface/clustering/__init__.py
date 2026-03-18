@@ -16,7 +16,12 @@ from .config import (
     OptimalMergeConfig,
 )
 from .dataset import ClusteringDataset, ClusteringDatasetConfig
-from .metrics import add_clustering_metrics, cluster_accuracy, clustering_nmi, fit_cluster_mapping
+from .metrics import (
+    add_clustering_metrics,
+    cluster_accuracy,
+    clustering_nmi,
+    fit_cluster_mapping,
+)
 from .model import ClusteringModel, ClusteringModelConfig
 from .protocols import (
     CanComputePrototypes,
@@ -26,29 +31,24 @@ from .protocols import (
 )
 
 __all__ = [
-    # Config
     "AnalysisConfig",
-    "ClusteringAnalysesConfig",
-    "ClusteringRunConfig",
+    "CanComputePrototypes",
     "ClusterStatisticsConfig",
+    "ClusteringAnalysesConfig",
+    "ClusteringDataset",
+    "ClusteringDatasetConfig",
+    "ClusteringModel",
+    "ClusteringModelConfig",
+    "ClusteringRunConfig",
     "CoAssignmentHierarchyConfig",
     "CoAssignmentMergeConfig",
     "GenerativeSamplesConfig",
+    "HasClusterHierarchy",
+    "HasClusterPrototypes",
+    "HasSoftAssignments",
     "OptimalMergeConfig",
-    # Dataset
-    "ClusteringDataset",
-    "ClusteringDatasetConfig",
-    # Model
-    "ClusteringModel",
-    "ClusteringModelConfig",
-    # Metrics
     "add_clustering_metrics",
     "cluster_accuracy",
     "clustering_nmi",
     "fit_cluster_mapping",
-    # Protocols
-    "CanComputePrototypes",
-    "HasClusterHierarchy",
-    "HasClusterPrototypes",
-    "HasSoftAssignments",
 ]

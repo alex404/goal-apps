@@ -1,5 +1,5 @@
 """K-means benchmark model plugins."""
 
-from .model import KMeansModel, KMeansConfig, PCAKMeansModel, PCAKMeansConfig
+from .model import KMeansConfig, KMeansModel, PCAKMeansConfig, PCAKMeansModel
 
-__all__ = ["KMeansModel", "KMeansConfig", "PCAKMeansModel", "PCAKMeansConfig"]
+__all__ = ["KMeansConfig", "KMeansModel", "PCAKMeansConfig", "PCAKMeansModel"]

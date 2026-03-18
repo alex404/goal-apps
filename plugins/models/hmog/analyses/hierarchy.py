@@ -12,8 +12,6 @@ from dataclasses import dataclass
 from typing import Any, override
 
 from jax import Array
-
-from ..types import AnyHMoG
 from matplotlib.figure import Figure
 
 from apps.interface import Analysis, ClusteringDataset
@@ -24,6 +22,7 @@ from apps.interface.clustering.analyses import (
 )
 from apps.runtime import RunHandler
 
+from ..types import AnyHMoG
 from .base import get_component_prototypes, symmetric_kl_matrix
 
 

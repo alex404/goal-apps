@@ -24,25 +24,23 @@ from .merge import (
 )
 
 __all__ = [
+    "ClusterHierarchy",
     "ClusterStatistics",
     "ClusterStatisticsAnalysis",
-    # Hierarchy
-    "ClusterHierarchy",
     "CoAssignmentHierarchy",
     "CoAssignmentHierarchyAnalysis",
-    "build_hierarchy_from_distance",
-    "compute_co_assignment_matrix",
-    "plot_hierarchy_dendrogram",
-    # Merge
     "CoAssignmentMergeAnalysis",
     "CoAssignmentMergeResults",
     "MergeAnalysis",
     "MergeResults",
     "OptimalMergeAnalysis",
     "OptimalMergeResults",
+    "build_hierarchy_from_distance",
+    "compute_co_assignment_matrix",
     "compute_merge_metrics",
     "compute_optimal_mapping",
     "get_valid_clusters",
     "hierarchy_to_mapping",
+    "plot_hierarchy_dendrogram",
     "plot_merge_results",
 ]
