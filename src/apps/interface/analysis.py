@@ -48,7 +48,7 @@ class Analysis[D, M, T: Artifact](ABC):
 
     def metrics(self, artifact: T) -> MetricDict:
         """Return metrics collected during the analysis."""
-        artifact = artifact
+        del artifact
         return {}
 
     def process(

@@ -7,7 +7,7 @@ from typing import Any
 
 from jax import Array
 
-from ..runtime import Artifact, Logger, RunHandler
+from ..runtime import Logger, RunHandler
 from .analysis import Analysis
 from .dataset import Dataset
 
@@ -84,7 +84,7 @@ class Model[D: Dataset](ABC):
     def get_analyses(self, dataset: D) -> list[Analysis[D, Any, Any]]:
         """Return a list of analyses to run after training."""
 
-    def process_checkpoint[A: Artifact](
+    def process_checkpoint(
         self,
         key: Array,
         handler: RunHandler,

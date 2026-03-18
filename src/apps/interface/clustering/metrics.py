@@ -18,7 +18,9 @@ from apps.runtime.util import MetricDict
 INFO_LEVEL = jnp.array(logging.INFO)
 
 
-def fit_cluster_mapping(true_labels: Array, pred_clusters: Array) -> Array:
+def fit_cluster_mapping(
+    true_labels: Array, pred_clusters: Array, n_clusters: int, n_classes: int
+) -> Array:
     """Derive greedy cluster→class mapping from labeled data.
 
     Builds a contingency matrix and assigns each cluster to its most frequent
@@ -27,23 +29,24 @@ def fit_cluster_mapping(true_labels: Array, pred_clusters: Array) -> Array:
     Args:
         true_labels: Ground truth labels used to derive the mapping (n_samples,)
         pred_clusters: Predicted cluster assignments (n_samples,)
+        n_clusters: Number of clusters in the model
+        n_classes: Number of ground-truth classes
 
     Returns:
-        cluster_to_label: Array of shape (100,) mapping cluster index → class label
+        cluster_to_label: Array of shape (n_clusters,) mapping cluster index → class label
     """
-    max_clusters = 100
-    contingency = jnp.zeros((max_clusters, max_clusters))
+    contingency = jnp.zeros((n_clusters, n_classes))
 
     def body_fun(i: Array, cont: Array) -> Array:
-        true_label = jnp.clip(true_labels[i], 0, max_clusters - 1)
-        pred_cluster = jnp.clip(pred_clusters[i], 0, max_clusters - 1)
-        return cont.at[pred_cluster, true_label].add(1)
+        return cont.at[pred_clusters[i], true_labels[i]].add(1)
 
     contingency = jax.lax.fori_loop(0, true_labels.shape[0], body_fun, contingency)
     return jnp.argmax(contingency, axis=1)
 
 
-def cluster_accuracy(true_labels: Array, pred_clusters: Array) -> Array:
+def cluster_accuracy(
+    true_labels: Array, pred_clusters: Array, n_clusters: int, n_classes: int
+) -> Array:
     """Compute clustering accuracy with greedy label assignment.
 
     Fits the cluster→class mapping from the same data it evaluates on.
@@ -53,12 +56,14 @@ def cluster_accuracy(true_labels: Array, pred_clusters: Array) -> Array:
     Args:
         true_labels: Ground truth labels (n_samples,)
         pred_clusters: Predicted cluster assignments (n_samples,)
+        n_clusters: Number of clusters in the model
+        n_classes: Number of ground-truth classes
 
     Returns:
         Clustering accuracy after greedy label assignment
     """
-    mapping = fit_cluster_mapping(true_labels, pred_clusters)
-    mapped_preds = mapping[jnp.clip(pred_clusters, 0, 99)]
+    mapping = fit_cluster_mapping(true_labels, pred_clusters, n_clusters, n_classes)
+    mapped_preds = mapping[pred_clusters]
     return jnp.mean(mapped_preds == true_labels)
 
 
@@ -159,9 +164,11 @@ def add_clustering_metrics(
         - Clustering/Train NMI
         - Clustering/Test NMI
     """
-    train_mapping = fit_cluster_mapping(train_labels, train_clusters)
-    train_acc = jnp.mean(train_mapping[jnp.clip(train_clusters, 0, 99)] == train_labels)
-    test_acc = jnp.mean(train_mapping[jnp.clip(test_clusters, 0, 99)] == test_labels)
+    train_mapping = fit_cluster_mapping(
+        train_labels, train_clusters, n_clusters, n_classes
+    )
+    train_acc = jnp.mean(train_mapping[train_clusters] == train_labels)
+    test_acc = jnp.mean(train_mapping[test_clusters] == test_labels)
 
     train_nmi = clustering_nmi_fn(n_clusters, n_classes, train_clusters, train_labels)
     test_nmi = clustering_nmi_fn(n_clusters, n_classes, test_clusters, test_labels)

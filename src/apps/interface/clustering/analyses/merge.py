@@ -54,10 +54,7 @@ def compute_optimal_mapping(
 
     # Create contingency matrix
     contingency = np.zeros((n_clusters, n_classes))
-    for i in range(len(true_labels)):
-        label = int(true_labels[i])
-        cluster = int(cluster_assignments[i])
-        contingency[cluster, label] += 1
+    np.add.at(contingency, (np.asarray(cluster_assignments), np.asarray(true_labels)), 1)
 
     # Use Hungarian algorithm for optimal assignment
     row_ind, col_ind = linear_sum_assignment(-contingency)
@@ -82,9 +79,7 @@ def get_valid_clusters(
     valid_clusters = jnp.arange(n_clusters)
 
     if filter_empty_clusters:
-        cluster_counts = jnp.zeros(n_clusters)
-        for i in range(n_clusters):
-            cluster_counts = cluster_counts.at[i].set(jnp.sum(train_assignments == i))
+        cluster_counts = jnp.zeros(n_clusters).at[train_assignments].add(1)
 
         min_count = max(1, int(min_cluster_size * n_train_samples))
         valid_clusters = jnp.where(cluster_counts >= min_count)[0]
@@ -124,11 +119,13 @@ def hierarchy_to_mapping(
     return mapping
 
 
-def _fit_label_permutation(mapping: Array, probs: Array, labels: Array) -> Array:
+def _fit_label_permutation(
+    mapping: Array, probs: Array, labels: Array, n_classes: int
+) -> Array:
     """Derive the merged-class→true-label permutation from labeled data."""
     merged_probs = jnp.matmul(probs, mapping)
     merged_assignments = jnp.argmax(merged_probs, axis=1)
-    return fit_cluster_mapping(labels, merged_assignments)
+    return fit_cluster_mapping(labels, merged_assignments, n_classes, n_classes)
 
 
 def compute_merge_metrics(
@@ -150,7 +147,7 @@ def compute_merge_metrics(
     """
     merged_probs = jnp.matmul(probs, mapping)
     merged_assignments = jnp.argmax(merged_probs, axis=1)
-    mapped = label_permutation[jnp.clip(merged_assignments, 0, 99)]
+    mapped = label_permutation[merged_assignments]
     accuracy = float(jnp.mean(mapped == labels))
     nmi = float(normalized_mutual_info_score(np.array(labels), np.array(merged_assignments)))
     ari = float(adjusted_rand_score(np.array(labels), np.array(merged_assignments)))
@@ -306,7 +303,7 @@ class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
         for i, cluster_idx in enumerate(valid_clusters):
             full_mapping = full_mapping.at[cluster_idx].set(filtered_mapping[i])
 
-        label_permutation = _fit_label_permutation(full_mapping, train_probs, dataset.train_labels)
+        label_permutation = _fit_label_permutation(full_mapping, train_probs, dataset.train_labels, n_classes)
         train_metrics = compute_merge_metrics(full_mapping, train_probs, dataset.train_labels, label_permutation=label_permutation)
         test_probs = model.posterior_soft_assignments(params, dataset.test_data)
         test_metrics = compute_merge_metrics(full_mapping, test_probs, dataset.test_labels, label_permutation=label_permutation)
@@ -375,7 +372,7 @@ class CoAssignmentMergeAnalysis(MergeAnalysis[CoAssignmentMergeResults]):
         for i, cluster_idx in enumerate(valid_clusters):
             full_mapping = full_mapping.at[cluster_idx].set(filtered_mapping[i])
 
-        label_permutation = _fit_label_permutation(full_mapping, train_probs, dataset.train_labels)
+        label_permutation = _fit_label_permutation(full_mapping, train_probs, dataset.train_labels, n_classes)
         train_metrics = compute_merge_metrics(full_mapping, train_probs, dataset.train_labels, label_permutation=label_permutation)
         test_probs = model.posterior_soft_assignments(params, dataset.test_data)
         test_metrics = compute_merge_metrics(full_mapping, test_probs, dataset.test_labels, label_permutation=label_permutation)

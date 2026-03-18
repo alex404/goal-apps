@@ -11,7 +11,7 @@ from enum import Enum
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-import wandb as wandb
+import numpy as np
 from jax import Array
 from matplotlib.figure import Figure
 
@@ -97,12 +97,14 @@ def plot_metrics(metrics: MetricHistory) -> Figure:
     """
     # Create figure
     n_metrics = len(metrics)
+    if n_metrics == 0:
+        return plt.figure()
     side_length = math.ceil(math.sqrt(n_metrics))
     fig, axes = plt.subplots(
         side_length, side_length, figsize=(6 * side_length, 4 * side_length)
     )
 
-    axes = axes.ravel()
+    axes = np.atleast_1d(axes).ravel()
 
     # Plot each metric
     for ax, (name, values) in zip(axes, metrics.items()):

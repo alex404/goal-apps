@@ -1,6 +1,6 @@
 ### Imports ###
 
-### Preamable ###
+### Preamble ###
 import logging
 import os
 from typing import Any
@@ -25,8 +25,6 @@ from .util import (
     get_store_groups,
     print_sweep_tree,
 )
-
-### Preamble ###
 
 # Very first step: register all plugins
 register_plugins()

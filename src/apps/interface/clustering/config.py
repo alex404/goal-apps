@@ -84,16 +84,12 @@ class ClusteringAnalysesConfig:
 
 # Run Configs
 
-defaults: list[Any] = [
-    {"model": MISSING},
-    {"dataset": MISSING},
-]
-
-
 @dataclass
 class ClusteringRunConfig(RunConfig):
     """Base configuration for clustering simulations."""
 
     dataset: ClusteringDatasetConfig = MISSING
     model: ClusteringModelConfig = MISSING
-    defaults: list[Any] = field(default_factory=lambda: defaults)
+    defaults: list[Any] = field(
+        default_factory=lambda: [{"model": MISSING}, {"dataset": MISSING}]
+    )
