@@ -191,6 +191,10 @@ class FullGradientTrainer:
 
     epoch_reset: bool = True
 
+    def __post_init__(self) -> None:
+        if isinstance(self.mask_type, str):
+            object.__setattr__(self, "mask_type", MaskingStrategy[self.mask_type])
+
     def bound_means(
         self,
         model: AnyHMoG,
@@ -205,6 +209,16 @@ class FullGradientTrainer:
 
         uh = model.pst_man
         comp_means, prob_means = uh.split_mean_mixture(lat_means)
+
+        # Regularize per-component latent covariance
+        comp_means = uh.cmp_man.map(
+            lambda c: uh.obs_man.regularize_covariance(
+                c, self.lat_jitter_var, self.lat_min_var
+            ),
+            comp_means,
+            flatten=True,
+        )
+
         probs = uh.lat_man.to_probs(prob_means)
         bounded_probs = jnp.clip(probs, self.min_prob, 1.0)
         bounded_probs = bounded_probs / jnp.sum(bounded_probs)

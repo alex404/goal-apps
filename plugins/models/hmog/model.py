@@ -153,7 +153,7 @@ class HMoGModel(
     @property
     @override
     def n_clusters(self) -> int:
-        return self.manifold.prr_man.lat_man.dim + 1
+        return self.manifold.prr_man.n_categories
 
     @property
     @override
