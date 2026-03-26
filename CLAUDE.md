@@ -239,6 +239,13 @@ goal-apps/
    - Generate visualizations and metrics
    - Results saved to epoch directories
 
+### Batch Size vs Batch Steps
+
+Training supports two distinct strategies controlled by `batch_size` and `batch_steps`:
+
+- **`batch_size=null` (default)**: Full-batch approximate EM. The E-step computes expectations over the entire dataset, then `batch_steps` gradient steps are taken for the M-step against those fixed expectations. This is EM via gradient descent.
+- **`batch_size=N`**: Mini-batch SGD. Each step samples a mini-batch of N points. Typically used with `batch_steps=1`. Standard stochastic optimization — a fundamentally different approach from the approximate EM.
+
 ### HMOG Model Architecture
 
 The Hierarchical Mixture of Gaussians (HMOG) is the primary model with multi-phase training:
@@ -246,6 +253,8 @@ The Hierarchical Mixture of Gaussians (HMOG) is the primary model with multi-pha
 1. **LGMPreTrainer**: Pre-train latent Gaussian mixture components
 2. **MixtureGradientTrainer**: Optimize mixture weights and parameters
 3. **FullGradientTrainer**: End-to-end gradient-based optimization
+
+**Gradient EM and `bound_means` whitening**: `FullGradientTrainer.bound_means()` applies `model.whiten_prior()` to the bounded posterior statistics (the EM target). The gradient is `prior_stats - bounded_posterior_stats`, so whitening the target means the model's mean parameters converge toward a whitened state where the prior is N(0,I). This is intentional and correct — it keeps the latent prior from drifting. Do NOT treat this as a bug or remove the `whiten_prior` call. This same principle applies to MFA and any other model using gradient EM with whitening.
 
 HMOG-specific analyses (`plugins/models/hmog/analyses/`):
 - `KLHierarchyAnalysis`: KL-divergence-based hierarchical clustering of components
@@ -357,6 +366,7 @@ The sweep system (`src/apps/cli/sweep.py`):
 - Enable/disable JIT with `jit=true/false`
 - Random keys generated from `os.urandom()` at run start
 - Use `device=gpu` or `device=cpu` to control execution backend
+- **cuSolver / Cholesky errors**: `XlaRuntimeError: INTERNAL: cuSolver internal error` during training is almost always caused by degenerate (non-positive-definite) covariance matrices — i.e. insufficient regularization for the given configuration. The fix is to increase regularization (`l2_reg`, `min_var`, `upr_prs_reg`/`lwr_prs_reg`) or reduce model capacity. Do not assume GPU corruption or hardware issues.
 
 ### Type Checking Notes
 
