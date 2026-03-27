@@ -60,6 +60,21 @@ class CoAssignmentMergeConfig(AnalysisConfig):
 
 
 @dataclass
+class KLHierarchyConfig(AnalysisConfig):
+    """Configuration for KL divergence based hierarchy analysis."""
+
+    pass
+
+
+@dataclass
+class KLMergeConfig(AnalysisConfig):
+    """Configuration for KL divergence based merge analysis."""
+
+    filter_empty_clusters: bool = True
+    min_cluster_size: float = 0.0005
+
+
+@dataclass
 class ClusteringAnalysesConfig:
     """Configuration for all clustering analyses.
 
@@ -80,6 +95,8 @@ class ClusteringAnalysesConfig:
     co_assignment_merge: CoAssignmentMergeConfig = field(
         default_factory=CoAssignmentMergeConfig
     )
+    kl_hierarchy: KLHierarchyConfig = field(default_factory=KLHierarchyConfig)
+    kl_merge: KLMergeConfig = field(default_factory=KLMergeConfig)
 
 
 # Run Configs

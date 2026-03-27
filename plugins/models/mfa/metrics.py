@@ -6,7 +6,6 @@ import logging
 
 import jax
 import jax.numpy as jnp
-from goal.geometry import Replicated
 from jax import Array
 
 from apps.interface import ClusteringDataset
@@ -115,19 +114,9 @@ def log_epoch_metrics(
         metrics = update_stats("Means", "Categorical", lat_cat_means, metrics)
 
         # Gradient norms (if available)
+        # batch_grads has shape (n_steps, 4) — pre-computed per-component norms
         if batch_grads is not None:
-            def norm_grads(grad: Array) -> Array:
-                obs_g, int_g, lat_g = mfa.split_coords(grad)
-                obs_loc_g, obs_prs_g = mfa.bas_hrm.obs_man.split_coords(obs_g)
-                return jnp.asarray([
-                    jnp.linalg.norm(obs_loc_g),
-                    jnp.linalg.norm(obs_prs_g),
-                    jnp.linalg.norm(int_g),
-                    jnp.linalg.norm(lat_g),
-                ])
-
-            batch_man = Replicated(mfa, batch_grads.shape[0])
-            norms = batch_man.map(norm_grads, batch_grads).T
+            norms = batch_grads.T  # shape (4, n_steps)
             for i, name in enumerate(["Obs Location", "Obs Precision", "Interaction", "Latent"]):
                 metrics = update_stats("Grad Norms", name, norms[i], metrics)
 

@@ -250,8 +250,11 @@ class GradientTrainer:
             l1_norm = jnp.sum(jnp.abs(int_params))
             l1_loss = self.l1_reg * l1_norm
 
-            # L2 regularization on all params
-            l2_norm = jnp.sum(jnp.square(params))
+            # L2 regularization on interaction params (loading matrix W) only.
+            # - Obs natural params include precision θ₂: L2 there forces large precision → bad.
+            # - Lat natural params include mean-related η₁: L2 there collapses cluster means.
+            # - W (int_params) is geometrically neutral: L2 provides a soft Gaussian prior on W.
+            l2_norm = jnp.sum(jnp.square(int_params))
             l2_loss = self.l2_reg * l2_norm
 
             # Component precision regularization
@@ -364,17 +367,28 @@ class GradientTrainer:
                 )
                 new_params: Array = optax.apply_updates(current_params, updates)  # pyright: ignore[reportAssignmentType]
 
-                return (new_opt_state, new_params), grad
+                # Return per-component gradient norms (4 scalars) instead of full grad
+                # to avoid accumulating (batch_steps, param_dim) arrays in scan.
+                obs_g, int_g, lat_g = mfa.split_coords(grad)
+                obs_loc_g, obs_prs_g = mfa.bas_hrm.obs_man.split_coords(obs_g)
+                grad_norms = jnp.array([
+                    jnp.linalg.norm(obs_loc_g),
+                    jnp.linalg.norm(obs_prs_g),
+                    jnp.linalg.norm(int_g),
+                    jnp.linalg.norm(lat_g),
+                ])
 
-            # Run inner steps
-            (final_opt_state, final_params), all_grads = jax.lax.scan(
+                return (new_opt_state, new_params), grad_norms
+
+            # Run inner steps; each step returns (4,) grad norms, not full grad
+            (final_opt_state, final_params), all_norm_arrs = jax.lax.scan(
                 inner_step,
                 (opt_state, params),
                 None,
                 length=self.batch_steps,
             )
 
-            return (final_opt_state, final_params), all_grads
+            return (final_opt_state, final_params), all_norm_arrs
 
         def epoch_step(
             epoch: Array,
@@ -397,11 +411,10 @@ class GradientTrainer:
                 batch_step, (opt_state, params), batched_data
             )
 
-            _, (_, reg_metrics) = reg_fn(new_params)
+            _, reg_metrics = reg_fn(new_params)
 
-            # Log metrics using the new metrics module
-            # gradss shape is (n_batches, batch_steps, param_dim)
-            # Flatten to (n_batches * batch_steps, param_dim) for gradient norm computation
+            # gradss shape is (n_batches, batch_steps, 4) — pre-computed grad norms
+            # Flatten to (n_batches * batch_steps, 4) for gradient norm logging
             flat_grads = gradss.reshape(-1, gradss.shape[-1])
 
             log_epoch_metrics(

@@ -105,7 +105,7 @@ class MFAConfig(ClusteringModelConfig):
     """Minimum variance for regularization (prevents NaN for zero-variance pixels)."""
 
     # Trainer
-    trainer: GradientTrainerConfig = field(default=MISSING)
+    trainer: GradientTrainerConfig = field(default_factory=GradientTrainerConfig)
     """Trainer configuration."""
 
     # Analyses

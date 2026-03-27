@@ -32,7 +32,9 @@ from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
 
 from .analyses.base import get_component_prototypes
+from .analyses.hierarchy import KLHierarchyAnalysis
 from .analyses.loadings import LoadingMatrixAnalysis
+from .analyses.merge import KLMergeAnalysis
 from .trainers import (
     FullGradientTrainer,
     LGMPreTrainer,
@@ -224,6 +226,9 @@ class HMoGModel(
 
         analyses.append(LoadingMatrixAnalysis())
 
+        if cfg.kl_hierarchy.enabled:
+            analyses.append(KLHierarchyAnalysis())
+
         # Merge analyses require ground truth labels
         if dataset.has_labels:
             if cfg.optimal_merge.enabled:
@@ -239,6 +244,14 @@ class HMoGModel(
                     CoAssignmentMergeAnalysis(
                         filter_empty_clusters=cfg.co_assignment_merge.filter_empty_clusters,
                         min_cluster_size=cfg.co_assignment_merge.min_cluster_size,
+                    )
+                )
+
+            if cfg.kl_merge.enabled:
+                analyses.append(
+                    KLMergeAnalysis(
+                        filter_empty_clusters=cfg.kl_merge.filter_empty_clusters,
+                        min_cluster_size=cfg.kl_merge.min_cluster_size,
                     )
                 )
 

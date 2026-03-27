@@ -1,0 +1,45 @@
+# 20 Newsgroups configuration for MFA
+#
+# Key differences from MNIST-MFA:
+#   - grad_clip=10 (TF-IDF gradients can be large, matches HMoG NG20 setting)
+#   - obs_max_var=0.0 (disabled — TF-IDF features don't need max-variance clamping)
+#   - obs_min_var=1e-4, lat_min_var=1e-4 (MNIST MFA settings work for text)
+#   - mixture_entropy_reg=0 (baseline; Wave 2 will sweep this)
+#   - n_epochs=200, batch_steps=1000 (full-batch approximate EM)
+defaults:
+  - mfa
+  - _self_
+
+# Model architecture (conservative baseline; Wave 1 sweeps ld and K)
+latent_dim: 20
+n_clusters: 20
+
+trainer:
+  lr: 1e-4
+  n_epochs: 200
+  batch_steps: 1000
+  grad_clip: 10           # Match HMoG NG20 (TF-IDF may have large grads)
+  l2_reg: 1e-3            # MNIST MFA setting
+  upr_prs_reg: 1e-3
+  lwr_prs_reg: 1e-3
+  mixture_entropy_reg: 0  # Disabled at baseline; sweep in Wave 2
+  obs_min_var: 1e-4
+  lat_min_var: 1e-4
+  obs_max_var: 0.0        # Disabled for TF-IDF
+  min_prob: 1e-4
+
+analyses:
+  generative_samples:
+    enabled: false        # No meaningful samples for text
+  cluster_statistics:
+    enabled: true
+  co_assignment_hierarchy:
+    enabled: false
+  co_assignment_merge:
+    enabled: true
+    filter_empty_clusters: true
+    min_cluster_size: 0.0005
+  optimal_merge:
+    enabled: true
+    filter_empty_clusters: true
+    min_cluster_size: 0.0005

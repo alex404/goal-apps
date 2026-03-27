@@ -12,21 +12,23 @@ trainer:
   lr: 1e-4
   n_epochs: 1000
   # batch_size: 512  # commented out = full dataset E-step (approximate EM)
-  batch_steps: 1000
+  batch_steps: 100
   grad_clip: 1
   log_freq: 10
 
   # Regularization
   l1_reg: 0
-  l2_reg: 1e-3
+  l2_reg: 1e-3     # L2 on interaction params (loading matrix W) only — prevents unbounded growth
   upr_prs_reg: 1e-3
   lwr_prs_reg: 1e-3
-  mixture_entropy_reg: 1e-4
+  mixture_entropy_reg: 1e-2
 
   min_prob: 1e-4
-  obs_min_var: 1e-4  # gans-n-gmms clips sqrt(D) to [1e-3, 1.0], so var in [1e-6, 1.0]
+  obs_min_var: 0.01   # match model init min_var; prevents residual variance collapse
   obs_max_var: 10.0   # matches reference sqrt_D ≤ 1.0 → var ≤ 1.0
-  lat_min_var: 1e-4
+  lat_min_var: 1e-3
+
+  epoch_reset: false
 
   # Jitter (optional, for additional stability)
   obs_jitter_var: 0.0

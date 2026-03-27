@@ -32,6 +32,7 @@ from apps.interface.clustering.protocols import (
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
 
+from .analyses import MFAKLHierarchyAnalysis, MFAKLMergeAnalysis
 from .trainers import GradientTrainer
 from .types import MFA
 
@@ -352,6 +353,9 @@ class MFAModel(
         if cfg.co_assignment_hierarchy.enabled:
             analyses.append(CoAssignmentHierarchyAnalysis())
 
+        if cfg.kl_hierarchy.enabled:
+            analyses.append(MFAKLHierarchyAnalysis())
+
         # Merge analyses require ground truth labels
         if dataset.has_labels:
             if cfg.optimal_merge.enabled:
@@ -367,6 +371,14 @@ class MFAModel(
                     CoAssignmentMergeAnalysis(
                         filter_empty_clusters=cfg.co_assignment_merge.filter_empty_clusters,
                         min_cluster_size=cfg.co_assignment_merge.min_cluster_size,
+                    )
+                )
+
+            if cfg.kl_merge.enabled:
+                analyses.append(
+                    MFAKLMergeAnalysis(
+                        filter_empty_clusters=cfg.kl_merge.filter_empty_clusters,
+                        min_cluster_size=cfg.kl_merge.min_cluster_size,
                     )
                 )
 
