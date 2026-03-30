@@ -5,7 +5,7 @@ defaults:
 latent_dim: 50
 n_clusters: 200
 
-num_cycles: 1
+num_cycles: 10
 
 lgm_noise_scale: 0.01
 mix_noise_scale: 0.01
@@ -21,7 +21,7 @@ mix:
 
 full:
   lr: 3e-4
-  n_epochs: 500
+  n_epochs: 200
   batch_steps: 1000
   #batch_size: 128
   grad_clip: 1
@@ -29,10 +29,10 @@ full:
   obs_min_var: 1e-6
   lat_min_var: 1e-6
   l1_reg: 0
-  l2_reg: 1e-3
+  l2_reg: 5e-4
   upr_prs_reg: 1e-3
   lwr_prs_reg: 1e-3
-  mixture_entropy_reg: 1e-3
+  mixture_entropy_reg: 3e-1
   epoch_reset: true
 
 analyses:
@@ -48,6 +48,12 @@ analyses:
     filter_empty_clusters: true
     min_cluster_size: 0.0005
   co_assignment_merge:
+    enabled: true
+    filter_empty_clusters: true
+    min_cluster_size: 0.0005
+  kl_hierarchy:
+    enabled: true
+  kl_merge:
     enabled: true
     filter_empty_clusters: true
     min_cluster_size: 0.0005

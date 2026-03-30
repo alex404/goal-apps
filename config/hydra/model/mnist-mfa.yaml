@@ -3,14 +3,14 @@ defaults:
   - mfa
   - _self_
 
-latent_dim: 10
-n_clusters: 150
+latent_dim: 20
+n_clusters: 200
 init_scale: 0.01
 min_var: 0.01
 
 trainer:
   lr: 1e-4
-  n_epochs: 1000
+  n_epochs: 300
   # batch_size: 512  # commented out = full dataset E-step (approximate EM)
   batch_steps: 100
   grad_clip: 1
@@ -21,7 +21,7 @@ trainer:
   l2_reg: 1e-3     # L2 on interaction params (loading matrix W) only — prevents unbounded growth
   upr_prs_reg: 1e-3
   lwr_prs_reg: 1e-3
-  mixture_entropy_reg: 1e-2
+  mixture_entropy_reg: 3e-2
 
   min_prob: 1e-4
   obs_min_var: 0.01   # match model init min_var; prevents residual variance collapse

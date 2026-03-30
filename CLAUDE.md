@@ -367,6 +367,7 @@ The sweep system (`src/apps/cli/sweep.py`):
 - Random keys generated from `os.urandom()` at run start
 - Use `device=gpu` or `device=cpu` to control execution backend
 - **cuSolver / Cholesky errors**: `XlaRuntimeError: INTERNAL: cuSolver internal error` during training is almost always caused by degenerate (non-positive-definite) covariance matrices — i.e. insufficient regularization for the given configuration. The fix is to increase regularization (`l2_reg`, `min_var`, `upr_prs_reg`/`lwr_prs_reg`) or reduce model capacity. Do not assume GPU corruption or hardware issues.
+- **Single GPU — never run two training jobs simultaneously.** Only one `goal train` process at a time. Do not start a second job while one is already running, even in the background.
 
 ### Type Checking Notes
 

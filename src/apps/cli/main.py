@@ -2,7 +2,6 @@
 
 ### Preamble ###
 import logging
-import os
 from typing import Any
 
 import jax
@@ -65,8 +64,8 @@ def train(overrides: list[str] = overrides, dry_run: bool = train_dry_run):
         goal clustering train run_name=my_exp dataset=mnist model=hmog
     """
 
-    handler, logger, dataset, model = initialize_run(ClusteringRunConfig, overrides)
-    key = jax.random.PRNGKey(int.from_bytes(os.urandom(4), byteorder="big"))
+    handler, logger, dataset, model, seed = initialize_run(ClusteringRunConfig, overrides)
+    key = jax.random.PRNGKey(seed)
     if dry_run:
         return
 
@@ -89,8 +88,8 @@ def analyze(overrides: list[str] = overrides):
     Example:
         goal clustering analyze run_name=my_exp
     """
-    handler, logger, dataset, model = initialize_run(ClusteringRunConfig, overrides)
-    key = jax.random.PRNGKey(int.from_bytes(os.urandom(4), byteorder="big"))
+    handler, logger, dataset, model, seed = initialize_run(ClusteringRunConfig, overrides)
+    key = jax.random.PRNGKey(seed)
 
     # Run analysis
     log.info("Beginning analysis...")

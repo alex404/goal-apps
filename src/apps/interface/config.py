@@ -15,7 +15,7 @@ class RunConfig:
     device: str
     jit: bool
     use_local: bool
-    repeat: int
+    seed: int
     use_wandb: bool
     log_level: LogLevel
     project: str

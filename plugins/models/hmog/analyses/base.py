@@ -41,9 +41,8 @@ def symmetric_kl_matrix(
 
     def kl_div_between_components(i: Array, j: Array) -> Array:
         comp_i = comp_lats_2d[i]
-        comp_i_mean = ch.obs_man.to_mean(comp_i)
         comp_j = comp_lats_2d[j]
-        return ch.obs_man.relative_entropy(comp_i_mean, comp_j)
+        return ch.obs_man.relative_entropy(comp_i, comp_j)
 
     idxs = jnp.arange(ch.n_categories)
 

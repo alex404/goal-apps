@@ -32,7 +32,6 @@ from apps.interface.clustering.protocols import (
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import Logger, RunHandler
 
-from .analyses import MFAKLHierarchyAnalysis, MFAKLMergeAnalysis
 from .trainers import GradientTrainer
 from .types import MFA
 
@@ -330,9 +329,15 @@ class MFAModel(
         if handler.resolve_epoch is None:
             raise RuntimeError("No saved parameters found for analysis")
         epoch = handler.resolve_epoch
-        log.info(f"Running analyses for epoch {epoch}")
-        for analysis in self.get_analyses(dataset):
-            analysis.process(key, handler, logger, dataset, self, epoch, None)
+        if handler.recompute_artifacts:
+            log.info(f"Recomputing artifacts for epoch {epoch}")
+            _, key_model = jax.random.split(key, 2)
+            params = self.prepare_model(key_model, handler, dataset.train_data)
+            self.process_checkpoint(key, handler, logger, dataset, self, epoch, params)
+        else:
+            log.info(f"Loading existing artifacts for epoch {epoch}")
+            for analysis in self.get_analyses(dataset):
+                analysis.process(key, handler, logger, dataset, self, epoch, None)
 
     @override
     def get_analyses(
@@ -353,9 +358,6 @@ class MFAModel(
         if cfg.co_assignment_hierarchy.enabled:
             analyses.append(CoAssignmentHierarchyAnalysis())
 
-        if cfg.kl_hierarchy.enabled:
-            analyses.append(MFAKLHierarchyAnalysis())
-
         # Merge analyses require ground truth labels
         if dataset.has_labels:
             if cfg.optimal_merge.enabled:
@@ -371,14 +373,6 @@ class MFAModel(
                     CoAssignmentMergeAnalysis(
                         filter_empty_clusters=cfg.co_assignment_merge.filter_empty_clusters,
                         min_cluster_size=cfg.co_assignment_merge.min_cluster_size,
-                    )
-                )
-
-            if cfg.kl_merge.enabled:
-                analyses.append(
-                    MFAKLMergeAnalysis(
-                        filter_empty_clusters=cfg.kl_merge.filter_empty_clusters,
-                        min_cluster_size=cfg.kl_merge.min_cluster_size,
                     )
                 )
 

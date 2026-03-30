@@ -171,7 +171,7 @@ def setup_signal_handlers(logger: Logger) -> None:
 def initialize_run(
     run_type: type[RunConfig],
     overrides: list[str],
-) -> tuple[RunHandler, Logger, Dataset, Model[Dataset]]:
+) -> tuple[RunHandler, Logger, Dataset, Model[Dataset], int]:
     """Initialize a new run with hydra config and wandb logging."""
     cs = ConfigStore.instance()
     cs.store(name="config_schema", node=run_type)
@@ -255,5 +255,4 @@ def initialize_run(
     # Setup signal handlers for graceful shutdown
     setup_signal_handlers(logger)
 
-    # will return logger as well
-    return handler, logger, dataset, model
+    return handler, logger, dataset, model, int(cfg.seed)

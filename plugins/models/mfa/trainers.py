@@ -399,12 +399,15 @@ class GradientTrainer:
             if self.epoch_reset:
                 opt_state = optimizer.init(params)
 
-            shuffle_key, next_key = jax.random.split(epoch_key)
-
             # Shuffle and batch data
-            shuffled_indices = jax.random.permutation(shuffle_key, n_samples)
-            batched_indices = shuffled_indices[: n_batches * batch_size]
-            batched_data = data[batched_indices].reshape((n_batches, batch_size, -1))
+            if n_batches > 1:
+                shuffle_key, next_key = jax.random.split(epoch_key)
+                shuffled_indices = jax.random.permutation(shuffle_key, n_samples)
+                batched_indices = shuffled_indices[: n_batches * batch_size]
+                batched_data = data[batched_indices].reshape((n_batches, batch_size, -1))
+            else:
+                next_key = epoch_key
+                batched_data = data[None]  # shape (1, n_samples, data_dim)
 
             # Process all batches
             (opt_state, new_params), gradss = jax.lax.scan(

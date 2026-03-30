@@ -7,7 +7,7 @@ device: gpu
 jit: true
 use_local: true
 use_wandb: true
-repeat: 1
+seed: 0
 log_level: INFO
 project: "goal"
 group: null
