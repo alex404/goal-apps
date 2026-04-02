@@ -241,43 +241,46 @@ class GradientTrainer:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
         def loss_with_metrics(params: Array) -> tuple[Array, MetricDict]:
-            # Extract components for regularization (matches HMOG pattern)
+            # Extract components for regularization
             obs_params, int_params, lat_params = mfa.split_coords(params)
-            lkl_params = mfa.lkl_fun_man.join_coords(obs_params, int_params)
-            rho = mfa.conjugation_parameters(lkl_params)
 
             # L1 regularization on interactions
             l1_norm = jnp.sum(jnp.abs(int_params))
             l1_loss = self.l1_reg * l1_norm
 
-            # L2 regularization on interaction params (loading matrix W) only.
-            # - Obs natural params include precision θ₂: L2 there forces large precision → bad.
-            # - Lat natural params include mean-related η₁: L2 there collapses cluster means.
-            # - W (int_params) is geometrically neutral: L2 provides a soft Gaussian prior on W.
-            l2_norm = jnp.sum(jnp.square(int_params))
+            # L2 regularization on all parameters.
+            l2_norm = jnp.sum(jnp.square(params))
             l2_loss = self.l2_reg * l2_norm
 
-            # Component precision regularization
-            prs_loss, prs_metrics = precision_regularizer(
-                mfa, rho, lat_params, self.upr_prs_reg, self.lwr_prs_reg
-            )
-
-            # Entropy regularization on mixture weights
-            ent_loss, ent_metrics = mixture_entropy_regularizer(
-                mfa, rho, lat_params, self.mixture_entropy_reg
-            )
-
-            # Combine into total loss and metrics
-            total_loss = l1_loss + l2_loss + prs_loss + ent_loss
-
+            total_loss = l1_loss + l2_loss
             metrics: MetricDict = {
                 "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
                 "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
                 "Regularization/L1 Penalty": (STATS_LEVEL, l1_loss),
                 "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
             }
-            metrics.update(prs_metrics)
-            metrics.update(ent_metrics)
+
+            # rho and precision/entropy regularizers are only computed when needed.
+            # Gating on Python-level constants (frozen dataclass fields) so JAX eliminates
+            # dead code at trace time, avoiding NaN from slogdet on near-singular matrices
+            # when the coefficient is 0 (0 * NaN = NaN in IEEE 754 backward pass).
+            if self.upr_prs_reg > 0 or self.lwr_prs_reg > 0 or self.mixture_entropy_reg > 0:
+                lkl_params = mfa.lkl_fun_man.join_coords(obs_params, int_params)
+                rho = mfa.conjugation_parameters(lkl_params)
+
+                if self.upr_prs_reg > 0 or self.lwr_prs_reg > 0:
+                    prs_loss, prs_metrics = precision_regularizer(
+                        mfa, rho, lat_params, self.upr_prs_reg, self.lwr_prs_reg
+                    )
+                    total_loss = total_loss + prs_loss
+                    metrics.update(prs_metrics)
+
+                if self.mixture_entropy_reg > 0:
+                    ent_loss, ent_metrics = mixture_entropy_regularizer(
+                        mfa, rho, lat_params, self.mixture_entropy_reg
+                    )
+                    total_loss = total_loss + ent_loss
+                    metrics.update(ent_metrics)
 
             return total_loss, metrics
 
