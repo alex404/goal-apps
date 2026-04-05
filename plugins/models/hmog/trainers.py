@@ -126,28 +126,24 @@ def precision_regularizer(
     return trace_reg + logdet_reg, metrics
 
 
-def mixture_entropy_regularizer(
+def entropy_regularizer(
     model: AnyHMoG,
     rho: Array,
     mix_params: Array,
-    entropy_reg: float,
+    ent_reg: float,
 ) -> tuple[Array, MetricDict]:
     """Entropy regularization on mixture weights.
 
-    Adds entropy_reg * neg_entropy(π) to the loss, where neg_entropy = Σ πᵢ log πᵢ
-    is the Categorical.negative_entropy() from the Analytic base class (≤ 0).
-    Its gradient pushes the mixing distribution toward uniformity (maximum entropy).
-    Default entropy_reg=0.0 disables the penalty entirely.
+    Adds ent_reg * neg_entropy(π) to the loss, pushing the mixing
+    distribution toward uniformity (maximum entropy).
+    Uses dual_potential (Legendre identity) for numerical stability.
     """
     con_mix_params = model.pst_prr_emb.translate(rho, mix_params)
     _, cat_nat_params = model.prr_man.split_natural_mixture(con_mix_params)
 
-    # natural → mean params (required by negative_entropy, which is defined on Analytic)
-    cat_means = model.prr_man.lat_man.to_mean(cat_nat_params)
-    neg_entropy = model.prr_man.lat_man.negative_entropy(cat_means)
+    neg_entropy = model.prr_man.lat_man.dual_potential(cat_nat_params)
 
-    # neg_entropy ≤ 0; minimizing entropy_reg * neg_entropy pushes toward uniform
-    entropy_loss = entropy_reg * neg_entropy
+    entropy_loss = ent_reg * neg_entropy
 
     metrics: MetricDict = {
         "Regularization/Mixture Entropy": (STATS_LEVEL, -neg_entropy),
@@ -187,7 +183,7 @@ class FullGradientTrainer:
     mask_type: MaskingStrategy
 
     # Numerical stability
-    mixture_entropy_reg: float
+    ent_reg: float
 
     epoch_reset: bool = True
 
@@ -259,8 +255,8 @@ class FullGradientTrainer:
             )
 
             # Entropy penalty on mixture weights
-            ent_loss, ent_metrics = mixture_entropy_regularizer(
-                model, rho, mix_params, self.mixture_entropy_reg
+            ent_loss, ent_metrics = ent_regularizer(
+                model, rho, mix_params, self.ent_reg
             )
 
             # Combine into total loss and metrics
@@ -737,7 +733,7 @@ class MixtureGradientTrainer:
     lat_jitter_var: float
     upr_prs_reg: float
     lwr_prs_reg: float
-    mixture_entropy_reg: float
+    ent_reg: float
 
     epoch_reset: bool = True
 
@@ -823,8 +819,8 @@ class MixtureGradientTrainer:
             )
 
             # Entropy penalty on mixture weights
-            ent_loss, ent_metrics = mixture_entropy_regularizer(
-                model, rho, mix_params, self.mixture_entropy_reg
+            ent_loss, ent_metrics = ent_regularizer(
+                model, rho, mix_params, self.ent_reg
             )
 
             # Combine into total loss and metrics

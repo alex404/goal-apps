@@ -38,13 +38,7 @@ class GradientTrainerConfig:
     l2_reg: float = 0.0
     """L2 regularization on all parameters."""
 
-    upr_prs_reg: float = 1e-3
-    """Upper bound regularization on precision eigenvalues (trace penalty)."""
-
-    lwr_prs_reg: float = 1e-3
-    """Lower bound regularization on precision eigenvalues (log-det penalty)."""
-
-    mixture_entropy_reg: float = 0.0
+    ent_reg: float = 0.0
     """Entropy regularization on mixture weights (pushes toward uniformity)."""
 
     log_freq: int = 10

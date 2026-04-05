@@ -20,9 +20,7 @@ trainer:
   # Regularization — minimal: only clip W growth + grad clip
   l1_reg: 1e-4
   l2_reg: 1e-4
-  upr_prs_reg: 1e-2
-  lwr_prs_reg: 1e-2
-  mixture_entropy_reg: 3e-2
+  ent_reg: 3e-2
 
   min_prob: 1e-4
   obs_min_var: 0.01

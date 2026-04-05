@@ -23,25 +23,24 @@ log = logging.getLogger(__name__)
 STATS_LEVEL = jnp.array(STATS_NUM)
 
 
-def mixture_entropy_regularizer(
+def entropy_regularizer(
     mfa: MFA,
     rho: Array,
     lat_params: Array,
-    entropy_reg: float,
+    ent_reg: float,
 ) -> tuple[Array, MetricDict]:
     """Entropy regularization on mixture weights.
 
-    Adds entropy_reg * neg_entropy(π) to the loss, pushing the mixing
+    Adds ent_reg * neg_entropy(π) to the loss, pushing the mixing
     distribution toward uniformity (maximum entropy).
-    Default entropy_reg=0.0 disables the penalty entirely.
+    Uses dual_potential (Legendre identity) for numerical stability.
     """
     con_lat_params = mfa.pst_prr_emb.translate(rho, lat_params)
     _, cat_nat_params = mfa.prr_man.split_natural_mixture(con_lat_params)
 
-    cat_means = mfa.prr_man.lat_man.to_mean(cat_nat_params)
-    neg_entropy = mfa.prr_man.lat_man.negative_entropy(cat_means)
+    neg_entropy = mfa.prr_man.lat_man.dual_potential(cat_nat_params)
 
-    entropy_loss = entropy_reg * neg_entropy
+    entropy_loss = ent_reg * neg_entropy
 
     metrics: MetricDict = {
         "Regularization/Mixture Entropy": (STATS_LEVEL, -neg_entropy),
@@ -49,78 +48,6 @@ def mixture_entropy_regularizer(
     }
     return entropy_loss, metrics
 
-
-def precision_regularizer(
-    mfa: MFA,
-    rho: Array,
-    lat_params: Array,
-    upr_prs_reg: float,
-    lwr_prs_reg: float,
-) -> tuple[Array, MetricDict]:
-    """Compute regularization based on precision matrix eigenvalues.
-
-    This regularizer controls the condition number and scale of the latent
-    precision matrices by penalizing extreme eigenvalues:
-
-    R(Lambda) = upr_prs_reg * tr(Lambda) - lwr_prs_reg * log|Lambda|
-
-    where:
-    - tr(Lambda) = sum of eigenvalues (penalizes large eigenvalues)
-    - log|Lambda| = sum of log eigenvalues (penalizes small eigenvalues)
-
-    Mathematical insight: For a precision matrix with eigenvalues lambda_i,
-    the gradient of this regularizer is:
-
-        dR/dlambda_i = upr_prs_reg - lwr_prs_reg/lambda_i
-
-    Setting to zero gives the optimal eigenvalue: lambda* = lwr_prs_reg/upr_prs_reg
-
-    When upr_prs_reg = lwr_prs_reg:
-    - All eigenvalues are pushed toward 1
-    - Creates an isotropic latent space with uniform scaling
-
-    Args:
-        mfa: MFA model
-        rho: Conjugation parameters
-        lat_params: Latent mixture parameters in natural coordinates
-        upr_prs_reg: Weight for trace penalty (controls upper bound on eigenvalues)
-        lwr_prs_reg: Weight for log-det penalty (controls lower bound on eigenvalues)
-
-    Returns:
-        Tuple of (regularization_loss, metrics_dict)
-    """
-    # Apply conjugation to get prior-space parameters (matches HMOG pattern)
-    con_lat_params = mfa.pst_prr_emb.translate(rho, lat_params)
-    prr_man = mfa.prr_man  # CompleteMixture[Normal] - prior manifold
-
-    # Split into component params and categorical
-    comp_params, _ = prr_man.split_natural_mixture(con_lat_params)
-
-    def compute_trace(nor_params: Array) -> Array:
-        _, prs = prr_man.obs_man.split_location_precision(nor_params)
-        prs_dense = prr_man.obs_man.cov_man.to_matrix(prs)
-        return jnp.trace(prs_dense)
-
-    traces = prr_man.cmp_man.map(compute_trace, comp_params)
-    trace_sum = jnp.sum(traces)
-    trace_reg = upr_prs_reg * trace_sum
-
-    def compute_logdet(nor_params: Array) -> Array:
-        _, prs = prr_man.obs_man.split_location_precision(nor_params)
-        prs_dense = prr_man.obs_man.cov_man.to_matrix(prs)
-        return -jnp.linalg.slogdet(prs_dense)[1]
-
-    logdets = prr_man.cmp_man.map(compute_logdet, comp_params)
-    logdet_sum = jnp.sum(logdets)
-    logdet_reg = lwr_prs_reg * logdet_sum
-
-    metrics: MetricDict = {
-        "Regularization/Precision Trace Sum": (STATS_LEVEL, trace_sum),
-        "Regularization/Precision LogDet Sum": (STATS_LEVEL, -logdet_sum),
-        "Regularization/Trace Penalty": (STATS_LEVEL, trace_reg),
-        "Regularization/LogDet Penalty": (STATS_LEVEL, logdet_reg),
-    }
-    return trace_reg + logdet_reg, metrics
 
 
 @dataclass(frozen=True)
@@ -154,13 +81,7 @@ class GradientTrainer:
     l2_reg: float
     """L2 regularization on all parameters."""
 
-    upr_prs_reg: float
-    """Upper bound regularization on precision eigenvalues."""
-
-    lwr_prs_reg: float
-    """Lower bound regularization on precision eigenvalues."""
-
-    mixture_entropy_reg: float
+    ent_reg: float
     """Entropy regularization on mixture weights (pushes toward uniformity)."""
 
     log_freq: int
@@ -260,27 +181,17 @@ class GradientTrainer:
                 "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
             }
 
-            # rho and precision/entropy regularizers are only computed when needed.
             # Gating on Python-level constants (frozen dataclass fields) so JAX eliminates
-            # dead code at trace time, avoiding NaN from slogdet on near-singular matrices
-            # when the coefficient is 0 (0 * NaN = NaN in IEEE 754 backward pass).
-            if self.upr_prs_reg > 0 or self.lwr_prs_reg > 0 or self.mixture_entropy_reg > 0:
+            # dead code at trace time.
+            if self.ent_reg > 0:
                 lkl_params = mfa.lkl_fun_man.join_coords(obs_params, int_params)
                 rho = mfa.conjugation_parameters(lkl_params)
 
-                if self.upr_prs_reg > 0 or self.lwr_prs_reg > 0:
-                    prs_loss, prs_metrics = precision_regularizer(
-                        mfa, rho, lat_params, self.upr_prs_reg, self.lwr_prs_reg
-                    )
-                    total_loss = total_loss + prs_loss
-                    metrics.update(prs_metrics)
-
-                if self.mixture_entropy_reg > 0:
-                    ent_loss, ent_metrics = mixture_entropy_regularizer(
-                        mfa, rho, lat_params, self.mixture_entropy_reg
-                    )
-                    total_loss = total_loss + ent_loss
-                    metrics.update(ent_metrics)
+                ent_loss, ent_metrics = entropy_regularizer(
+                    mfa, rho, lat_params, self.ent_reg
+                )
+                total_loss = total_loss + ent_loss
+                metrics.update(ent_metrics)
 
             return total_loss, metrics
 

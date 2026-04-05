@@ -39,5 +39,5 @@ full:
   lwr_prs_reg: 1e-5
   l1_reg: 1e-6
   l2_reg: 1e-4
-  mixture_entropy_reg: 0.0
+  ent_reg: 0.0
   epoch_reset: true

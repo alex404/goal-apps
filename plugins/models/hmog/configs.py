@@ -50,7 +50,7 @@ class GradientTrainerConfig:
     lat_jitter_var: float = 0.0
     upr_prs_reg: float = 1e-3
     lwr_prs_reg: float = 1e-3
-    mixture_entropy_reg: float = 0.0
+    ent_reg: float = 0.0
     epoch_reset: bool = True
 
 
@@ -111,7 +111,7 @@ class MixtureGradientTrainerConfig:
     # Precision matrix regularization
     upr_prs_reg: float = 1e-3
     lwr_prs_reg: float = 1e-3
-    mixture_entropy_reg: float = 0.0
+    ent_reg: float = 0.0
     epoch_reset: bool = True
 
 

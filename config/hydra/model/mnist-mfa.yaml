@@ -1,38 +1,42 @@
 # MFA configuration for MNIST
+# Based on gans-n-gmms hyperparams (ld=5, k=150, kmeans init).
+# Full-batch approximate EM with L2+ent_reg+AdamW+epoch_reset.
+#
+# Regularization notes:
+# - L1 is counterproductive at low latent dimensions. With ld=5, each
+#   component's 784x5 loading matrix has no redundancy — L1 kills entire
+#   latent directions, hollowing out components. Combined with ent_reg
+#   (which keeps those components alive) and L2, this causes catastrophic
+#   collapse around epoch 300. Avoid L1 for low-rank MFA.
+# - L2+ent_reg is stable at ld=5/k=150 with kmeans init, but collapses
+#   at ld=10 (~epoch 420) or with random init (~epoch 350). The total
+#   L2 "dose" (l2_reg * n_epochs * n_params) matters — scale down L2 or
+#   epochs when increasing latent_dim.
+# - No regularization is universally stable (tested ld=10, random init,
+#   500 epochs) but produces worse clustering merge performance.
 defaults:
   - mfa
   - _self_
 
-latent_dim: 10
-n_clusters: 200
+latent_dim: 5
+n_clusters: 150
+kmeans_init: true
 init_scale: 0.01
 min_var: 0.01
 
 trainer:
-  lr: 1e-4
+  lr: 1e-5
   n_epochs: 500
-  # batch_size: 512
   batch_steps: 500
   grad_clip: 10
   log_freq: 10
 
-  # Regularization
-  l1_reg: 1e-4
   l2_reg: 1e-4
-  upr_prs_reg: 1e-3
-  lwr_prs_reg: 1e-3
+  ent_reg: 1e-2
 
-  min_prob: 1e-5
-  obs_min_var: 0.01   # match model init min_var; prevents residual variance collapse
-  obs_max_var: 10.0   # matches reference sqrt_D ≤ 1.0 → var ≤ 1.0
-  lat_min_var: 1e-5
-
-  mixture_entropy_reg: 3e-1
+  obs_min_var: 1e-6
   epoch_reset: true
-
-  # Jitter (optional, for additional stability)
-  obs_jitter_var: 0.0
-  lat_jitter_var: 0.0
+  use_adamw: true
 
 analyses:
   generative_samples:

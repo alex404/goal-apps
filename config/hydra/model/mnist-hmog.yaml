@@ -32,7 +32,7 @@ full:
   l2_reg: 1e-4
   upr_prs_reg: 1e-3
   lwr_prs_reg: 1e-3
-  mixture_entropy_reg: 3e-1
+  ent_reg: 3e-1
   epoch_reset: true
 
 analyses:

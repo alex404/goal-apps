@@ -19,8 +19,6 @@ trainer:
   # Regularization
   l1_reg: 0 # 1e-3
   l2_reg: 0 # 1e-4
-  upr_prs_reg: 0 # 1e-3
-  lwr_prs_reg: 0 # 1e-3
 
   min_prob: 1e-3
   obs_min_var: 1e-6
