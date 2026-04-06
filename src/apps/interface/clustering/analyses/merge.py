@@ -163,6 +163,7 @@ class MergeResults(Artifact):
 
     prototypes: list[Array]
     mapping: NDArray[np.int32]
+    """Binary cluster→class mapping. Shape (n_clusters, n_classes), mapping[i,j]=1 means cluster i maps to class j."""
     train_accuracy: float
     train_nmi_score: float
     train_ari_score: float

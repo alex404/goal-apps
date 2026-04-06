@@ -124,12 +124,7 @@ def clustering_nmi(
 
     mutual_info = jnp.sum(joint_probs * log_ratio)
 
-    # Compute NMI with small epsilon to avoid division by zero
-    epsilon = 1e-10
-    nmi = 2.0 * mutual_info / (cluster_entropy + class_entropy + epsilon)
-
-    # Ensure NMI is in [0, 1]
-    return jnp.clip(nmi, 0.0, 1.0)
+    return 2.0 * mutual_info / (cluster_entropy + class_entropy)
 
 
 def add_clustering_metrics(

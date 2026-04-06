@@ -147,21 +147,8 @@ class MFAModel(
         """
         keys = jax.random.split(key, 3)
 
-        if not self.kmeans_init:
-            # Sample K random data points as initial cluster centers (no k-means).
-            # Uses the same per-component FA structure as k-means init, just with
-            # random centers instead of optimized ones. Global variance is used for
-            # all components (no per-cluster variance estimation).
-            log.info("Using random sample initialization (no k-means)...")
-            center_idx = jax.random.choice(
-                keys[0], data.shape[0], shape=(self.n_clusters,), replace=False
-            )
-            centers = data[center_idx]
-            global_var = jnp.maximum(jnp.var(data, axis=0), self.min_var)
-            cluster_vars = jnp.tile(global_var, (self.n_clusters, 1))
-            cluster_counts = np.ones(self.n_clusters, dtype=int)
-        else:
-            # Run k-means to get cluster centers
+        if self.kmeans_init:
+            # Run k-means and compute per-cluster statistics
             log.info("Running k-means for initialization...")
             kmeans = KMeans(
                 n_clusters=self.n_clusters, random_state=int(keys[0][0]), n_init="auto"
@@ -170,11 +157,9 @@ class MFAModel(
             centers = jax.numpy.asarray(kmeans.cluster_centers_)
             log.info("K-means initialization complete")
 
-        if self.kmeans_init:
-            # Compute per-cluster statistics from k-means labels
             assert kmeans.labels_ is not None
-            labels = kmeans.labels_  # shape (n_samples,)
-            data_np = np.asarray(data)  # shape (n_samples, data_dim)
+            labels = kmeans.labels_
+            data_np = np.asarray(data)
             cluster_counts = np.bincount(labels, minlength=self.n_clusters)
 
             cluster_vars_np = np.zeros((self.n_clusters, self.data_dim))
@@ -183,6 +168,17 @@ class MFAModel(
                 if mask.sum() > 1:
                     cluster_vars_np[k] = np.var(data_np[mask], axis=0)
             cluster_vars = jnp.maximum(jnp.array(cluster_vars_np), self.min_var)
+        else:
+            # Random sample initialization: K random data points as centers,
+            # global variance for all components, uniform counts.
+            log.info("Using random sample initialization (no k-means)...")
+            center_idx = jax.random.choice(
+                keys[0], data.shape[0], shape=(self.n_clusters,), replace=False
+            )
+            centers = data[center_idx]
+            global_var = jnp.maximum(jnp.var(data, axis=0), self.min_var)
+            cluster_vars = jnp.tile(global_var, (self.n_clusters, 1))
+            cluster_counts = np.ones(self.n_clusters, dtype=int)
 
         # Build each FA component in natural coordinates
         obs_man_fa = self.mfa.bas_hrm.obs_man  # Diagonal Normal for observables

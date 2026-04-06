@@ -136,7 +136,10 @@ def entropy_regularizer(
 
     Adds ent_reg * neg_entropy(π) to the loss, pushing the mixing
     distribution toward uniformity (maximum entropy).
-    Uses dual_potential (Legendre identity) for numerical stability.
+
+    Uses dual_potential: φ(η) = η·μ(η) - ψ(η) = -H(π) for Categorical,
+    computed via logsumexp-based log_partition and softmax-based to_mean.
+    Unlike direct p*log(p), never evaluates log(0) for dying components.
     """
     con_mix_params = model.pst_prr_emb.translate(rho, mix_params)
     _, cat_nat_params = model.prr_man.split_natural_mixture(con_mix_params)
@@ -691,8 +694,6 @@ class LGMPreTrainer:
             )
             # gradss_array shape: (n_batches, n_steps, param_dim)
             batch_grads = gradss_array.reshape(-1, *gradss_array.shape[2:])
-
-            opt_state = optimizer.init(new_params)
 
             reg_fn = self.make_regularizer(model)
             metrics = reg_fn(new_params)[1]

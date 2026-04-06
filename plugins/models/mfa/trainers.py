@@ -33,7 +33,10 @@ def entropy_regularizer(
 
     Adds ent_reg * neg_entropy(π) to the loss, pushing the mixing
     distribution toward uniformity (maximum entropy).
-    Uses dual_potential (Legendre identity) for numerical stability.
+
+    Uses dual_potential: φ(η) = η·μ(η) - ψ(η) = -H(π) for Categorical,
+    computed via logsumexp-based log_partition and softmax-based to_mean.
+    Unlike direct p*log(p), never evaluates log(0) for dying components.
     """
     con_lat_params = mfa.pst_prr_emb.translate(rho, lat_params)
     _, cat_nat_params = mfa.prr_man.split_natural_mixture(con_lat_params)
@@ -158,7 +161,7 @@ class GradientTrainer:
 
     def make_regularizer(
         self, mfa: MFA
-    ) -> Callable[[Array], tuple[Array, tuple[Array, MetricDict]]]:
+    ) -> Callable[[Array], tuple[Array, MetricDict]]:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
         def loss_with_metrics(params: Array) -> tuple[Array, MetricDict]:

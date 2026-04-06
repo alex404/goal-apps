@@ -165,7 +165,7 @@ def compute_co_assignment_matrix(responsibilities: Array) -> Array:
 
     # Normalize to get correlation-like measure
     diag_sqrt = jnp.sqrt(jnp.diag(co_assignment))
-    denom = diag_sqrt[:, None] * diag_sqrt[None, :] + 1e-12
+    denom = diag_sqrt[:, None] * diag_sqrt[None, :]
     normalized = co_assignment / denom
 
     # Ensure perfect symmetry
