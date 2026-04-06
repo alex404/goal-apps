@@ -27,7 +27,7 @@ min_var: 0.01
 trainer:
   lr: 1e-5
   n_epochs: 500
-  batch_steps: 500
+  batch_steps: 1000
   grad_clip: 10
   log_freq: 10
 
