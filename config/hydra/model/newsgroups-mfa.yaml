@@ -19,7 +19,8 @@ trainer:
   n_epochs: 200
   batch_steps: 1000
   grad_clip: 10           # Match HMoG NG20 (TF-IDF may have large grads)
-  l2_reg: 1e-3            # MNIST MFA setting
+  l2_reg: 0
+  weight_decay: 1e-3            # MNIST MFA setting
   ent_reg: 0  # Disabled at baseline; sweep in Wave 2
   obs_min_var: 1e-4
   lat_min_var: 1e-4

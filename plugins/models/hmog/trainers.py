@@ -169,6 +169,8 @@ class FullGradientTrainer:
     # Regularization parameters
     l1_reg: float
     l2_reg: float
+    ent_reg: float
+    weight_decay: float
 
     # Parameter bounds
     min_prob: float
@@ -181,9 +183,6 @@ class FullGradientTrainer:
 
     # Strategy
     mask_type: MaskingStrategy
-
-    # Numerical stability
-    ent_reg: float
 
     epoch_reset: bool = True
 
@@ -241,35 +240,36 @@ class FullGradientTrainer:
             lkl_params = model.lkl_fun_man.join_coords(obs_params, int_params)
             rho = model.conjugation_parameters(lkl_params)
 
-            # L1 regularization
+            # L1 regularization on interactions
             l1_norm = jnp.sum(jnp.abs(int_params))
             l1_loss = self.l1_reg * l1_norm
 
-            # L2 regularization
+            # L2 gradient penalty on all parameters
             l2_norm = jnp.sum(jnp.square(params))
             l2_loss = self.l2_reg * l2_norm
 
-            # Component precision regularization
-            prs_loss, prs_metrics = precision_regularizer(
-                model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
-            )
-
-            # Entropy penalty on mixture weights
-            ent_loss, ent_metrics = ent_regularizer(
-                model, rho, mix_params, self.ent_reg
-            )
-
-            # Combine into total loss and metrics
-            total_loss = l1_loss + l2_loss + prs_loss + ent_loss
-
-            metrics = {
+            total_loss = l1_loss + l2_loss
+            metrics: MetricDict = {
                 "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
-                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
                 "Regularization/L1 Penalty": (STATS_LEVEL, l1_loss),
+                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
                 "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
             }
-            metrics.update(prs_metrics)
-            metrics.update(ent_metrics)
+
+            # Gated terms: can produce NaN at boundary, must not be traced when coeff=0
+            if self.upr_prs_reg > 0 or self.lwr_prs_reg > 0:
+                prs_loss, prs_metrics = precision_regularizer(
+                    model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
+                )
+                total_loss = total_loss + prs_loss
+                metrics.update(prs_metrics)
+
+            if self.ent_reg > 0:
+                ent_loss, ent_metrics = entropy_regularizer(
+                    model, rho, mix_params, self.ent_reg
+                )
+                total_loss = total_loss + ent_loss
+                metrics.update(ent_metrics)
 
             return total_loss, metrics
 
@@ -414,13 +414,18 @@ class FullGradientTrainer:
             batch_size = self.batch_size
 
         # Create optimizer
+        base_optimizer = (
+            optax.adamw(learning_rate=self.lr * learning_rate_scale, weight_decay=self.weight_decay)
+            if self.weight_decay > 0
+            else optax.adam(self.lr * learning_rate_scale)
+        )
         if self.grad_clip > 0.0:
             optimizer = optax.chain(
                 optax.clip_by_global_norm(self.grad_clip),
-                optax.adamw(learning_rate=self.lr * learning_rate_scale),
+                base_optimizer,
             )
         else:
-            optimizer = optax.adamw(learning_rate=self.lr * learning_rate_scale)
+            optimizer = base_optimizer
 
         # Initialize optimizer state
         opt_state = optimizer.init(params0)
@@ -497,6 +502,7 @@ class LGMPreTrainer:
     # Regularization parameters
     l1_reg: float
     l2_reg: float
+    weight_decay: float
 
     # Parameter bounds
     min_var: float
@@ -521,21 +527,20 @@ class LGMPreTrainer:
             # Extract components for regularization
             _, int_params, _ = model.split_coords(params)
 
-            # L1 regularization
+            # L1 regularization on interactions
             l1_norm = jnp.sum(jnp.abs(int_params))
             l1_loss = self.l1_reg * l1_norm
 
-            # L2 regularization
+            # L2 gradient penalty on all parameters
             l2_norm = jnp.sum(jnp.square(params))
             l2_loss = self.l2_reg * l2_norm
 
-            # Combine into total loss and metrics
             total_loss = l1_loss + l2_loss
 
-            metrics = {
+            metrics: MetricDict = {
                 "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
-                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
                 "Regularization/L1 Penalty": (STATS_LEVEL, l1_loss),
+                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
                 "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
             }
 
@@ -638,13 +643,18 @@ class LGMPreTrainer:
             batch_size = self.batch_size
 
         # Create optimizer
+        base_optimizer = (
+            optax.adamw(learning_rate=self.lr, weight_decay=self.weight_decay)
+            if self.weight_decay > 0
+            else optax.adam(self.lr)
+        )
         if self.grad_clip > 0.0:
             optimizer = optax.chain(
                 optax.clip_by_global_norm(self.grad_clip),
-                optax.adamw(learning_rate=self.lr),
+                base_optimizer,
             )
         else:
-            optimizer = optax.adamw(learning_rate=self.lr)
+            optimizer = base_optimizer
 
         # Initialize optimizer state
         opt_state = optimizer.init(params0)
@@ -726,6 +736,8 @@ class MixtureGradientTrainer:
 
     # Regularization parameters
     l2_reg: float
+    ent_reg: float
+    weight_decay: float
 
     # Parameter bounds
     min_prob: float
@@ -733,7 +745,6 @@ class MixtureGradientTrainer:
     lat_jitter_var: float
     upr_prs_reg: float
     lwr_prs_reg: float
-    ent_reg: float
 
     epoch_reset: bool = True
 
@@ -807,31 +818,30 @@ class MixtureGradientTrainer:
         def loss_with_metrics(
             mix_params: Array,
         ) -> tuple[Array, MetricDict]:
-            # Extract components for regularization
-
-            # L2 regularization
+            # L2 gradient penalty on mixture parameters
             l2_norm = jnp.sum(jnp.square(mix_params))
             l2_loss = self.l2_reg * l2_norm
 
-            # Component precision regularization
-            prs_loss, prs_metrics = precision_regularizer(
-                model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
-            )
-
-            # Entropy penalty on mixture weights
-            ent_loss, ent_metrics = ent_regularizer(
-                model, rho, mix_params, self.ent_reg
-            )
-
-            # Combine into total loss and metrics
-            total_loss = l2_loss + prs_loss + ent_loss
-
-            metrics = {
+            total_loss = l2_loss
+            metrics: MetricDict = {
                 "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
                 "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
             }
-            metrics.update(prs_metrics)
-            metrics.update(ent_metrics)
+
+            # Gated terms: can produce NaN at boundary, must not be traced when coeff=0
+            if self.upr_prs_reg > 0 or self.lwr_prs_reg > 0:
+                prs_loss, prs_metrics = precision_regularizer(
+                    model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
+                )
+                total_loss = total_loss + prs_loss
+                metrics.update(prs_metrics)
+
+            if self.ent_reg > 0:
+                ent_loss, ent_metrics = entropy_regularizer(
+                    model, rho, mix_params, self.ent_reg
+                )
+                total_loss = total_loss + ent_loss
+                metrics.update(ent_metrics)
 
             return total_loss, metrics
 
@@ -876,13 +886,18 @@ class MixtureGradientTrainer:
         )
 
         # Setup optimizer for mixture parameters
+        base_optimizer = (
+            optax.adamw(learning_rate=self.lr * learning_rate_scale, weight_decay=self.weight_decay)
+            if self.weight_decay > 0
+            else optax.adam(self.lr * learning_rate_scale)
+        )
         if self.grad_clip > 0.0:
             optimizer = optax.chain(
                 optax.clip_by_global_norm(self.grad_clip),
-                optax.adam(learning_rate=self.lr * learning_rate_scale),
+                base_optimizer,
             )
         else:
-            optimizer = optax.adam(learning_rate=self.lr * learning_rate_scale)
+            optimizer = base_optimizer
 
         # Initialize optimizer state
         opt_state = optimizer.init(mix_params0)

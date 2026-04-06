@@ -132,6 +132,7 @@ class ProjectionTrainer:
 
     # Regularization parameters
     l2_reg: float = 0.0
+    weight_decay: float = 0.0
     upr_prs_reg: float = 1e-3
     """Upper bound regularization on precision eigenvalues (trace penalty)."""
 
@@ -182,31 +183,31 @@ class ProjectionTrainer:
     def make_regularizer(self, mix: LatentMixture) -> Callable[[Array], Array]:
         """Create regularization gradient function for the latent mixture.
 
-        Combines L2 regularization with precision eigenvalue regularization:
+        L2 gradient penalty plus precision eigenvalue regularization:
             R = l2_reg * ||params||^2
-              + upr_prs_reg * sum_k tr(Lambda_k)       (trace penalty: caps large precisions)
-              - lwr_prs_reg * sum_k log|Lambda_k|       (log-det penalty: prevents collapse)
+              + upr_prs_reg * sum_k tr(Lambda_k)       (trace penalty)
+              - lwr_prs_reg * sum_k log|Lambda_k|       (log-det penalty)
 
         Equilibrium eigenvalue: lambda* = lwr_prs_reg / upr_prs_reg.
-        When both equal, all component variances are pushed toward 1.
         """
 
         def loss(params: Array) -> Array:
-            l2_loss = self.l2_reg * jnp.sum(jnp.square(params))
+            total = self.l2_reg * jnp.sum(jnp.square(params))
 
-            comp_params, _ = mix.split_natural_mixture(params)
+            if self.upr_prs_reg > 0 or self.lwr_prs_reg > 0:
+                comp_params, _ = mix.split_natural_mixture(params)
 
-            def comp_prs_loss(comp: Array) -> Array:
-                _, prs = mix.obs_man.split_location_precision(comp)
-                prs_dense = mix.obs_man.cov_man.to_matrix(prs)
-                trace = jnp.trace(prs_dense)
-                logdet = jnp.linalg.slogdet(prs_dense)[1]
-                return self.upr_prs_reg * trace - self.lwr_prs_reg * logdet
+                def comp_prs_loss(comp: Array) -> Array:
+                    _, prs = mix.obs_man.split_location_precision(comp)
+                    prs_dense = mix.obs_man.cov_man.to_matrix(prs)
+                    trace = jnp.trace(prs_dense)
+                    logdet = jnp.linalg.slogdet(prs_dense)[1]
+                    return self.upr_prs_reg * trace - self.lwr_prs_reg * logdet
 
-            prs_losses = mix.cmp_man.map(comp_prs_loss, comp_params)
-            prs_loss = jnp.sum(prs_losses)
+                prs_losses = mix.cmp_man.map(comp_prs_loss, comp_params)
+                total = total + jnp.sum(prs_losses)
 
-            return l2_loss + prs_loss
+            return total
 
         return jax.grad(loss)
 
@@ -229,13 +230,18 @@ class ProjectionTrainer:
         n_epochs_to_run = n_epochs if n_epochs is not None else self.n_epochs
 
         # Setup optimizer
+        base_optimizer = (
+            optax.adamw(learning_rate=self.lr, weight_decay=self.weight_decay)
+            if self.weight_decay > 0
+            else optax.adam(self.lr)
+        )
         if self.grad_clip > 0.0:
             optimizer = optax.chain(
                 optax.clip_by_global_norm(self.grad_clip),
-                optax.adam(learning_rate=self.lr),
+                base_optimizer,
             )
         else:
-            optimizer = optax.adam(learning_rate=self.lr)
+            optimizer = base_optimizer
 
         opt_state = optimizer.init(params0)
 

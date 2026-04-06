@@ -39,5 +39,6 @@ full:
   lwr_prs_reg: 1e-5
   l1_reg: 1e-6
   l2_reg: 1e-4
+  weight_decay: 1e-4
   ent_reg: 0.0
   epoch_reset: true

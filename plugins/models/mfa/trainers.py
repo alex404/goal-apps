@@ -79,10 +79,13 @@ class GradientTrainer:
     """L1 regularization on interaction parameters."""
 
     l2_reg: float
-    """L2 regularization on all parameters."""
+    """L2 gradient penalty on all parameters. Stabilizes precision reg backward pass through Adam's moment estimates."""
 
     ent_reg: float
     """Entropy regularization on mixture weights (pushes toward uniformity)."""
+
+    weight_decay: float
+    """AdamW decoupled weight decay (0 = plain Adam)."""
 
     log_freq: int
     """Log metrics every log_freq epochs."""
@@ -108,9 +111,6 @@ class GradientTrainer:
 
     epoch_reset: bool
     """Reset optimizer state at the start of each epoch."""
-
-    use_adamw: bool
-    """Use AdamW (with weight decay) instead of plain Adam."""
 
     def bound_means(self, mfa: MFA, means: Array) -> Array:
         """Apply bounds to posterior statistics: regularize covariances, clip probabilities, then whiten."""
@@ -169,15 +169,15 @@ class GradientTrainer:
             l1_norm = jnp.sum(jnp.abs(int_params))
             l1_loss = self.l1_reg * l1_norm
 
-            # L2 regularization on all parameters.
+            # L2 gradient penalty on all parameters
             l2_norm = jnp.sum(jnp.square(params))
             l2_loss = self.l2_reg * l2_norm
 
             total_loss = l1_loss + l2_loss
             metrics: MetricDict = {
                 "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
-                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
                 "Regularization/L1 Penalty": (STATS_LEVEL, l1_loss),
+                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
                 "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
             }
 
@@ -229,8 +229,8 @@ class GradientTrainer:
 
         # Create optimizer
         base_optimizer = (
-            optax.adamw(learning_rate=self.lr)
-            if self.use_adamw
+            optax.adamw(learning_rate=self.lr, weight_decay=self.weight_decay)
+            if self.weight_decay > 0
             else optax.adam(self.lr)
         )
         if self.grad_clip > 0.0:

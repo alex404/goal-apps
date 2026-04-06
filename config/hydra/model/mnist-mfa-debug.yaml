@@ -19,7 +19,8 @@ trainer:
 
   # Regularization — minimal: only clip W growth + grad clip
   l1_reg: 1e-4
-  l2_reg: 1e-4
+  l2_reg: 0
+  weight_decay: 1e-4
   ent_reg: 3e-2
 
   min_prob: 1e-4

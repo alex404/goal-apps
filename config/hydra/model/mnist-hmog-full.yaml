@@ -31,6 +31,7 @@ full:
   lat_min_var: 1e-6
   l1_reg: 0
   l2_reg: 3e-4
+  weight_decay: 3e-4
   upr_prs_reg: 3e-4
   lwr_prs_reg: 3e-4
   ent_reg: 3e-4

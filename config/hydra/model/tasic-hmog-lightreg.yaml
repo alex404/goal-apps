@@ -36,3 +36,4 @@ full:
   lwr_prs_reg: 1e-3  # Reduce regularization 10x
   l1_reg: 1e-5       # Very weak L1 to avoid extreme sparsity
   l2_reg: 1e-3       # Reduce L2 regularization 10x
+  weight_decay: 1e-3       # Reduce L2 regularization 10x

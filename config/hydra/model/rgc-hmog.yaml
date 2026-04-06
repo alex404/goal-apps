@@ -17,6 +17,7 @@ pre:
   batch_steps: 1000
   l1_reg: 0.01
   l2_reg: 0
+  weight_decay: 0
   grad_clip: 1
   min_var: 1e-5
   jitter_var: 0
@@ -39,3 +40,4 @@ full:
   lwr_prs_reg: 3e-3
   l1_reg: 0.01
   l2_reg: 0
+  weight_decay: 0

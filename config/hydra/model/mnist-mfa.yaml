@@ -10,7 +10,7 @@
 #   collapse around epoch 300. Avoid L1 for low-rank MFA.
 # - L2+ent_reg is stable at ld=5/k=150 with kmeans init, but collapses
 #   at ld=10 (~epoch 420) or with random init (~epoch 350). The total
-#   L2 "dose" (l2_reg * n_epochs * n_params) matters — scale down L2 or
+#   L2 "dose" (weight_decay * n_epochs * n_params) matters — scale down L2 or
 #   epochs when increasing latent_dim.
 # - No regularization is universally stable (tested ld=10, random init,
 #   500 epochs) but produces worse clustering merge performance.
@@ -18,8 +18,8 @@ defaults:
   - mfa
   - _self_
 
-latent_dim: 5
-n_clusters: 150
+latent_dim: 10
+n_clusters: 200
 kmeans_init: true
 init_scale: 0.01
 min_var: 0.01
@@ -31,12 +31,12 @@ trainer:
   grad_clip: 10
   log_freq: 10
 
-  l2_reg: 1e-4
+  l2_reg: 0
+  weight_decay: 1e-4
   ent_reg: 1e-2
 
   obs_min_var: 1e-6
   epoch_reset: true
-  use_adamw: true
 
 analyses:
   generative_samples:

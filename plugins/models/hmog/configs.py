@@ -25,6 +25,7 @@ class PreTrainerConfig:
     batch_steps: int = 1000
     l1_reg: float = 0
     l2_reg: float = 0
+    weight_decay: float = 0
     grad_clip: float = 8.0
     min_var: float = 1e-5
     jitter_var: float = 0.0
@@ -42,6 +43,8 @@ class GradientTrainerConfig:
     batch_steps: int = 1000
     l1_reg: float = 0
     l2_reg: float = 0
+    ent_reg: float = 0.0
+    weight_decay: float = 0
     grad_clip: float = 8.0
     min_prob: float = 1e-4
     obs_min_var: float = 1e-5
@@ -50,7 +53,6 @@ class GradientTrainerConfig:
     lat_jitter_var: float = 0.0
     upr_prs_reg: float = 1e-3
     lwr_prs_reg: float = 1e-3
-    ent_reg: float = 0.0
     epoch_reset: bool = True
 
 
@@ -102,6 +104,8 @@ class MixtureGradientTrainerConfig:
 
     # Regularization parameters
     l2_reg: float = 0
+    ent_reg: float = 0.0
+    weight_decay: float = 0
 
     # Parameter bounds for mixture components
     min_prob: float = 1e-4
@@ -111,7 +115,6 @@ class MixtureGradientTrainerConfig:
     # Precision matrix regularization
     upr_prs_reg: float = 1e-3
     lwr_prs_reg: float = 1e-3
-    ent_reg: float = 0.0
     epoch_reset: bool = True
 
 
@@ -176,6 +179,7 @@ class ProjectionTrainerConfig:
     batch_size: int | None = None
     batch_steps: int = 1000
     l2_reg: float = 0
+    weight_decay: float = 0
     grad_clip: float = 1.0
     min_prob: float = 1e-4
     lat_min_var: float = 1e-6

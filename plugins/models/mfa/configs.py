@@ -36,10 +36,13 @@ class GradientTrainerConfig:
     """L1 regularization on interaction parameters (promotes sparse loadings)."""
 
     l2_reg: float = 0.0
-    """L2 regularization on all parameters."""
+    """L2 gradient penalty on all parameters."""
 
     ent_reg: float = 0.0
     """Entropy regularization on mixture weights (pushes toward uniformity)."""
+
+    weight_decay: float = 0.0
+    """AdamW decoupled weight decay (0 = plain Adam)."""
 
     log_freq: int = 10
     """Log metrics every log_freq epochs."""
@@ -65,9 +68,6 @@ class GradientTrainerConfig:
 
     epoch_reset: bool = True
     """Reset optimizer state at the start of each epoch."""
-
-    use_adamw: bool = True
-    """Use AdamW (with weight decay) instead of plain Adam."""
 
 
 @dataclass
