@@ -187,6 +187,7 @@ class FullGradientTrainer:
     # Strategy
     mask_type: MaskingStrategy
 
+    log_freq: int = 10
     epoch_reset: bool = True
 
     def __post_init__(self) -> None:
@@ -478,7 +479,7 @@ class FullGradientTrainer:
                 epoch + epoch_offset,
                 metrics,
                 batch_grads,
-                log_freq=10,
+                log_freq=self.log_freq,
             )
 
             return opt_state, new_params, next_key
@@ -511,6 +512,7 @@ class LGMPreTrainer:
     min_var: float
     jitter_var: float
 
+    log_freq: int = 10
     epoch_reset: bool = True
 
     def bound_means(self, model: AnyLGM, means: Array) -> Array:
@@ -707,7 +709,7 @@ class LGMPreTrainer:
                 epoch + epoch_offset,
                 metrics,
                 batch_grads,
-                log_freq=10,
+                log_freq=self.log_freq,
             )
 
             return opt_state, new_params, next_key
@@ -747,6 +749,7 @@ class MixtureGradientTrainer:
     upr_prs_reg: float
     lwr_prs_reg: float
 
+    log_freq: int = 10
     epoch_reset: bool = True
 
     def precompute_observable_mappings(
@@ -1034,7 +1037,7 @@ class MixtureGradientTrainer:
                 epoch + epoch_offset,
                 metrics,
                 batch_grads,
-                log_freq=10,
+                log_freq=self.log_freq,
             )
 
             return opt_state, new_mix_params, next_key

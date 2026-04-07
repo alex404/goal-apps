@@ -203,6 +203,11 @@ def log_epoch_metrics(
         metrics = update_stats("Means", "Lat Interaction", lat_int_means, metrics)
         metrics = update_stats("Means", "Categorical", cat_means, metrics)
 
+        # Mixture health: entropy and effective number of components
+        neg_entropy = model.pst_man.lat_man.dual_potential(cat_params)
+        metrics["Mixture/Entropy"] = (INFO_LEVEL, -neg_entropy)
+        metrics["Mixture/Effective Components"] = (INFO_LEVEL, jnp.exp(-neg_entropy))
+
         # Conjugation and component statistics
         lkl_params, mix_params = model.split_conjugated(params)
         rho = model.lwr_hrm.conjugation_parameters(lkl_params)

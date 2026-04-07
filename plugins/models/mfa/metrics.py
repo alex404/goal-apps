@@ -99,6 +99,11 @@ def log_epoch_metrics(
         metrics = update_stats("Params", "Lat Components", lat_comp_params, metrics)
         metrics = update_stats("Params", "Categorical", lat_cat_params, metrics)
 
+        # Mixture health: entropy and effective number of components
+        neg_entropy = mfa.pst_man.lat_man.dual_potential(lat_cat_params)
+        metrics["Mixture/Entropy"] = (INFO_LEVEL, -neg_entropy)
+        metrics["Mixture/Effective Components"] = (INFO_LEVEL, jnp.exp(-neg_entropy))
+
         # Mean statistics
         means = mfa.to_mean(params)
         obs_means, int_means, lat_means = mfa.split_coords(means)

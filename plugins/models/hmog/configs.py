@@ -29,6 +29,7 @@ class PreTrainerConfig:
     grad_clip: float = 8.0
     min_var: float = 1e-5
     jitter_var: float = 0.0
+    log_freq: int = 10
     epoch_reset: bool = True
 
 
@@ -53,6 +54,7 @@ class GradientTrainerConfig:
     lat_jitter_var: float = 0.0
     upr_prs_reg: float = 1e-3
     lwr_prs_reg: float = 1e-3
+    log_freq: int = 10
     epoch_reset: bool = True
 
 
@@ -115,6 +117,7 @@ class MixtureGradientTrainerConfig:
     # Precision matrix regularization
     upr_prs_reg: float = 1e-3
     lwr_prs_reg: float = 1e-3
+    log_freq: int = 10
     epoch_reset: bool = True
 
 
