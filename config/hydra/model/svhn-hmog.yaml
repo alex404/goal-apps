@@ -2,8 +2,8 @@ defaults:
   - hmog
   - _self_
 
-latent_dim: 20
-n_clusters: 40
+latent_dim: 40
+n_clusters: 100
 
 lr_scales: [1]
 num_cycles: 10
@@ -12,13 +12,13 @@ lgm_noise_scale: 0.001
 mix_noise_scale: 0.001
 
 pre:
-  lr: 1e-4
+  lr: 3e-5
   n_epochs: 0
   batch_steps: 1000
-  l1_reg: 0
-  l2_reg: 3e-4
-  weight_decay: 3e-4
-  grad_clip: 0.1
+  l1_reg: 1e-3
+  l2_reg: 1e-3
+  weight_decay: 1e-3
+  grad_clip: 10
   min_var: 1e-4
   jitter_var: 0
 
@@ -26,23 +26,23 @@ lgm:
   n_epochs: 0
 
 mix:
-  lr: 1e-4
+  lr: 1e-5
   n_epochs: 0
   batch_steps: 1000
-  grad_clip: 0.01
+  grad_clip: 10
   min_prob: 1e-4
   lat_min_var: 1e-4
   upr_prs_reg: 1e-2
-  lwr_prs_reg: 1e-2
+  lwr_prs_reg: 1e-3
   l1_reg: ${model.pre.l1_reg}
   l2_reg: ${model.pre.weight_decay}
   weight_decay: ${model.pre.weight_decay}
 
 full:
-  lr: 1e-4
+  lr: 1e-5
   n_epochs: 500
   batch_steps: 1000
-  grad_clip: 0.1
+  grad_clip: 10
   min_prob: ${model.mix.min_prob}
   obs_min_var: ${model.pre.min_var}
   lat_min_var: ${model.mix.lat_min_var}
@@ -51,3 +51,26 @@ full:
   l1_reg: ${model.pre.l1_reg}
   l2_reg: ${model.pre.weight_decay}
   weight_decay: ${model.pre.weight_decay}
+
+analyses:
+  generative_samples:
+    enabled: true
+    n_samples: 100
+  cluster_statistics:
+    enabled: true
+  co_assignment_hierarchy:
+    enabled: true
+  optimal_merge:
+    enabled: false
+    filter_empty_clusters: true
+    min_cluster_size: 0.0005
+  co_assignment_merge:
+    enabled: true
+    filter_empty_clusters: true
+    min_cluster_size: 0.0005
+  kl_hierarchy:
+    enabled: true
+  kl_merge:
+    enabled: true
+    filter_empty_clusters: true
+    min_cluster_size: 0.0005
