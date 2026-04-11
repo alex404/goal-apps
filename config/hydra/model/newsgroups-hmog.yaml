@@ -1,15 +1,22 @@
 # 20 Newsgroups configuration for HMoG
 #
-# Key finding: a single cycle converges well (~0.51 NMI peak at epoch 70);
-# additional cycles with decaying LR monotonically degrade performance.
-# n_epochs=100 captures the peak with comfortable margin.
+# Key findings:
+#   - Single cycle converges well; additional cycles with decaying LR degrade performance.
+#   - Symmetric precision regularization (1e-2) is essential for stability at K>=60.
+#     Without it, K>=60 produces cuSolver/NaN errors. The regularizer pushes latent
+#     precision eigenvalues toward 1.0 (isotropic), preventing covariance degeneracy.
+#   - ent_reg=1e-1 is the optimal entropy regularization for NG20 (lower than MNIST's 3e-1).
+#   - batch_steps=100 is optimal at ld=400. Higher values (200+) cause faster overfitting.
+#   - K=80 (4x overclustering) gives best raw NMI (0.589) and KL merge NMI (0.529).
+#     K=60 gives best CoA merge NMI (0.515). Default K=80 favors raw + KL merge.
+#   - Full-batch EM is essential; SGD eliminates merge signal.
 defaults:
   - hmog
   - _self_
 
 # Model architecture
 latent_dim: 400
-n_clusters: 20
+n_clusters: 80
 
 # Single cycle — more cycles hurt on NG20
 num_cycles: 1
@@ -29,16 +36,16 @@ mix:
 
 full:
   lr: 1e-4
-  n_epochs: 100
+  n_epochs: 200
   batch_steps: 100
   grad_clip: 10
   min_prob: 1e-5
   obs_min_var: 1e-5
   lat_min_var: 1e-5
-  upr_prs_reg: 1e-5
-  lwr_prs_reg: 1e-5
-  l1_reg: 1e-6
+  upr_prs_reg: 1e-2
+  lwr_prs_reg: 1e-2
+  l1_reg: 0
   l2_reg: 1e-4
   weight_decay: 1e-4
-  ent_reg: 0.0
+  ent_reg: 1e-1
   epoch_reset: true

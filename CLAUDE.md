@@ -278,50 +278,11 @@ The Mixture of Factor Analyzers (MFA) is a simpler clustering model:
 
 ### Configuration Composition
 
-Hydra composes configurations in this order (later overrides earlier):
-1. Base defaults from `config/hydra/config.yaml`
-2. Dataset-specific config from `config/hydra/dataset/<name>.yaml`
-3. Model-specific config from `config/hydra/model/<name>.yaml`
-4. CLI overrides (e.g., `latent_dim=100`)
-5. Saved config when resuming (loaded from `runs/<run_name>/run-config.yaml`)
-
-Common config parameters:
-- `run_name`: Experiment identifier (default: timestamp)
-- `device`: "gpu" or "cpu"
-- `jit`: Enable JAX JIT compilation (default: true)
-- `use_wandb`: Enable Weights & Biases logging (default: true)
-- `use_local`: Enable local file logging (default: true)
-- `resume_epoch`: Epoch to resume from (None = latest, 0 = fresh start)
-- `recompute_artifacts`: Force recomputation of analysis artifacts (default: true)
-- `repeat`: Run repetition count (default: 1)
-- `log_level`: Configurable log level (INFO, DEBUG, STATS, WARNING, etc.)
-- `project`: W&B project name (default: "goal")
-- `group`, `job_type`, `run_id`, `sweep_id`: W&B tracking fields
+Hydra composes configs in order: base defaults → dataset config → model config → CLI overrides → saved config (on resume). Model parameters are nested under the `model` key (e.g., `model.n_clusters=60`, `model.full.ent_reg=1e-1`). Top-level params like `run_name`, `device`, `jit`, `use_wandb`, `log_level` are overridden directly.
 
 ### Hyperparameter Sweeps
 
-Sweeps use Weights & Biases:
-```bash
-# Create sweep (comma-separated values, no brackets)
-uv run goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 n_clusters=50,100,200
-
-# Validate a sample config without launching
-uv run goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --validate
-
-# Dry run to view sweep config tree
-uv run goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --dry-run
-
-# Specify W&B project
-uv run goal sweep dataset=mnist model=mnist-hmog latent_dim=10,20,50 --project my-project
-
-# After launching, run agents to execute the sweep:
-wandb agent <sweep_id>
-```
-
-The sweep system (`src/apps/cli/sweep.py`):
-- Parses comma-separated overrides (e.g., `param=1,2,3`) — **not** bracket syntax
-- Creates W&B grid sweep configuration
-- Supports validation via `--validate` flag (initializes a sample config to check validity)
+The sweep system (`src/apps/cli/sweep.py`) uses comma-separated overrides (**not** bracket syntax) and creates W&B grid sweeps. Supports `--validate` and `--dry-run` flags. See Running Experiments above for CLI examples.
 
 ## Development Patterns
 
@@ -364,54 +325,27 @@ The sweep system (`src/apps/cli/sweep.py`):
 
 - All numerical computations use JAX arrays
 - Enable/disable JIT with `jit=true/false`
-- Random keys generated from `os.urandom()` at run start
 - Use `device=gpu` or `device=cpu` to control execution backend
-- **cuSolver / Cholesky errors**: `XlaRuntimeError: INTERNAL: cuSolver internal error` during training is almost always caused by degenerate (non-positive-definite) covariance matrices — i.e. insufficient regularization for the given configuration. The fix is to increase regularization (`l2_reg`, `min_var`, `upr_prs_reg`/`lwr_prs_reg`) or reduce model capacity. Do not assume GPU corruption or hardware issues.
 - **Single GPU — never run two training jobs simultaneously.** Only one `goal train` process at a time. Do not start a second job while one is already running, even in the background.
 
-### Type Checking Notes
+### Debugging Numerical Instabilities
 
-Pyright is configured with "recommended" mode. Some checks are disabled:
-- `reportUnknownParameterType`, `reportUnknownMemberType`, `reportUnknownArgumentType`, `reportUnknownVariableType`, `reportUnknownLambdaType`
-- `reportAny`, `reportExplicitAny`
-- `reportMissingSuperCall`, `reportUnusedCallResult`
-- These relaxations accommodate dynamic Hydra instantiation patterns and JAX idioms
+**cuSolver / Cholesky / NaN errors** during training are almost always caused by degenerate (non-positive-definite) covariance matrices — i.e. insufficient regularization for the given configuration. Do not assume GPU corruption or hardware issues.
 
-### Ruff Configuration
+**Diagnosis workflow:**
+1. Run with `log_level=STATS` (or `DEBUG`) to get per-component diagnostics every epoch — precision condition numbers, covariance log-determinants, gradient norms per parameter group, and regularization penalties.
+2. Load `metrics.joblib` from the run directory and inspect the trajectories of key metrics: `Components/Precision Cond Max`, `Components/Covariance LogDet Min`, `Grad Norms/*`, `Regularization/*`. These reveal which parameter group is diverging and when.
+3. The fix is typically to increase `upr_prs_reg` (prevents precision eigenvalue blow-up → covariance collapse) or `min_var`/`lat_min_var` (floors on variance). Reducing model capacity (`n_clusters`, `latent_dim`) also helps.
+4. `upr_prs_reg` and `lwr_prs_reg` push latent precision eigenvalues toward `lwr/upr`. Symmetric values (e.g., both 1e-2) push toward 1.0 (isotropic). Asymmetric (upr >> lwr) allows broader distributions but can be numerically unstable at initialization if the ratio is too extreme (e.g., upr=1e-2, lwr=1e-4 crashes; upr=1e-3, lwr=1e-5 is safe).
 
-Enabled rules: Pyflakes, PEP8, McCabe, naming, imports, simplify, pyupgrade, ruff-specific, unused-arguments, tryceratops
+### Dev Tool Configuration
 
-Ignored rules:
-- E501 (line length)
-- D (all docstring checks)
-- ARG002, ARG003 (unused arguments in methods/functions)
-- TRY003 (exception message in place)
-- F722 (false positives from jaxtyping)
+**basedpyright**: "recommended" mode with relaxations for dynamic Hydra instantiation and JAX idioms (`reportUnknown*Type`, `reportAny`, `reportExplicitAny`, `reportMissingSuperCall`, `reportUnusedCallResult` disabled).
+
+**ruff**: Pyflakes, PEP8, McCabe, naming, imports, simplify, pyupgrade, ruff-specific, unused-arguments, tryceratops. Ignores: E501, D (docstrings), ARG002/003, TRY003, F722 (jaxtyping false positives).
 
 ## Key Dependencies
 
-- **goal-jax**: Geometric optimization library (local dev dependency, see above). Brings in JAX as a transitive dependency
-- **Hydra + OmegaConf**: Configuration management
-- **Typer**: CLI framework
-- **wandb**: Experiment tracking and sweeps
-- **matplotlib + seaborn**: Visualization
-- **scikit-learn**: Metrics and benchmark models
-- **joblib**: Serialization of parameters/artifacts
-- **pandas**: Data manipulation
-- **scipy**: Scientific computing
-- **torchvision**: Vision dataset loaders (optional, `datasets` extra)
-- **h5py**: HDF5 file access for Tasic and Neural Traces datasets (optional, `datasets` extra)
-- **pytest**: Testing (optional, `test` extra)
+Core: **goal-jax** (local, brings JAX), **Hydra/OmegaConf**, **Typer**, **wandb**, **matplotlib/seaborn**, **scikit-learn**, **joblib**, **scipy**.
+Optional extras: **torchvision** + **h5py** (`datasets`), **pytest** (`test`).
 
-## File Locations
-
-- CLI entry: `src/apps/cli/main.py`
-- Abstract interfaces: `src/apps/interface/`
-- Clustering interfaces: `src/apps/interface/clustering/`
-- Shared analyses: `src/apps/interface/analyses/`, `src/apps/interface/clustering/analyses/`
-- Runtime utilities: `src/apps/runtime/`
-- Plugin registration: `plugins/__init__.py`
-- Base config: `config/hydra/config.yaml`
-- Matplotlib style: `config/default.mplstyle`
-- Run outputs: `runs/single/<run_name>/` or `runs/sweep/<sweep_id>/<run_name>/`
-- Dataset cache: `.cache/`

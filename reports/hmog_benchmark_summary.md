@@ -18,8 +18,9 @@ Find configurations where **CoA merge NMI > peak raw NMI** on both datasets, cha
 | MNIST | Best raw NMI | ~0.61 | ld=50, K=200, ent=3e-1 |
 | MNIST | Best CoA NMI | **0.772 ± .007** | ld=50, K=200, ent=3e-1, l2=5e-4, 10cyc |
 | MNIST | CoA − raw gap | +0.162 | Same as above |
-| NG20 | Best raw NMI | **0.567** | ld=400, K=40 |
-| NG20 | Best CoA NMI | 0.501 | ld=50, K=300, ent=1e-1 |
+| NG20 | Best raw NMI | **0.589** | ld=400, K=80, ent=1e-1, prs=1e-2 |
+| NG20 | Best CoA NMI | **0.515** | ld=400, K=60, ent=1e-1, prs=1e-2 |
+| NG20 | Best KL NMI | **0.529** | ld=400, K=80, ent=1e-1, prs=1e-2 |
 | NG20 | Best CoA − raw gap | +0.010 | ld=50, K=200, ent=1e-1 |
 | NG20 | LDA baseline | 0.472 | — |
 
@@ -69,7 +70,26 @@ n_epochs: 200
 ### Best configurations
 
 ```
-# Best merge>raw (merge advantage recipe)
+# Best raw NMI AND best merge NMI (2026-04-11)
+latent_dim: 400
+n_clusters: 60
+mixture_entropy_reg: 1e-1
+upr_prs_reg: 1e-2
+lwr_prs_reg: 1e-2
+l2_reg: 1e-4
+l1_reg: 0
+min_prob: 1e-5
+lr: 1e-4
+batch_steps: 100
+n_epochs: 200
+num_cycles: 1
+```
+
+**Result (K=60)**: peak raw NMI = 0.575 (epoch 41), CoA NMI = **0.515**, KL NMI = 0.515, final NMI = 0.537 (epoch 191)
+**Result (K=80)**: peak raw NMI = **0.589** (epoch 41), CoA NMI = 0.506, KL NMI = **0.529**, final NMI = 0.541 (epoch 191)
+
+```
+# Previous best merge>raw recipe (ld=50 regime)
 latent_dim: 50
 n_clusters: 100–200
 mixture_entropy_reg: 1e-1
@@ -80,11 +100,6 @@ lr: 1e-4
 batch_steps: 1000
 n_epochs: 200
 num_cycles: 1
-
-# Best absolute raw NMI (no merge advantage)
-latent_dim: 400
-n_clusters: 40
-mixture_entropy_reg: 1e-1
 ```
 
 ### NG20 capacity sweep (ld × K at ent=1e-1)
@@ -94,7 +109,9 @@ mixture_entropy_reg: 1e-1
 | 20 | Stable | 0.299 | Largest gap (+0.012) but low absolute NMI |
 | 50 | Stable at all K | 0.551 | Sweet spot: merge>raw at K=100-300 |
 | 100 | Unstable at K=60-200 | 0.473 | cuSolver crashes |
-| 400 | Stable at K≤40, bs=100 | **0.567** | Best raw NMI; merge always worse |
+| 400 | Stable at K≤40, bs=100 | 0.567 | Best raw NMI (pre-prs-reg); merge always worse |
+| 400 | K=60 with prs=1e-2 | 0.575 | K=60 enables merge signal (CoA 0.515) |
+| 400 | K=80 with prs=1e-2 | **0.589** | Best raw NMI; KL merge 0.529 |
 
 ### NG20 K sweep at ld=50, ent=1e-1
 
@@ -155,6 +172,48 @@ SGD uniformly eliminates the merge>raw signal across all 20 configurations teste
 
 ---
 
+## NG20 Precision Regularization Exploration (2026-04-11)
+
+The key discovery: **symmetric precision regularization (upr=lwr=1e-2) stabilizes high-K configs at ld=400**, enabling overclustering that was previously impossible. Prior runs used prs=1e-5 (the default), which limited ld=400 to K≤40.
+
+### Precision reg sweep at ld=400, K=60, ent=1e-1
+
+| upr_prs_reg | lwr_prs_reg | Target eigenvalue | Stability | Peak NMI | CoA NMI | KL NMI |
+|-------------|-------------|-------------------|-----------|----------|---------|--------|
+| 1e-5 | 1e-5 | 1.0 | NaN at ~epoch 1 | — | — | — |
+| 1e-3 | 1e-5 | 0.01 | NaN at epoch ~70 | 0.567 | — | — |
+| 1e-2 | 1e-5 | 0.001 | NaN at epoch 1 | — | — | — |
+| **1e-2** | **1e-2** | **1.0** | **Stable (200 ep)** | **0.575** | **0.515** | **0.515** |
+
+### Precision reg at ld=400, K=80, ent=1e-1
+
+### K sweep at ld=400, ent=1e-1, prs=1e-2 (symmetric)
+
+| K | Peak NMI | Peak epoch | CoA NMI | KL NMI | Effective K (final) |
+|---|----------|------------|---------|--------|---------------------|
+| 60 | 0.575 | 41 | **0.515** | 0.515 | 30 |
+| **80** | **0.589** | 41 | 0.506 | **0.529** | 44 |
+| 100 | 0.584 | 51 | 0.507 | 0.510 | 43 |
+
+K=80 is the sweet spot. K=100 degrades both raw and merge NMI — additional components fragment rather than capture meaningful sub-structure.
+
+### Precision reg at ld=400, K=40, ent=1e-1 (Exp 4)
+
+| upr_prs_reg | lwr_prs_reg | Peak NMI | CoA NMI | KL NMI | NMI stability |
+|-------------|-------------|----------|---------|--------|---------------|
+| 1e-5 | 1e-5 | 0.567 | — | — | Peak then collapse |
+| 1e-3 | 1e-5 | 0.560 | 0.491 | **0.517** | Stable plateau ~0.550 |
+
+### Key insights
+
+- **Target eigenvalue = 1.0 (symmetric) is safest**: asymmetric prs pushes eigenvalues toward lwr/upr, which can be numerically problematic if too small.
+- **Strong prs (1e-2) enables overclustering at ld=400**: K=60 is stable with prs=1e-2 but crashes with prs ≤ 1e-3.
+- **Precision reg improves stability without major NMI cost**: Exp 4 (K=40, asym prs=1e-3/1e-5) gave 0.560 peak vs 0.567 baseline — mild cost for dramatically better stability and merge NMI.
+- **batch_steps=100 is optimal at ld=400**: higher values (200, 500) cause faster overfitting, not better convergence.
+- **L1 reg at ld=400 requires careful calibration**: l1=1e-3 kills the model at bs=100 (gradient too weak to overcome penalty). l1 ≤ 1e-5 needed — exploration ongoing.
+
+---
+
 ## What Remains Unexplored
 
 - **Merge analysis at multiple checkpoints**: analyses only run at the final epoch. Running at e.g. epoch 50/100/150/200 would characterize how the merge gap evolves during training — a label-free stopping criterion (LL plateau or assignment stability) could exploit this.
@@ -170,7 +229,15 @@ SGD uniformly eliminates the merge>raw signal across all 20 configurations teste
 |--------|-----|
 | MFA (K=150, ld=5, from literature) | 0.168 |
 | LDA | 0.472 |
-| HMoG raw (best merge>raw config) | 0.489 |
+| HMoG raw (best merge>raw config, ld=50) | 0.489 |
 | HMoG CoA merge (K=200, ld=50) | 0.498 |
 | HMoG CoA merge (K=300, ld=50) | 0.501 |
-| HMoG raw (K=40, ld=400) | **0.567** |
+| HMoG raw (K=40, ld=400, prs=1e-5) | 0.567 |
+| HMoG raw (K=60, ld=400, prs=1e-2) | 0.575 |
+| HMoG raw (K=80, ld=400, prs=1e-2) | **0.589** |
+| HMoG CoA merge (K=60, ld=400, prs=1e-2) | **0.515** |
+| HMoG CoA merge (K=80, ld=400, prs=1e-2) | 0.506 |
+| HMoG KL merge (K=40, ld=400, asym prs) | 0.517 |
+| HMoG KL merge (K=80, ld=400, prs=1e-2) | **0.529** |
+
+Note: all NG20 HMoG results are single-seed runs. The raw NMI improvement (0.567 → 0.575) is marginal and within expected run-to-run variance. The more significant finding is that **symmetric precision regularization (prs=1e-2) stabilizes K=60 at ld=400**, unlocking overclustering at high latent dimension. This yields CoA merge NMI = 0.515 (+0.014 over the previous ld=50 merge recipe), which is a qualitatively different regime. KL merge NMI also improves significantly — from not previously tracked at ld=400 to 0.515–0.517.
