@@ -70,8 +70,19 @@ uv run goal analyze run_name=<run_name>
 # View trained run results (stored in runs/)
 ls runs/<run_name>/
 
-# Launch hyperparameter sweep (comma-separated, no brackets)
-uv run goal sweep dataset=mnist model=mnist-hmog latent_dim=4,8,12,16 n_clusters=50,100,200
+# Launch W&B hyperparameter sweep (comma-separated, no brackets)
+uv run goal tune wandb dataset=mnist model=mnist-hmog latent_dim=4,8,12,16 n_clusters=50,100,200
+
+# Create an Optuna study
+uv run goal tune optuna create --metric "Clustering/Test ARI" \
+    experiment=my-study dataset=mnist model=hmog \
+    model.n_clusters=suggest_categorical:10,20,50
+
+# Run a trial against an existing study
+uv run goal tune optuna run my-study
+
+# Check study status
+uv run goal tune optuna status my-study
 
 # Dry run to view configuration
 uv run goal train dataset=mnist model=hmog --dry-run
@@ -157,7 +168,7 @@ The `plugins/register_plugins()` function discovers and imports all plugins at s
 - `GenerativeSamplesAnalysis` - Generic generative sampling (used by any `IsGenerative` model)
 
 **RunHandler** (`src/apps/runtime/handler.py`):
-- Manages directory structure: `runs/single/<run_name>/epoch_<N>/` (or `runs/sweep/<sweep_id>/...`)
+- Manages directory structure: `runs/single/<run_name>/epoch_<N>/` (or `runs/tune/<study_name>/...`)
 - Saves/loads model parameters, metrics, artifacts
 - Handles resumption logic
 
@@ -180,7 +191,7 @@ The `plugins/register_plugins()` function discovers and imports all plugins at s
 goal-apps/
 ├── config/default.mplstyle  # Matplotlib style configuration
 ├── src/apps/               # Core application framework
-│   ├── cli/                # CLI commands (train, analyze, sweep)
+│   ├── cli/                # CLI commands (train, analyze, tune)
 │   ├── interface/          # Abstract base classes
 │   │   ├── clustering/     # Clustering-specific interfaces, protocols, and shared analyses
 │   │   └── analyses/       # Generic reusable analyses (generative samples)
@@ -207,7 +218,7 @@ goal-apps/
 │
 └── runs/                   # Training outputs (created at runtime)
     ├── single/<run_name>/  # Regular training runs
-    └── sweep/<sweep_id>/   # Sweep runs
+    └── tune/<study_name>/  # Tuning runs (Optuna studies, W&B sweeps)
         └── <run_name>/
             ├── run-config.yaml
             ├── metrics.joblib
@@ -280,9 +291,22 @@ The Mixture of Factor Analyzers (MFA) is a simpler clustering model:
 
 Hydra composes configs in order: base defaults → dataset config → model config → CLI overrides → saved config (on resume). Model parameters are nested under the `model` key (e.g., `model.n_clusters=60`, `model.full.ent_reg=1e-1`). Top-level params like `run_name`, `device`, `jit`, `use_wandb`, `log_level` are overridden directly.
 
-### Hyperparameter Sweeps
+### Hyperparameter Tuning
 
-The sweep system (`src/apps/cli/sweep.py`) uses comma-separated overrides (**not** bracket syntax) and creates W&B grid sweeps. Supports `--validate` and `--dry-run` flags. See Running Experiments above for CLI examples.
+The `goal tune` command supports two backends:
+
+**W&B sweeps** (`goal tune wandb`): Grid/random sweeps via Weights & Biases. Uses comma-separated overrides (**not** bracket syntax). Supports `--validate` and `--dry-run` flags.
+
+**Optuna** (`goal tune optuna`): TPE-guided search with pruning. Workflow:
+1. `goal tune optuna create` — define search space, create study DB + config
+2. `goal tune optuna run <study>` — run one trial (submit as SLURM jobs)
+3. `goal tune optuna status <study>` — check progress from any node
+4. `goal tune optuna reset <study>` — wipe DB, keep config
+5. `goal tune optuna clear <study>` — delete entire study
+
+Search space syntax in overrides: `param=suggest_float:low:high:log`, `param=suggest_int:low:high`, `param=suggest_categorical:a,b,c`.
+
+Study config is saved as `runs/tune/<study>/study-config.yaml` — editable by hand.
 
 ## Development Patterns
 
@@ -346,6 +370,6 @@ The sweep system (`src/apps/cli/sweep.py`) uses comma-separated overrides (**not
 
 ## Key Dependencies
 
-Core: **goal-jax** (local, brings JAX), **Hydra/OmegaConf**, **Typer**, **wandb**, **matplotlib/seaborn**, **scikit-learn**, **joblib**, **scipy**.
+Core: **goal-jax** (local, brings JAX), **Hydra/OmegaConf**, **Typer**, **wandb**, **optuna**, **matplotlib/seaborn**, **scikit-learn**, **joblib**, **scipy**.
 Optional extras: **torchvision** + **h5py** (`datasets`), **pytest** (`test`).
 
