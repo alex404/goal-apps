@@ -1,5 +1,6 @@
 ### Imports ###
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,8 @@ from typing import Any
 import jax
 
 log = logging.getLogger(__name__)
+
+TUNE_DIR = Path("runs/tune")
 
 ### Sweep Management ###
 
@@ -144,41 +147,21 @@ def resolve_optuna_overrides(trial: Any, overrides: list[str]) -> list[str]:
     return resolved
 
 
-def run_optuna_study(
-    overrides: list[str],
-    study_name: str,
-    metric: str,
-    storage: str | None,
-    n_trials: int,
-    direction: str,
-    pruner_name: str,
-) -> Any:
-    """Create and run an Optuna study.
+def _study_dir(study_name: str) -> Path:
+    return TUNE_DIR / study_name
 
-    Args:
-        overrides: CLI overrides (may contain suggest_* directives)
-        study_name: Name for the Optuna study
-        metric: Metric key to optimize (e.g. "Merging/KL Train ARI")
-        storage: SQLite URL or None for default (runs/tune/{study_name}/study.db)
-        n_trials: Number of trials to run
-        direction: "maximize" or "minimize"
-        pruner_name: Pruner type: "median" or "none"
 
-    Returns:
-        The completed Optuna study.
-    """
+def _study_config_path(study_name: str) -> Path:
+    return _study_dir(study_name) / "study-config.json"
+
+
+def _default_storage(study_name: str) -> str:
+    return f"sqlite:///{_study_dir(study_name).resolve()}/study.db"
+
+
+def _make_pruner(pruner_name: str) -> Any:
     import optuna
 
-    from .configs import ClusteringRunConfig
-    from .initialize import initialize_run
-
-    # Default storage: runs/tune/{study_name}/study.db
-    if storage is None:
-        study_dir = Path("runs/tune") / study_name
-        study_dir.mkdir(parents=True, exist_ok=True)
-        storage = f"sqlite:///{study_dir.resolve()}/study.db"
-
-    # Create pruner
     pruners: dict[str, optuna.pruners.BasePruner] = {
         "median": optuna.pruners.MedianPruner(n_startup_trials=3, n_warmup_steps=1),
         "none": optuna.pruners.NopPruner(),
@@ -186,15 +169,82 @@ def run_optuna_study(
     if pruner_name not in pruners:
         msg = f"Unknown pruner: {pruner_name}. Choose from: {list(pruners.keys())}"
         raise ValueError(msg)
-    pruner = pruners[pruner_name]
+    return pruners[pruner_name]
 
-    # Create or load study
-    study = optuna.create_study(
+
+def create_optuna_study(
+    overrides: list[str],
+    study_name: str,
+    metric: str,
+    direction: str,
+    pruner_name: str,
+    storage: str | None = None,
+) -> Any:
+    """Create a new Optuna study and save its config for workers.
+
+    Returns:
+        The created Optuna study.
+    """
+    import optuna
+
+    study_dir = _study_dir(study_name)
+    study_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save study config so workers can join with just the study name
+    config = {
+        "overrides": overrides,
+        "metric": metric,
+        "direction": direction,
+        "pruner": pruner_name,
+        "storage": storage,
+    }
+    config_path = _study_config_path(study_name)
+    config_path.write_text(json.dumps(config, indent=2))
+    log.info(f"Study config saved to {config_path}")
+
+    resolved_storage = storage or _default_storage(study_name)
+    return optuna.create_study(
+        study_name=study_name,
+        storage=resolved_storage,
+        direction=direction,
+        pruner=_make_pruner(pruner_name),
+        load_if_exists=True,
+    )
+
+
+def run_optuna_trial(
+    study_name: str,
+    n_trials: int = 1,
+) -> Any:
+    """Run trial(s) against an existing Optuna study.
+
+    Loads the study config from disk, connects to the study DB,
+    and runs the specified number of trials.
+
+    Returns:
+        The Optuna study.
+    """
+    import optuna
+
+    from .configs import ClusteringRunConfig
+    from .initialize import initialize_run
+
+    # Load study config
+    config_path = _study_config_path(study_name)
+    if not config_path.exists():
+        msg = f"Study config not found at {config_path}. Run 'goal tune optuna create' first."
+        raise FileNotFoundError(msg)
+
+    config = json.loads(config_path.read_text())
+    overrides: list[str] = config["overrides"]
+    metric: str = config["metric"]
+    pruner_name: str = config["pruner"]
+    storage: str = config.get("storage") or _default_storage(study_name)
+
+    study = optuna.load_study(
         study_name=study_name,
         storage=storage,
-        direction=direction,
-        pruner=pruner,
-        load_if_exists=True,
+        pruner=_make_pruner(pruner_name),
     )
 
     def objective(trial: optuna.trial.Trial) -> float:

@@ -16,8 +16,9 @@ from rich.table import Table
 from .configs import ClusteringRunConfig
 from .initialize import initialize_run
 from .sweep import (
+    create_optuna_study,
     create_sweep_config,
-    run_optuna_study,
+    run_optuna_trial,
     sample_sweep_args,
 )
 from .util import (
@@ -147,42 +148,32 @@ def tune_wandb(
         wandb.sweep(sweep_config, project=project)
 
 
-tune_optuna_metric = typer.Option(..., "--metric", "-m", help="Metric to optimize")
-tune_optuna_study = typer.Option(
-    None, "--study", "-s", help="Study name (defaults to experiment= override)"
-)
-tune_optuna_storage = typer.Option(
-    None, "--storage", help="Optuna storage URL (default: sqlite in runs/tune/)"
-)
-tune_optuna_n_trials = typer.Option(1, "--n-trials", "-n", help="Trials this worker runs")
-tune_optuna_direction = typer.Option(
-    "maximize", "--direction", "-d", help="maximize or minimize"
-)
-tune_optuna_pruner = typer.Option(
-    "median", "--pruner", help="Pruner type: median, none"
-)
-tune_optuna_dry_run = typer.Option(False, "--dry-run", help="Print config and exit")
+optuna_app = typer.Typer()
+tune_app.add_typer(optuna_app, name="optuna", help="Optuna hyperparameter optimization.")
 
 
-@tune_app.command(name="optuna")
-def tune_optuna(
+@optuna_app.command(name="create")
+def optuna_create(
     overrides: list[str] = overrides,
-    metric: str = tune_optuna_metric,
-    study_name: str | None = tune_optuna_study,
-    storage: str | None = tune_optuna_storage,
-    n_trials: int = tune_optuna_n_trials,
-    direction: str = tune_optuna_direction,
-    pruner: str = tune_optuna_pruner,
-    dry_run: bool = tune_optuna_dry_run,
+    metric: str = typer.Option(..., "--metric", "-m", help="Metric to optimize"),
+    study_name: str | None = typer.Option(
+        None, "--study", "-s", help="Study name (defaults to experiment= override)"
+    ),
+    direction: str = typer.Option(
+        "maximize", "--direction", "-d", help="maximize or minimize"
+    ),
+    pruner: str = typer.Option("median", "--pruner", help="Pruner type: median, none"),
+    storage: str | None = typer.Option(
+        None, "--storage", help="Optuna storage URL (default: sqlite in runs/tune/)"
+    ),
 ):
-    """Run Optuna hyperparameter optimization.
+    """Create an Optuna study with a search space.
 
     Example:
-        goal tune optuna --metric "Merging/KL Train ARI" \\
-            experiment=pbmc68k-v1 dataset=pbmc68k model=pbmc68k-hmog \\
-            model.full.ent_reg=suggest_float:1e-1:2e0:log
+        goal tune optuna create --metric "Clustering/Test ARI" \\
+            experiment=pbmc68k-search dataset=pbmc68k model=pbmc68k-hmog \\
+            model.full.ent_reg=suggest_float:1e-1:3e0:log
     """
-    # Resolve study name: --study flag takes precedence, else experiment= override
     if study_name is None:
         for o in overrides:
             if o.startswith("experiment="):
@@ -192,29 +183,35 @@ def tune_optuna(
         rprint("[red]Must provide --study or experiment= override[/red]")
         raise typer.Exit(1)
 
-    if dry_run:
-        rprint(f"Study: {study_name}")
-        rprint(f"Storage: {storage or f'sqlite:///runs/tune/{study_name}/study.db'}")
-        rprint(f"Direction: {direction}")
-        rprint(f"Metric: {metric}")
-        rprint(f"Pruner: {pruner}")
-        rprint(f"Trials: {n_trials}")
-        rprint(f"Overrides: {overrides}")
-        return
-
-    study = run_optuna_study(
+    study = create_optuna_study(
         overrides=overrides,
         study_name=study_name,
         metric=metric,
-        storage=storage,
-        n_trials=n_trials,
         direction=direction,
         pruner_name=pruner,
+        storage=storage,
     )
+    rprint(f"Created study: {study.study_name}")
+    rprint(f"Storage: {study._storage}")
+    rprint(f"Run trials with: goal tune optuna run {study_name}")
 
-    rprint(f"\nBest trial: {study.best_trial.number}")
-    rprint(f"Best value: {study.best_trial.value}")
-    rprint(f"Best params: {study.best_trial.params}")
+
+@optuna_app.command(name="run")
+def optuna_run(
+    study_name: str = typer.Argument(help="Name of the study to run a trial for"),
+    n_trials: int = typer.Option(1, "--n-trials", "-n", help="Trials this worker runs"),
+):
+    """Run trial(s) against an existing Optuna study.
+
+    Example:
+        goal tune optuna run pbmc68k-search
+    """
+    study = run_optuna_trial(study_name=study_name, n_trials=n_trials)
+
+    if study.best_trial:
+        rprint(f"\nBest trial: {study.best_trial.number}")
+        rprint(f"Best value: {study.best_trial.value}")
+        rprint(f"Best params: {study.best_trial.params}")
 
 
 # Plugins
