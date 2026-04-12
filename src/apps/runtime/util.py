@@ -33,6 +33,13 @@ class LogLevel(Enum):
     CRITICAL = logging.CRITICAL
 
 
+### Exceptions ###
+
+
+class DivergentTrainingError(Exception):
+    """Raised when NaN parameters are detected during training."""
+
+
 ### Metrics ###
 
 type MetricDict = dict[str, tuple[Array, Array]]  # Single snapshot

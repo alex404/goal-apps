@@ -9,8 +9,10 @@ from rich import print as rprint
 from rich.table import Table
 
 from .sweep import (
+    clear_optuna_study,
     create_optuna_study,
     create_sweep_config,
+    reset_optuna_study,
     run_optuna_trial,
     sample_sweep_args,
 )
@@ -223,10 +225,78 @@ def optuna_run(
     _init_plugins()
     study = run_optuna_trial(study_name=study_name, n_trials=n_trials)
 
-    if study.best_trial:
-        rprint(f"\nBest trial: {study.best_trial.number}")
-        rprint(f"Best value: {study.best_trial.value}")
-        rprint(f"Best params: {study.best_trial.params}")
+    try:
+        best = study.best_trial
+        rprint(f"\nBest trial: {best.number}")
+        rprint(f"Best value: {best.value}")
+        rprint(f"Best params: {best.params}")
+    except ValueError:
+        rprint("\nNo completed trials yet.")
+
+
+@optuna_app.command(name="status")
+def optuna_status(
+    study_name: str = typer.Argument(help="Name of the study to inspect"),
+    top_n: int = typer.Option(10, "--top", "-t", help="Number of top trials to show"),
+):
+    """Show study status: trial counts, best results, top configurations."""
+    import optuna
+
+    from .sweep import _default_storage, _study_config_path
+
+    config_path = _study_config_path(study_name)
+    if not config_path.exists():
+        rprint(f"[red]Study '{study_name}' not found[/red]")
+        raise typer.Exit(1)
+
+    storage = _default_storage(study_name)
+    study = optuna.load_study(study_name=study_name, storage=storage)
+    trials = study.trials
+
+    # Count by state
+    from optuna.trial import TrialState
+
+    completed = [t for t in trials if t.state == TrialState.COMPLETE]
+    pruned = [t for t in trials if t.state == TrialState.PRUNED]
+    failed = [t for t in trials if t.state == TrialState.FAIL]
+    running = [t for t in trials if t.state == TrialState.RUNNING]
+
+    rprint(f"\n[bold]Study: {study_name}[/bold]")
+    rprint(f"Trials: {len(completed)} completed, {len(pruned)} pruned, {len(failed)} failed, {len(running)} running")
+
+    if not completed:
+        rprint("\nNo completed trials yet.")
+        return
+
+    # Best trial
+    best = study.best_trial
+    rprint(f"\n[bold]Best trial: t{best.number}[/bold] (value: {best.value:.6f})")
+    for k, v in best.params.items():
+        rprint(f"  {k}: {v}")
+
+    # Top N trials
+    ranked = sorted(completed, key=lambda t: t.value or 0, reverse=(study.direction.name == "MAXIMIZE"))
+    rprint(f"\n[bold]Top {min(top_n, len(ranked))} trials:[/bold]")
+    for t in ranked[:top_n]:
+        rprint(f"  t{t.number}: {t.value:.6f}")
+
+
+@optuna_app.command(name="reset")
+def optuna_reset(
+    study_name: str = typer.Argument(help="Name of the study to reset"),
+):
+    """Reset a study: delete the DB but keep config and run directories."""
+    reset_optuna_study(study_name)
+    rprint(f"Study '{study_name}' reset. Config retained, DB cleared.")
+
+
+@optuna_app.command(name="clear")
+def optuna_clear(
+    study_name: str = typer.Argument(help="Name of the study to clear"),
+):
+    """Clear a study: delete the entire study directory."""
+    clear_optuna_study(study_name)
+    rprint(f"Study '{study_name}' cleared.")
 
 
 # Plugins

@@ -19,7 +19,13 @@ from jax.experimental import io_callback
 from matplotlib.figure import Figure
 
 from .handler import RunHandler
-from .util import Artifact, MetricDict, MetricHistory, plot_metrics
+from .util import (
+    Artifact,
+    DivergentTrainingError,
+    MetricDict,
+    MetricHistory,
+    plot_metrics,
+)
 
 ## Logging ###
 
@@ -234,7 +240,7 @@ class Logger:
 
             if self.use_wandb and wandb.run:
                 wandb.finish(exit_code=1)
-            sys.exit(1)
+            raise DivergentTrainingError(f"NaN parameters detected in {context}")
 
         # Function for no-op case
         def no_op(_: None) -> None:

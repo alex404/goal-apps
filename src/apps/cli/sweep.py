@@ -1,11 +1,12 @@
 ### Imports ###
 
-import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Any
 
 import jax
+from omegaconf import OmegaConf
 
 log = logging.getLogger(__name__)
 
@@ -152,7 +153,7 @@ def _study_dir(study_name: str) -> Path:
 
 
 def _study_config_path(study_name: str) -> Path:
-    return _study_dir(study_name) / "study-config.json"
+    return _study_dir(study_name) / "study-config.yaml"
 
 
 def _default_storage(study_name: str) -> str:
@@ -191,15 +192,15 @@ def create_optuna_study(
     study_dir.mkdir(parents=True, exist_ok=True)
 
     # Save study config so workers can join with just the study name
-    config = {
+    config = OmegaConf.create({
         "overrides": overrides,
         "metric": metric,
         "direction": direction,
         "pruner": pruner_name,
         "storage": storage,
-    }
+    })
     config_path = _study_config_path(study_name)
-    config_path.write_text(json.dumps(config, indent=2))
+    OmegaConf.save(config, config_path)
     log.info(f"Study config saved to {config_path}")
 
     resolved_storage = storage or _default_storage(study_name)
@@ -235,11 +236,11 @@ def run_optuna_trial(
         msg = f"Study config not found at {config_path}. Run 'goal tune optuna create' first."
         raise FileNotFoundError(msg)
 
-    config = json.loads(config_path.read_text())
-    overrides: list[str] = config["overrides"]
-    metric: str = config["metric"]
-    pruner_name: str = config["pruner"]
-    storage: str = config.get("storage") or _default_storage(study_name)
+    config = OmegaConf.load(config_path)
+    overrides: list[str] = list(config.overrides)
+    metric: str = config.metric
+    pruner_name: str = config.pruner
+    storage: str = config.storage or _default_storage(study_name)
 
     study = optuna.load_study(
         study_name=study_name,
@@ -268,6 +269,14 @@ def run_optuna_trial(
         except optuna.TrialPruned:
             logger.finalize(handler)
             raise
+        except Exception as e:
+            # JAX wraps callback exceptions (e.g. DivergentTrainingError) in
+            # XlaRuntimeError, losing the original type. Check the message.
+            log.warning(f"Trial {trial.number} failed: {e}")
+            logger.finalize(handler)
+            if "DivergentTrainingError" in str(e) or "NaN" in str(e):
+                raise optuna.TrialPruned() from e
+            raise
 
         # Buffer is cleared after finalize(), so read final metric from disk
         metrics = handler.load_metrics()
@@ -279,3 +288,23 @@ def run_optuna_trial(
 
     study.optimize(objective, n_trials=n_trials)
     return study
+
+
+def reset_optuna_study(study_name: str) -> None:
+    """Delete the study DB but keep the config and run directories."""
+    db_path = _study_dir(study_name) / "study.db"
+    if db_path.exists():
+        db_path.unlink()
+        log.info(f"Deleted {db_path}")
+    else:
+        log.info(f"No database found at {db_path}")
+
+
+def clear_optuna_study(study_name: str) -> None:
+    """Delete the entire study directory."""
+    study_dir = _study_dir(study_name)
+    if study_dir.exists():
+        shutil.rmtree(study_dir)
+        log.info(f"Deleted {study_dir}")
+    else:
+        log.info(f"No study found at {study_dir}")
