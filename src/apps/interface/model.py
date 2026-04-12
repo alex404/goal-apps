@@ -103,4 +103,6 @@ class Model[D: Dataset](ABC):
                 analysis.process(key, handler, logger, dataset, model, epoch, params)
 
             handler.save_metrics(logger.get_metric_buffer())
+
+        logger.check_pruning(epoch)
         log.info(f"Epoch {epoch} checkpoint complete.")

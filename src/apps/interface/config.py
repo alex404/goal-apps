@@ -19,9 +19,13 @@ class RunConfig:
     use_wandb: bool
     log_level: LogLevel
     project: str
-    group: str | None
+    experiment: str | None
     job_type: str | None
     resume_epoch: int | None
     run_id: str | None
     sweep_id: str | None
     recompute_artifacts: bool
+
+    # Optuna
+    use_optuna: bool
+    optuna_metric: str | None

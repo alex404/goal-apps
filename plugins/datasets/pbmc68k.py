@@ -22,8 +22,6 @@ import scipy.sparse as sp
 from hydra.core.config_store import ConfigStore
 from jax import Array
 from matplotlib.axes import Axes
-from matplotlib.figure import Figure
-from matplotlib.gridspec import GridSpecFromSubplotSpec
 from scipy.io import mmread
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import StandardScaler
@@ -310,12 +308,12 @@ class PBMC68kDataset(ClusteringDataset):
     @property
     @override
     def observable_shape(self) -> tuple[int, int]:
-        return (1, self.n_global_genes)
+        return (self.n_marker_genes, self.n_marker_genes)
 
     @property
     @override
     def cluster_shape(self) -> tuple[int, int]:
-        return (4, self.n_global_genes + 20)
+        return (1, 1)
 
     @property
     @override
@@ -324,73 +322,35 @@ class PBMC68kDataset(ClusteringDataset):
 
     # --- Visualization ---
 
+    def _paint_top_genes(self, observable: Array, axes: Axes, n_genes: int) -> None:
+        """Bar chart of top genes by z-score. The useful signal for scRNA-seq."""
+        z_scores = (observable - self._gene_means) / (self._gene_stds + 1e-8)
+        top_indices = jnp.argsort(z_scores)[-n_genes:]
+        top_z = z_scores[top_indices]
+        gene_names = [self._gene_names[int(i)] for i in top_indices]
+
+        y_pos = np.arange(n_genes)
+        colors = ["#c44e52" if z > 0 else "#4c72b0" for z in np.array(top_z)]
+        axes.barh(y_pos, top_z, color=colors, alpha=0.8)
+        axes.set_yticks(y_pos)
+        axes.set_yticklabels(gene_names, fontsize=7)
+        axes.set_xlabel("z-score")
+        axes.axvline(0, color="black", linewidth=0.5)
+        axes.invert_yaxis()
+
     @override
     def paint_observable(self, observable: Array, axes: Axes):
-        """Visualize a single cell's gene expression profile."""
-        global_profile = observable[self._global_gene_indices]
-        axes.plot(global_profile, color="black", linewidth=1)
-        axes.set_xlabel("Gene Index (by Variance)")
-        axes.set_ylabel("Expression")
-        axes.set_title("Gene Expression Profile")
-        axes.grid(True, alpha=0.3)
+        """Top marker genes by z-score — compact, informative for scRNA-seq."""
+        self._paint_top_genes(observable, axes, self.n_marker_genes)
 
     @override
     def paint_cluster(
         self, cluster_id: int, prototype: Array, members: Array, axes: Axes
     ) -> None:
-        """Visualize gene expression cluster: global profile + marker genes."""
-        axes.set_axis_off()
-
-        subplot_spec = axes.get_subplotspec()
-        fig = axes.get_figure()
-        if subplot_spec is None:
-            raise ValueError("paint_cluster requires a subplot")
-        assert isinstance(fig, Figure)
-
-        gs = GridSpecFromSubplotSpec(
-            1, 2, subplot_spec=subplot_spec, width_ratios=[2, 1], wspace=0.3
-        )
-        profile_ax = fig.add_subplot(gs[0, 0])
-        marker_ax = fig.add_subplot(gs[0, 1])
-
-        # Left panel: global gene expression profile
-        prototype_profile = prototype[self._global_gene_indices]
+        """Cluster prototype: top marker genes + size annotation."""
         n_members = members.shape[0]
-        n_display = min(50, n_members)
-
-        if n_display > 0:
-            if n_members > n_display:
-                indices = np.random.choice(n_members, n_display, replace=False)
-                display_members = members[indices]
-            else:
-                display_members = members
-
-            alpha = min(0.3, 10.0 / max(1, n_display))
-            for i in range(display_members.shape[0]):
-                member_profile = display_members[i][self._global_gene_indices]
-                profile_ax.plot(member_profile, color="gray", alpha=alpha, linewidth=0.5)
-
-        profile_ax.plot(prototype_profile, color="red", linewidth=2, label="Prototype")
-        profile_ax.set_xlabel("Gene Rank (by Variance)")
-        profile_ax.set_ylabel("Expression")
-        profile_ax.set_title(f"Cluster {cluster_id} Profile\n({n_members} cells)")
-        profile_ax.grid(True, alpha=0.3)
-        profile_ax.legend()
-
-        # Right panel: top marker genes (z-scores relative to global mean)
-        z_scores = (prototype - self._gene_means) / (self._gene_stds + 1e-8)
-        top_marker_indices = jnp.argsort(z_scores)[-self.n_marker_genes :]
-        marker_expressions = prototype[top_marker_indices]
-        marker_names = [self._gene_names[int(i)] for i in top_marker_indices]
-
-        y_pos = np.arange(len(marker_names))
-        marker_ax.barh(y_pos, marker_expressions, color="darkblue", alpha=0.7)
-        marker_ax.set_yticks(y_pos)
-        marker_ax.set_yticklabels(marker_names, fontsize=8)
-        marker_ax.set_xlabel("Expression")
-        marker_ax.set_title("Top Markers")
-        marker_ax.grid(True, alpha=0.3, axis="x")
-        marker_ax.invert_yaxis()
+        self._paint_top_genes(prototype, axes, self.n_marker_genes + 4)
+        axes.set_title(f"C{cluster_id} ({n_members})", fontsize=8)
 
 
 ### Preprocessing helpers ###

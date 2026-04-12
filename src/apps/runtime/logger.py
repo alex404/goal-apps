@@ -11,6 +11,7 @@ from typing import Any
 
 import jax
 import matplotlib.pyplot as plt
+import optuna
 import wandb
 from jax import Array
 from jax import numpy as jnp
@@ -68,10 +69,18 @@ class Logger:
     """Override for the run ID, if provided."""
     project: str
     """Weights & Biases project name."""
-    group: str | None
-    """Weights & Biases group name for organizing runs."""
+    experiment: str | None
+    """Experiment name — used as wandb group and Optuna study name."""
     job_type: str | None
     """Weights & Biases job type for categorizing runs."""
+
+    # Optuna
+    use_optuna: bool
+    """Whether to report metrics and check pruning via Optuna."""
+    optuna_trial: optuna.trial.Trial | None
+    """The active Optuna trial, if running inside a study."""
+    optuna_metric: str | None
+    """The metric key to report to Optuna for pruning/optimization."""
 
     def __post_init__(self) -> None:
         """Initialize logger with desired logging destinations."""
@@ -92,7 +101,7 @@ class Logger:
             wandb.init(
                 project=self.project,
                 name=self.run_name,
-                group=self.group,
+                group=self.experiment,
                 job_type=self.job_type,
                 dir=self.run_dir,
                 id=self.run_id_override,
@@ -254,6 +263,29 @@ class Logger:
 
         # Clear buffer after finalization
         _metric_buffer.clear()
+
+    def check_pruning(self, epoch: int) -> None:
+        """Report metric to Optuna and raise TrialPruned if pruned.
+
+        No-op when Optuna is off. Must be called outside JIT, after analyses
+        have populated the metric buffer.
+        """
+        if not self.use_optuna or self.optuna_trial is None or self.optuna_metric is None:
+            return
+
+        buffer = self.get_metric_buffer()
+        if self.optuna_metric not in buffer or not buffer[self.optuna_metric]:
+            log.warning(
+                f"Optuna metric '{self.optuna_metric}' not in buffer at epoch {epoch}"
+            )
+            return
+
+        _, latest_value = buffer[self.optuna_metric][-1]
+        self.optuna_trial.report(latest_value, epoch)
+
+        if self.optuna_trial.should_prune():
+            log.info(f"Optuna pruned trial {self.optuna_trial.number} at epoch {epoch}")
+            raise optuna.TrialPruned()
 
     def finish_preempted(self) -> None:
         """Handle SLURM preemption - mark for requeue."""

@@ -7,6 +7,7 @@ import sys
 import traceback
 from pathlib import Path
 from types import FrameType, TracebackType
+from typing import Any
 
 import hydra
 import jax
@@ -136,7 +137,7 @@ def make_run_dir(
     base = project_root / "runs"
     sweep_id = sweep_id or os.environ.get("WANDB_SWEEP_ID")
     run_dir = (
-        base / "sweep" / sweep_id / run_name if sweep_id else base / "single" / run_name
+        base / "tune" / sweep_id / run_name if sweep_id else base / "single" / run_name
     )
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -171,6 +172,7 @@ def setup_signal_handlers(logger: Logger) -> None:
 def initialize_run(
     run_type: type[RunConfig],
     overrides: list[str],
+    trial: Any = None,
 ) -> tuple[RunHandler, Logger, Dataset, Model[Dataset], int]:
     """Initialize a new run with hydra config and wandb logging."""
     cs = ConfigStore.instance()
@@ -210,9 +212,12 @@ def initialize_run(
         use_local=cfg.use_local,
         use_wandb=cfg.use_wandb,
         project=cfg.project,
-        group=cfg.group,
+        experiment=cfg.experiment,
         job_type=cfg.job_type,
         run_id_override=cfg.run_id,
+        use_optuna=cfg.use_optuna,
+        optuna_trial=trial,
+        optuna_metric=cfg.optuna_metric,
     )
 
     logger.set_metric_buffer(handler.load_metrics())

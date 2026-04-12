@@ -102,12 +102,13 @@ def plot_hierarchy_dendrogram(
     # Compute figure dimensions
     dendrogram_width = 6
     height, width = prototype_shape
-    prototype_width = width / height * dendrogram_width
+    # Cap prototype panel width to avoid enormous figures for wide observable shapes
+    prototype_width = min(width / max(height, 1) * dendrogram_width, 12)
     spacing = 4
 
     fig_width = dendrogram_width + spacing + prototype_width
     cluster_height = 1.0
-    fig_height = n_clusters * cluster_height
+    fig_height = min(n_clusters * cluster_height, 60)
 
     fig = plt.figure(figsize=(fig_width, fig_height))
     fig.suptitle(title, fontsize=12)

@@ -10,9 +10,13 @@ use_wandb: true
 seed: 0
 log_level: INFO
 project: "goal"
-group: null
+experiment: null
 job_type: null
 resume_epoch: null
 sweep_id: null
 run_id: null
 recompute_artifacts: true
+
+# Optuna
+use_optuna: false
+optuna_metric: null

@@ -65,39 +65,36 @@ def loading_matrix_plotter(
         # Get dimensions
         _, latent_dim = artifact.mean_loadings.shape
 
-        # Create figure for all latent dimensions
-        # We'll show natural and mean parameterizations side by side
-        fig_width = 5 * min(6, latent_dim)  # Limit width for many latent dims
-        fig_height = 2 * math.ceil(
-            latent_dim / 3
-        )  # Adjust height based on num dimensions
+        # Cap displayed dimensions to keep figure size reasonable
+        max_display = min(latent_dim, 24)
+        n_cols = min(3, max_display)
+        n_rows = math.ceil(max_display / n_cols)
+
+        fig_width = 5 * n_cols * 2  # 2 panels (natural + mean) per dimension
+        fig_height = 2 * n_rows
 
         fig = plt.figure(figsize=(fig_width, fig_height))
+        grid = GridSpec(n_rows, n_cols * 2, figure=fig)
 
-        # Create grid layout
-        grid = GridSpec(math.ceil(latent_dim / 3), 6, figure=fig)
-
-        # Add title
-        fig.suptitle("Loading Matrix Visualization", fontsize=16)
+        title = "Loading Matrix Visualization"
+        if max_display < latent_dim:
+            title += f" (showing {max_display}/{latent_dim} dims)"
+        fig.suptitle(title, fontsize=16)
 
         # Plot each latent dimension
-        for i in range(latent_dim):
-            row = i // 3
-            col = (i % 3) * 2
+        for i in range(max_display):
+            row = i // n_cols
+            col = (i % n_cols) * 2
 
-            # Create axes for this latent dimension
             ax_natural = fig.add_subplot(grid[row, col])
             ax_mean = fig.add_subplot(grid[row, col + 1])
 
-            # Extract patterns for this latent dimension
             natural_pattern = artifact.natural_loadings[:, i]
             mean_pattern = artifact.mean_loadings[:, i]
 
-            # Use dataset visualization to plot
             dataset.paint_observable(natural_pattern, ax_natural)
             dataset.paint_observable(mean_pattern, ax_mean)
 
-            # Add titles
             ax_natural.set_title(f"Natural Z{i + 1}")
             ax_mean.set_title(f"Mean Z{i + 1}")
 

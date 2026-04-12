@@ -17,6 +17,7 @@ from .configs import ClusteringRunConfig
 from .initialize import initialize_run
 from .sweep import (
     create_sweep_config,
+    run_optuna_study,
     sample_sweep_args,
 )
 from .util import (
@@ -97,24 +98,29 @@ def analyze(overrides: list[str] = overrides):
     log.info("Analysis complete.")
 
 
-sweep_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and exit")
-sweep_validate = typer.Option(
+### Tune Commands ###
+
+tune_app = typer.Typer()
+main.add_typer(tune_app, name="tune", help="Hyperparameter tuning commands.")
+
+tune_wandb_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and exit")
+tune_wandb_validate = typer.Option(
     False, "--validate", help="Validate an example config from the sweep"
 )
-sweep_project = typer.Option("goal", "--project", "-p", help="W&B project name")
+tune_wandb_project = typer.Option("goal", "--project", "-p", help="W&B project name")
 
 
-@main.command()
-def sweep(
+@tune_app.command(name="wandb")
+def tune_wandb(
     overrides: list[str] = overrides,
-    project: str = sweep_project,
-    dry_run: bool = sweep_dry_run,
-    validate: bool = sweep_validate,
+    project: str = tune_wandb_project,
+    dry_run: bool = tune_wandb_dry_run,
+    validate: bool = tune_wandb_validate,
 ):
     """Launch a wandb hyperparameter sweep.
 
     Example:
-        goal clustering sweep latent_dim=[4,8,12,16,20] n_clusters=[4,8,16]
+        goal tune wandb dataset=mnist model=hmog latent_dim=4,8,12,16 n_clusters=50,100,200
     """
     sweep_config = create_sweep_config(overrides)
 
@@ -139,6 +145,76 @@ def sweep(
 
     if not dry_run:
         wandb.sweep(sweep_config, project=project)
+
+
+tune_optuna_metric = typer.Option(..., "--metric", "-m", help="Metric to optimize")
+tune_optuna_study = typer.Option(
+    None, "--study", "-s", help="Study name (defaults to experiment= override)"
+)
+tune_optuna_storage = typer.Option(
+    None, "--storage", help="Optuna storage URL (default: sqlite in runs/tune/)"
+)
+tune_optuna_n_trials = typer.Option(50, "--n-trials", "-n", help="Number of trials")
+tune_optuna_direction = typer.Option(
+    "maximize", "--direction", "-d", help="maximize or minimize"
+)
+tune_optuna_pruner = typer.Option(
+    "median", "--pruner", help="Pruner type: median, none"
+)
+tune_optuna_dry_run = typer.Option(False, "--dry-run", help="Print config and exit")
+
+
+@tune_app.command(name="optuna")
+def tune_optuna(
+    overrides: list[str] = overrides,
+    metric: str = tune_optuna_metric,
+    study_name: str | None = tune_optuna_study,
+    storage: str | None = tune_optuna_storage,
+    n_trials: int = tune_optuna_n_trials,
+    direction: str = tune_optuna_direction,
+    pruner: str = tune_optuna_pruner,
+    dry_run: bool = tune_optuna_dry_run,
+):
+    """Run Optuna hyperparameter optimization.
+
+    Example:
+        goal tune optuna --metric "Merging/KL Train ARI" \\
+            experiment=pbmc68k-v1 dataset=pbmc68k model=pbmc68k-hmog \\
+            model.full.ent_reg=suggest_float:1e-1:2e0:log
+    """
+    # Resolve study name: --study flag takes precedence, else experiment= override
+    if study_name is None:
+        for o in overrides:
+            if o.startswith("experiment="):
+                study_name = o.split("=", 1)[1]
+                break
+    if study_name is None:
+        rprint("[red]Must provide --study or experiment= override[/red]")
+        raise typer.Exit(1)
+
+    if dry_run:
+        rprint(f"Study: {study_name}")
+        rprint(f"Storage: {storage or f'sqlite:///runs/tune/{study_name}/study.db'}")
+        rprint(f"Direction: {direction}")
+        rprint(f"Metric: {metric}")
+        rprint(f"Pruner: {pruner}")
+        rprint(f"Trials: {n_trials}")
+        rprint(f"Overrides: {overrides}")
+        return
+
+    study = run_optuna_study(
+        overrides=overrides,
+        study_name=study_name,
+        metric=metric,
+        storage=storage,
+        n_trials=n_trials,
+        direction=direction,
+        pruner_name=pruner,
+    )
+
+    rprint(f"\nBest trial: {study.best_trial.number}")
+    rprint(f"Best value: {study.best_trial.value}")
+    rprint(f"Best params: {study.best_trial.params}")
 
 
 # Plugins

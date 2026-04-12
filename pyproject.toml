@@ -10,6 +10,7 @@ dependencies = [
     "seaborn",
     "hydra-core",
     "wandb",
+    "optuna",
     "typer",
     "pandas",
     "joblib",
