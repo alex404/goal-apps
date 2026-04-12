@@ -18,6 +18,21 @@ from apps.runtime.util import MetricDict
 INFO_LEVEL = jnp.array(logging.INFO)
 
 
+def _build_contingency(
+    n_clusters: int, n_classes: int, assignments: Array, true_labels: Array
+) -> Array:
+    """Build contingency matrix from cluster assignments and true labels."""
+    n_samples = assignments.shape[0]
+    contingency = jnp.zeros((n_clusters, n_classes))
+    idx_matrix = jnp.stack([assignments, true_labels], axis=1)
+
+    def update_contingency(i: Array, cont: Array) -> Array:
+        idx = idx_matrix[i]
+        return cont.at[idx[0], idx[1]].add(1.0)
+
+    return jax.lax.fori_loop(0, n_samples, update_contingency, contingency)
+
+
 def fit_cluster_mapping(
     true_labels: Array, pred_clusters: Array, n_clusters: int, n_classes: int
 ) -> Array:
@@ -35,12 +50,7 @@ def fit_cluster_mapping(
     Returns:
         cluster_to_label: Array of shape (n_clusters,) mapping cluster index → class label
     """
-    contingency = jnp.zeros((n_clusters, n_classes))
-
-    def body_fun(i: Array, cont: Array) -> Array:
-        return cont.at[pred_clusters[i], true_labels[i]].add(1)
-
-    contingency = jax.lax.fori_loop(0, true_labels.shape[0], body_fun, contingency)
+    contingency = _build_contingency(n_clusters, n_classes, pred_clusters, true_labels)
     return jnp.argmax(contingency, axis=1)
 
 
@@ -67,6 +77,40 @@ def cluster_accuracy(
     return jnp.mean(mapped_preds == true_labels)
 
 
+def clustering_ari(
+    n_clusters: int, n_classes: int, assignments: Array, true_labels: Array
+) -> Array:
+    """Compute Adjusted Rand Index (ARI) between cluster assignments and true labels.
+
+    Fully JAX-compatible implementation using the contingency matrix formulation.
+
+    Args:
+        n_clusters: Number of clusters
+        n_classes: Number of classes
+        assignments: Array of cluster assignments (n_samples,)
+        true_labels: Array of true class labels (n_samples,)
+
+    Returns:
+        ARI score in [-1, 1] (higher is better, 1.0 is perfect)
+    """
+    n_samples = jnp.array(assignments.shape[0], dtype=jnp.float32)
+    contingency = _build_contingency(n_clusters, n_classes, assignments, true_labels)
+
+    def comb2(x: Array) -> Array:
+        return x * (x - 1) / 2.0
+
+    sum_comb_c = jnp.sum(comb2(contingency))
+    row_sums = contingency.sum(axis=1)
+    col_sums = contingency.sum(axis=0)
+    sum_comb_a = jnp.sum(comb2(row_sums))
+    sum_comb_b = jnp.sum(comb2(col_sums))
+    comb_n = comb2(n_samples)
+
+    expected_index = sum_comb_a * sum_comb_b / comb_n
+    max_index = 0.5 * (sum_comb_a + sum_comb_b)
+    return (sum_comb_c - expected_index) / (max_index - expected_index + 1e-10)
+
+
 def clustering_nmi(
     n_clusters: int, n_classes: int, assignments: Array, true_labels: Array
 ) -> Array:
@@ -85,23 +129,11 @@ def clustering_nmi(
     """
     n_samples = assignments.shape[0]
 
+    contingency = _build_contingency(n_clusters, n_classes, assignments, true_labels)
+
     # Compute cluster and class counts
-    cluster_counts = jnp.zeros(n_clusters).at[assignments].add(1.0)
-    class_counts = jnp.zeros(n_classes).at[true_labels].add(1.0)
-
-    # Initialize contingency matrix
-    contingency = jnp.zeros((n_clusters, n_classes))
-
-    # Build contingency matrix
-    idx_matrix = jnp.stack([assignments, true_labels], axis=1)
-    values = jnp.ones(n_samples)
-
-    def update_contingency(i: Array, cont: Array) -> Array:
-        idx = idx_matrix[i]
-        val = values[i]
-        return cont.at[idx[0], idx[1]].add(val)
-
-    contingency = jax.lax.fori_loop(0, n_samples, update_contingency, contingency)
+    cluster_counts = contingency.sum(axis=1)
+    class_counts = contingency.sum(axis=0)
 
     # Compute entropy for clusters
     cluster_probs = cluster_counts / n_samples
@@ -158,6 +190,8 @@ def add_clustering_metrics(
         - Clustering/Test Accuracy
         - Clustering/Train NMI
         - Clustering/Test NMI
+        - Clustering/Train ARI
+        - Clustering/Test ARI
     """
     train_mapping = fit_cluster_mapping(
         train_labels, train_clusters, n_clusters, n_classes
@@ -168,10 +202,15 @@ def add_clustering_metrics(
     train_nmi = clustering_nmi_fn(n_clusters, n_classes, train_clusters, train_labels)
     test_nmi = clustering_nmi_fn(n_clusters, n_classes, test_clusters, test_labels)
 
+    train_ari = clustering_ari(n_clusters, n_classes, train_clusters, train_labels)
+    test_ari = clustering_ari(n_clusters, n_classes, test_clusters, test_labels)
+
     metrics.update({
         "Clustering/Train Accuracy": (INFO_LEVEL, train_acc),
         "Clustering/Test Accuracy": (INFO_LEVEL, test_acc),
         "Clustering/Train NMI": (INFO_LEVEL, train_nmi),
         "Clustering/Test NMI": (INFO_LEVEL, test_nmi),
+        "Clustering/Train ARI": (INFO_LEVEL, train_ari),
+        "Clustering/Test ARI": (INFO_LEVEL, test_ari),
     })
     return metrics
