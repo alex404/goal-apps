@@ -298,16 +298,24 @@ def run_optuna_trial(
 
 
 def reset_optuna_study(study_name: str) -> None:
-    """Delete the study DB and recreate it from the saved config."""
+    """Delete the study DB and all run directories, then recreate from saved config."""
     import optuna
 
-    db_path = _study_dir(study_name) / "study.db"
-    if db_path.exists():
-        db_path.unlink()
-        log.info(f"Deleted {db_path}")
+    study_dir = _study_dir(study_name)
+    config_path = _study_config_path(study_name)
+
+    # Delete everything except the config
+    if study_dir.exists():
+        for item in study_dir.iterdir():
+            if item == config_path:
+                continue
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+        log.info(f"Cleared {study_dir} (config retained)")
 
     # Recreate study from saved config
-    config_path = _study_config_path(study_name)
     if config_path.exists():
         config = OmegaConf.load(config_path)
         storage = _default_storage(study_name)
@@ -317,7 +325,7 @@ def reset_optuna_study(study_name: str) -> None:
             direction=config.direction,
             pruner=_make_pruner(config.pruner),
         )
-        log.info(f"Recreated study '{study_name}' from {config_path}")
+        log.info(f"Recreated study '{study_name}'")
 
 
 def clear_optuna_study(study_name: str) -> None:
