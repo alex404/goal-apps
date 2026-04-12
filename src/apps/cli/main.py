@@ -154,7 +154,7 @@ tune_optuna_study = typer.Option(
 tune_optuna_storage = typer.Option(
     None, "--storage", help="Optuna storage URL (default: sqlite in runs/tune/)"
 )
-tune_optuna_n_trials = typer.Option(50, "--n-trials", "-n", help="Number of trials")
+tune_optuna_n_trials = typer.Option(1, "--n-trials", "-n", help="Trials this worker runs")
 tune_optuna_direction = typer.Option(
     "maximize", "--direction", "-d", help="maximize or minimize"
 )
