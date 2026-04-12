@@ -19,6 +19,9 @@ from .sweep import (
 from .util import (
     format_config_table,
     get_store_groups,
+    print_objective_sparkline,
+    print_param_objective_scatter,
+    print_parameter_distributions,
     print_sweep_tree,
 )
 
@@ -261,7 +264,9 @@ def optuna_status(
     failed = [t for t in trials if t.state == TrialState.FAIL]
     running = [t for t in trials if t.state == TrialState.RUNNING]
 
-    rprint(f"\n[bold]Study: {study_name}[/bold]")
+    direction = study.direction.name
+
+    rprint(f"\n[bold]Study: {study_name}[/bold]  (direction: {direction.lower()})")
     rprint(f"Trials: {len(completed)} completed, {len(pruned)} pruned, {len(failed)} failed, {len(running)} running")
 
     if not completed:
@@ -275,10 +280,15 @@ def optuna_status(
         rprint(f"  {k}: {v}")
 
     # Top N trials
-    ranked = sorted(completed, key=lambda t: t.value or 0, reverse=(study.direction.name == "MAXIMIZE"))
+    ranked = sorted(completed, key=lambda t: t.value or 0, reverse=(direction == "MAXIMIZE"))
     rprint(f"\n[bold]Top {min(top_n, len(ranked))} trials:[/bold]")
     for t in ranked[:top_n]:
         rprint(f"  t{t.number}: {t.value:.6f}")
+
+    # Visualizations
+    print_objective_sparkline(completed, direction)
+    print_parameter_distributions(completed, best.params)
+    print_param_objective_scatter(completed, direction)
 
 
 @optuna_app.command(name="reset")

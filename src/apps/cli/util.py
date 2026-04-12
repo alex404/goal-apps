@@ -1,6 +1,9 @@
 ### Imports ###
 
+from __future__ import annotations
+
 import logging
+import math
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
@@ -106,3 +109,230 @@ def format_config_table(name: str, params: dict[str, Any]) -> tuple[str | None, 
             )
 
     return target, table
+
+
+### Terminal Visualizations ###
+
+_SPARK_CHARS = "▁▂▃▄▅▆▇█"
+
+
+def _sparkline(values: list[float], width: int = 40) -> str:
+    """Render a list of floats as a unicode sparkline."""
+    if not values:
+        return ""
+    lo, hi = min(values), max(values)
+    spread = hi - lo
+    if spread == 0:
+        idx = len(_SPARK_CHARS) // 2
+        return _SPARK_CHARS[idx] * min(len(values), width)
+
+    # Bin values if more than width
+    if len(values) > width:
+        bin_size = len(values) / width
+        binned = []
+        for i in range(width):
+            start = int(i * bin_size)
+            end = int((i + 1) * bin_size)
+            binned.append(sum(values[start:end]) / max(1, end - start))
+        values = binned
+
+    chars = []
+    for v in values:
+        idx = int((v - lo) / spread * (len(_SPARK_CHARS) - 1))
+        idx = max(0, min(idx, len(_SPARK_CHARS) - 1))
+        chars.append(_SPARK_CHARS[idx])
+    return "".join(chars)
+
+
+def _histogram_bar(values: list[float], n_bins: int = 20) -> str:
+    """Render a horizontal histogram as unicode blocks."""
+    if not values:
+        return ""
+    lo, hi = min(values), max(values)
+    if lo == hi:
+        return f"[dim](all {lo:.4g})[/dim]"
+    bins = [0] * n_bins
+    for v in values:
+        idx = int((v - lo) / (hi - lo) * (n_bins - 1))
+        idx = max(0, min(idx, n_bins - 1))
+        bins[idx] += 1
+    max_count = max(bins)
+    if max_count == 0:
+        return ""
+    chars = []
+    for count in bins:
+        level = int(count / max_count * (len(_SPARK_CHARS) - 1))
+        chars.append(_SPARK_CHARS[level])
+    return "".join(chars)
+
+
+def _fmt_val(v: float | int | str) -> str:
+    """Format a parameter value compactly."""
+    if isinstance(v, float):
+        if v == 0.0:
+            return "0"
+        if abs(v) < 0.01 or abs(v) >= 1000:
+            return f"{v:.2e}"
+        return f"{v:.4g}"
+    return str(v)
+
+
+def print_objective_sparkline(trials: list[Any], direction: str) -> None:
+    """Print objective value progression as a sparkline over trial number."""
+    if not trials:
+        return
+    # Sort by trial number
+    sorted_trials = sorted(trials, key=lambda t: t.number)
+    values = [t.value for t in sorted_trials if t.value is not None]
+    if not values:
+        return
+
+    # Running best
+    best_so_far = []
+    current_best = values[0]
+    maximize = direction == "MAXIMIZE"
+    for v in values:
+        if maximize:
+            current_best = max(current_best, v)
+        else:
+            current_best = min(current_best, v)
+        best_so_far.append(current_best)
+
+    rprint(f"\n[bold]Objective progression[/bold] (n={len(values)} completed)")
+    rprint(f"  All trials:  {_sparkline(values, 60)}  [{_fmt_val(min(values))}, {_fmt_val(max(values))}]")
+    rprint(f"  Running best: {_sparkline(best_so_far, 60)}  {_fmt_val(best_so_far[0])} → {_fmt_val(best_so_far[-1])}")
+
+
+def print_parameter_distributions(trials: list[Any], best_params: dict[str, Any]) -> None:
+    """Print per-parameter histograms and statistics for completed trials."""
+    if not trials:
+        return
+
+    # Collect all param values across trials
+    param_values: dict[str, list[float | int | str]] = {}
+    for t in trials:
+        for k, v in t.params.items():
+            param_values.setdefault(k, []).append(v)
+
+    table = Table(title="Parameter Distributions")
+    table.add_column("Parameter", style="cyan", no_wrap=True)
+    table.add_column("Range", style="dim", no_wrap=True)
+    table.add_column("Best", style="green bold", no_wrap=True)
+    table.add_column("Distribution", no_wrap=True)
+
+    for param, values in sorted(param_values.items()):
+        best_val = best_params.get(param)
+        best_str = _fmt_val(best_val) if best_val is not None else "?"
+
+        # Check if categorical (strings or small set of discrete values)
+        if any(isinstance(v, str) for v in values):
+            # Categorical - show counts
+            counts: dict[str, int] = {}
+            for v in values:
+                counts[str(v)] = counts.get(str(v), 0) + 1
+            parts = [f"{k}:{c}" for k, c in sorted(counts.items(), key=lambda x: -x[1])]
+            dist_str = "  ".join(parts)
+            range_str = f"{len(counts)} categories"
+        else:
+            numeric = [float(v) for v in values]
+            lo, hi = min(numeric), max(numeric)
+            # Detect log-scale: if range spans >2 orders of magnitude
+            if lo > 0 and hi / lo > 100:
+                range_str = f"{_fmt_val(lo)} … {_fmt_val(hi)} [dim](log)[/dim]"
+                numeric_for_hist = [math.log10(v) for v in numeric]
+            else:
+                range_str = f"{_fmt_val(lo)} … {_fmt_val(hi)}"
+                numeric_for_hist = numeric
+            dist_str = _histogram_bar(numeric_for_hist)
+
+        table.add_row(param, range_str, best_str, dist_str)
+
+    rprint()
+    rprint(table)
+
+
+def print_param_objective_scatter(
+    trials: list[Any], _direction: str, top_n: int = 3
+) -> None:
+    """For each parameter, show a scatter of value vs objective using braille-ish text.
+
+    Shows the top_n most "interesting" parameters (highest variance in objective
+    across parameter bins).
+    """
+    if len(trials) < 4:
+        return
+
+    # Collect numeric params and their objectives
+    param_data: dict[str, list[tuple[float, float]]] = {}
+    for t in trials:
+        if t.value is None:
+            continue
+        for k, v in t.params.items():
+            if isinstance(v, (int, float)):
+                param_data.setdefault(k, []).append((float(v), float(t.value)))
+
+    if not param_data:
+        return
+
+    # Rank parameters by "interestingness" - variance of mean objective per bin
+    param_scores: dict[str, float] = {}
+    for param, pairs in param_data.items():
+        if len(pairs) < 4:
+            continue
+        xs = [p[0] for p in pairs]
+        ys = [p[1] for p in pairs]
+        lo, hi = min(xs), max(xs)
+        if lo == hi:
+            param_scores[param] = 0.0
+            continue
+        n_bins = min(8, len(pairs) // 2)
+        bin_means = []
+        for i in range(n_bins):
+            bin_lo = lo + (hi - lo) * i / n_bins
+            bin_hi = lo + (hi - lo) * (i + 1) / n_bins
+            bin_ys = [y for x, y in pairs if bin_lo <= x <= bin_hi]
+            if bin_ys:
+                bin_means.append(sum(bin_ys) / len(bin_ys))
+        if len(bin_means) >= 2:
+            mean = sum(bin_means) / len(bin_means)
+            param_scores[param] = sum((m - mean) ** 2 for m in bin_means) / len(
+                bin_means
+            )
+        else:
+            param_scores[param] = 0.0
+
+    ranked = sorted(param_scores, key=lambda p: param_scores[p], reverse=True)[:top_n]
+    if not ranked:
+        return
+
+    rprint(f"\n[bold]Parameter vs Objective[/bold] (top {len(ranked)} by variance)")
+
+    height = 8
+    width = 40
+    for param in ranked:
+        pairs = param_data[param]
+        xs = [p[0] for p in pairs]
+        ys = [p[1] for p in pairs]
+        x_lo, x_hi = min(xs), max(xs)
+        y_lo, y_hi = min(ys), max(ys)
+
+        if x_lo == x_hi or y_lo == y_hi:
+            continue
+
+        # Build grid
+        grid = [[" "] * width for _ in range(height)]
+        for x, y in pairs:
+            col = int((x - x_lo) / (x_hi - x_lo) * (width - 1))
+            row = int((y - y_lo) / (y_hi - y_lo) * (height - 1))
+            col = max(0, min(col, width - 1))
+            row = max(0, min(row, height - 1))
+            # Invert row so high values are at top
+            grid[height - 1 - row][col] = "●"
+
+        rprint(f"\n  [cyan]{param}[/cyan]  x:[dim]{_fmt_val(x_lo)}…{_fmt_val(x_hi)}[/dim]  obj:[dim]{_fmt_val(y_lo)}…{_fmt_val(y_hi)}[/dim]")
+        rprint(f"  {_fmt_val(y_hi):>8s} ┤", end="")
+        rprint(grid[0] and "".join(grid[0]) or "")
+        for row_idx in range(1, height - 1):
+            rprint(f"  {'':>8s} │{''.join(grid[row_idx])}")
+        rprint(f"  {_fmt_val(y_lo):>8s} ┤{''.join(grid[height - 1])}")
+        rprint(f"  {'':>8s}  └{'─' * width}")
