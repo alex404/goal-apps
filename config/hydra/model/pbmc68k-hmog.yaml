@@ -1,0 +1,57 @@
+# PBMC 68k single-cell RNA-seq configuration for HMOG
+#
+# ~68k cells, 2000 HVGs, 9 cell types (marker-gene annotation).
+#
+# Key findings from tuning:
+#   - standardize=False is essential (fixes CoA merge, preserves gene variance signal)
+#   - Symmetric prs_reg=5e-2 required for stability (asymmetric consistently crashes)
+#   - l1_reg=1e-2 helps by forcing sparse gene programs; l1=1e-3 at high LD hurts
+#   - ent_reg=3e-1 is conservative (88.8 eff components); ent=1e0 is the best found (0.4602 ARI) but riskier
+#   - 2 cycles with LR decay [1.0, 0.3]; 3rd cycle causes slight decline; flat-LR multi-cycle collapses
+#   - batch_steps=100 is the stable ceiling — bs300+ collapses on PBMC's T-cell blob (43% of cells)
+#   - latent_dim=200 is the sweet spot (ld50 too small, ld300+ mildly declining)
+defaults:
+  - hmog
+  - _self_
+
+# Model architecture
+latent_dim: 200          # 2000 input -> 200 latent (10:1)
+n_clusters: 100          # ~11x overclustering of 9 cell types
+
+# 2 cycles with LR decay — 3rd cycle causes slight decline for K=100; flat-LR collapses
+num_cycles: 2
+lr_scales: [1.0, 0.3]
+lgm_noise_scale: 0.01
+mix_noise_scale: 0.01
+
+# Pre-training phases disabled
+pre:
+  n_epochs: 0
+
+lgm:
+  n_epochs: 0
+
+mix:
+  n_epochs: 0
+
+# Full training — tuned to match MNIST ld100 training intensity
+full:
+  lr: 1e-4
+  n_epochs: 200
+  batch_steps: 100
+  grad_clip: 10
+  min_prob: 1e-5
+  obs_min_var: 1e-4
+  lat_min_var: 1e-3
+  upr_prs_reg: 5e-2
+  lwr_prs_reg: 5e-2
+  l1_reg: 1e-2
+  l2_reg: 1e-4
+  weight_decay: 1e-4
+  ent_reg: 3e-1
+  epoch_reset: true
+
+# Enable labeled merge analysis (PBMC68k has ground-truth cell type labels)
+analyses:
+  optimal_merge:
+    enabled: true
