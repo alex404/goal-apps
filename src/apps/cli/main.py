@@ -4,17 +4,10 @@
 import logging
 from typing import Any
 
-import jax
 import typer
-import wandb
-from hydra.core.config_store import ConfigNode, ConfigStore
-from omegaconf import OmegaConf
-from plugins import register_plugins
 from rich import print as rprint
 from rich.table import Table
 
-from .configs import ClusteringRunConfig
-from .initialize import initialize_run
 from .sweep import (
     create_optuna_study,
     create_sweep_config,
@@ -27,11 +20,15 @@ from .util import (
     print_sweep_tree,
 )
 
-# Very first step: register all plugins
-register_plugins()
-
 # Set up logging
 log = logging.getLogger(__name__)
+
+
+def _init_plugins() -> None:
+    """Register plugins and heavy dependencies. Call only in commands that need them."""
+    from plugins import register_plugins
+
+    register_plugins()
 
 
 ### CLI ###
@@ -65,6 +62,11 @@ def train(overrides: list[str] = overrides, dry_run: bool = train_dry_run):
     Example:
         goal clustering train run_name=my_exp dataset=mnist model=hmog
     """
+    import jax
+
+    _init_plugins()
+    from .configs import ClusteringRunConfig
+    from .initialize import initialize_run
 
     handler, logger, dataset, model, seed = initialize_run(ClusteringRunConfig, overrides)
     key = jax.random.PRNGKey(seed)
@@ -90,6 +92,12 @@ def analyze(overrides: list[str] = overrides):
     Example:
         goal clustering analyze run_name=my_exp
     """
+    import jax
+
+    _init_plugins()
+    from .configs import ClusteringRunConfig
+    from .initialize import initialize_run
+
     handler, logger, dataset, model, seed = initialize_run(ClusteringRunConfig, overrides)
     key = jax.random.PRNGKey(seed)
 
@@ -129,6 +137,10 @@ def tune_wandb(
     print_sweep_tree(sweep_config)
 
     if validate:
+        _init_plugins()
+        from .configs import ClusteringRunConfig
+        from .initialize import initialize_run
+
         dry_run = True
         try:
             # Sample one configuration
@@ -145,6 +157,8 @@ def tune_wandb(
             logging.exception("Validation failed:")
 
     if not dry_run:
+        import wandb
+
         wandb.sweep(sweep_config, project=project)
 
 
@@ -206,6 +220,7 @@ def optuna_run(
     Example:
         goal tune optuna run pbmc68k-search
     """
+    _init_plugins()
     study = run_optuna_trial(study_name=study_name, n_trials=n_trials)
 
     if study.best_trial:
@@ -221,6 +236,7 @@ plugin = typer.Argument(default=None, help="Name of plugin to inspect")
 @plugins_com.command(name="list")
 def list_plugins():
     """List all available plugins by group."""
+    _init_plugins()
     groups = get_store_groups()
     table = Table(title="Available Plugins")
     table.add_column("Type", style="cyan")
@@ -237,6 +253,9 @@ def list_plugins():
 @plugins_com.command()
 def inspect(plugin: str = plugin):
     """Inspect plugin configuration parameters."""
+    _init_plugins()
+    from hydra.core.config_store import ConfigNode, ConfigStore
+    from omegaconf import OmegaConf
 
     cs = ConfigStore.instance()
 
