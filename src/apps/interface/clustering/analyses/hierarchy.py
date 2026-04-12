@@ -19,7 +19,7 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from numpy.typing import NDArray
 
-from ....runtime import Artifact, RunHandler
+from ....runtime import Artifact, DivergentTrainingError, RunHandler
 from ...analysis import Analysis
 from ..dataset import ClusteringDataset
 
@@ -61,6 +61,10 @@ def build_hierarchy_from_distance(
         Tuple of (linkage_matrix, cleaned_distance_matrix)
     """
     dist_np = np.array(distance_matrix, dtype=np.float64)
+
+    # NaN/Inf in distance matrix indicates degenerate model parameters
+    if not np.all(np.isfinite(dist_np)):
+        raise DivergentTrainingError("Non-finite values in distance matrix")
 
     # Ensure non-negative distances
     min_off_diag = np.min(dist_np[~np.eye(dist_np.shape[0], dtype=bool)])

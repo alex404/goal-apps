@@ -227,6 +227,8 @@ def run_optuna_trial(
     """
     import optuna
 
+    from apps.runtime import DivergentTrainingError
+
     from .configs import ClusteringRunConfig
     from .initialize import initialize_run
 
@@ -269,12 +271,17 @@ def run_optuna_trial(
         except optuna.TrialPruned:
             logger.finalize(handler)
             raise
-        except Exception as e:
-            # JAX wraps callback exceptions (e.g. DivergentTrainingError) in
-            # XlaRuntimeError, losing the original type. Check the message.
-            log.warning(f"Trial {trial.number} failed: {e}")
+        except DivergentTrainingError as e:
+            # Raised directly from analyses (non-finite distance matrices, etc.)
+            log.warning(f"Trial {trial.number} diverged: {e}")
             logger.finalize(handler)
-            if "DivergentTrainingError" in str(e) or "NaN" in str(e):
+            raise optuna.TrialPruned() from e
+        except Exception as e:
+            # DivergentTrainingError from JAX callbacks gets wrapped in
+            # XlaRuntimeError, losing the original type.
+            if "DivergentTrainingError" in str(e):
+                log.warning(f"Trial {trial.number} diverged: {e}")
+                logger.finalize(handler)
                 raise optuna.TrialPruned() from e
             raise
 
