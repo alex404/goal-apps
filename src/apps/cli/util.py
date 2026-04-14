@@ -615,11 +615,12 @@ def _render_grid(
     for correct side-by-side padding.
 
     Encoding:
-      space   — not sampled
-      · (dim) — sampled but all diverged (no performance signal)
-      ░▒▓█    — opacity = fraction converged (completed or early-stopped)
-      yellow  — converged, none in top pct%
-      red     — at least one in top pct%
+      space       — not sampled
+      · (dim)     — sampled but all diverged (no performance signal)
+      ░▒▓█ (grey) — stable fraction (early-stopped only, no completed)
+      ░▒▓█ yellow — has completed runs, none in top pct%
+      ░▒▓█ red    — at least one in top pct%
+    Opacity (char density) always reflects fraction of stable (converged) trials.
     """
     _converged = converged_trials if converged_trials is not None else completed
 
@@ -638,6 +639,7 @@ def _render_grid(
 
     sampled_grid   = [[0] * grid_w for _ in range(grid_h)]
     converged_grid = [[0] * grid_w for _ in range(grid_h)]
+    completed_grid = [[0] * grid_w for _ in range(grid_h)]
     good_grid      = [[0] * grid_w for _ in range(grid_h)]
 
     for t in coverage_trials:
@@ -659,6 +661,7 @@ def _render_grid(
             continue
         col = bin_val(float(t.params[px]), lox, hix, log_x, grid_w)
         row = bin_val(float(t.params[py]), loy, hiy, log_y, grid_h)
+        completed_grid[row][col] += 1
         if t.number in good:
             good_grid[row][col] += 1
 
@@ -685,6 +688,7 @@ def _render_grid(
         for col in range(grid_w):
             n_sampled   = sampled_grid[row][col]
             n_converged = converged_grid[row][col]
+            n_completed = completed_grid[row][col]
             n_good      = good_grid[row][col]
             if n_sampled == 0:
                 line += " "
@@ -693,8 +697,15 @@ def _render_grid(
             else:
                 conv_frac = n_converged / n_sampled
                 char = _DENSITY_CHARS[min(3, int(conv_frac * 4))]
-                color = _ANSI_RED if n_good > 0 else _ANSI_YELLOW
-                line += f"{color}{char}{_ANSI_RESET}"
+                if n_completed == 0:
+                    # only early-stopped — greyscale, no color
+                    line += char
+                elif n_good > 0:
+                    # has top performers — red
+                    line += f"{_ANSI_RED}{char}{_ANSI_RESET}"
+                else:
+                    # completed but not top pct% — yellow
+                    line += f"{_ANSI_YELLOW}{char}{_ANSI_RESET}"
         lines.append(f"  {'':>{lbl}s} │{line}")  # already visible_w
     lines.append(_pad(f"  {_fmt_val(loy):>{lbl}s} ╯", 2 + lbl + 2))
     lines.append(f"  {'':>{lbl}s}  {'':─<{grid_w}}")  # already visible_w
@@ -784,11 +795,11 @@ def print_param_pair_coverage(
 
     label_dir = "top" if direction == "MAXIMIZE" else "bottom"
     rprint(
-        f"\n[bold]Pairwise coverage[/bold] — top {len(top_params)} params by marginal effect on objective"
+        f"\n[bold]Pairwise coverage[/bold] — top {len(top_params)} params by objective variance across completed trials"
     )
     rprint(
-        f"  [dim]space=unsampled  ·=all diverged  ░▒▓█=converged fraction[/dim]  "
-        f"[yellow]█[/yellow][dim]=converged[/dim]  "
+        f"  [dim]space=unsampled  ·=all diverged  ░▒▓█=stable fraction  [/dim]"
+        f"[yellow]█[/yellow][dim]=completed  [/dim]"
         f"[red]█[/red][dim]={label_dir} {pct:.4g}%[/dim]"
     )
 
