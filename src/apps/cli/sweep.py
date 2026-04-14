@@ -148,6 +148,22 @@ def resolve_optuna_overrides(trial: Any, overrides: list[str]) -> list[str]:
     return resolved
 
 
+def _merge_from_template(template_name: str, new_overrides: list[str]) -> list[str]:
+    """Merge new overrides on top of an existing study's overrides."""
+    config_path = _study_config_path(template_name)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Template study not found: {config_path}")
+    template_config = OmegaConf.load(config_path)
+    base: dict[str, str] = {}
+    for override in template_config.overrides:
+        key, _, val = str(override).partition("=")
+        base[key] = val
+    for override in new_overrides:
+        key, _, val = override.partition("=")
+        base[key] = val
+    return [f"{k}={v}" for k, v in base.items()]
+
+
 def _study_dir(study_name: str) -> Path:
     return TUNE_DIR / study_name
 

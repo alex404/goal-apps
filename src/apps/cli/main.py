@@ -9,6 +9,7 @@ from rich import print as rprint
 from rich.table import Table
 
 from .sweep import (
+    _merge_from_template,
     clear_optuna_study,
     create_optuna_study,
     create_sweep_config,
@@ -185,6 +186,9 @@ def optuna_create(
     storage: str | None = typer.Option(
         None, "--storage", help="Optuna storage URL (default: sqlite in runs/tune/)"
     ),
+    template: str | None = typer.Option(
+        None, "--template", "-t", help="Study name whose overrides serve as base values"
+    ),
 ):
     """Create an Optuna study with a search space.
 
@@ -193,6 +197,9 @@ def optuna_create(
             experiment=pbmc68k-search dataset=pbmc68k model=pbmc68k-hmog \\
             model.full.ent_reg=suggest_float:1e-1:3e0:log
     """
+    if template is not None:
+        overrides = _merge_from_template(template, overrides)
+
     if study_name is None:
         for o in overrides:
             if o.startswith("experiment="):
