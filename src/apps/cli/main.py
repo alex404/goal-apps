@@ -20,7 +20,6 @@ from .util import (
     format_config_table,
     get_store_groups,
     print_objective_sparkline,
-    print_param_objective_scatter,
     print_parameter_distributions,
     print_sweep_tree,
 )
@@ -288,7 +287,6 @@ def optuna_status(
     # Visualizations
     print_objective_sparkline(completed, direction)
     print_parameter_distributions(completed, best.params)
-    print_param_objective_scatter(completed, direction)
 
 
 @optuna_app.command(name="plot")

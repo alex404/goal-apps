@@ -208,6 +208,14 @@ def log_epoch_metrics(
         metrics["Mixture/Entropy"] = (INFO_LEVEL, -neg_entropy)
         metrics["Mixture/Effective Components"] = (INFO_LEVEL, jnp.exp(-neg_entropy))
 
+        # Cluster death tracking
+        probs = model.pst_man.lat_man.to_probs(cat_means)
+        uniform_prob = 1.0 / model.pst_man.n_categories
+        n_dead = jnp.sum(probs < 1e-4)
+        n_dying = jnp.sum(probs < 0.1 * uniform_prob)
+        metrics["Mixture/Dead Components"] = (INFO_LEVEL, n_dead)
+        metrics["Mixture/Dying Components"] = (INFO_LEVEL, n_dying)
+
         # Conjugation and component statistics
         lkl_params, mix_params = model.split_conjugated(params)
         rho = model.lwr_hrm.conjugation_parameters(lkl_params)
