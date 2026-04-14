@@ -242,7 +242,7 @@ def optuna_status(
     study_name: str = typer.Argument(help="Name of the study to inspect"),
     top_n: int = typer.Option(10, "--top", "-t", help="Number of top trials to show"),
     pct: float = typer.Option(10.0, "--pct", "-p", help="Top/bottom percentile to highlight in distributions"),
-    n_pairs: int = typer.Option(5, "--pairs", "-n", help="Number of sensitive params for pairwise grids (0 to skip)"),
+    n_pairs: int = typer.Option(4, "--pairs", "-n", help="Number of top sensitive params for pairwise grids (0 to skip)"),
 ):
     """Show study status: trial counts, best results, top configurations."""
     import optuna
@@ -253,6 +253,11 @@ def optuna_status(
     if not config_path.exists():
         rprint(f"[red]Study '{study_name}' not found[/red]")
         raise typer.Exit(1)
+
+    from omegaconf import OmegaConf
+
+    study_config = OmegaConf.load(config_path)
+    metric: str = study_config.metric
 
     storage = _default_storage(study_name)
     study = optuna.load_study(study_name=study_name, storage=storage)
@@ -265,11 +270,18 @@ def optuna_status(
     pruned = [t for t in trials if t.state == TrialState.PRUNED]
     failed = [t for t in trials if t.state == TrialState.FAIL]
     running = [t for t in trials if t.state == TrialState.RUNNING]
+    # Early-stopped: pruned by MedianPruner (has performance signal).
+    # Diverged: pruned due to instability/missing metric (no intermediate values).
+    early_stopped = [t for t in pruned if t.intermediate_values]
+    diverged = [t for t in pruned if not t.intermediate_values]
+    all_sampled = completed + pruned
+    converged = completed + early_stopped
 
     direction = study.direction.name
 
-    rprint(f"\n[bold]Study: {study_name}[/bold]  (direction: {direction.lower()})")
-    rprint(f"Trials: {len(completed)} completed, {len(pruned)} pruned, {len(failed)} failed, {len(running)} running")
+    rprint(f"\n[bold]Study: {study_name}[/bold]")
+    rprint(f"Metric: {metric}  (direction: {direction.lower()})")
+    rprint(f"Trials: {len(completed)} completed, {len(early_stopped)} early-stopped, {len(diverged)} diverged, {len(failed)} failed, {len(running)} running")
 
     if not completed:
         rprint("\nNo completed trials yet.")
@@ -289,9 +301,9 @@ def optuna_status(
 
     # Visualizations
     print_objective_sparkline(completed, direction)
-    print_param_distributions_split(completed, direction, pct=pct)
+    print_param_distributions_split(completed, direction, pct=pct, all_trials=all_sampled)
     if n_pairs > 1:
-        print_param_pair_coverage(completed, direction, pct=pct, n_params=n_pairs)
+        print_param_pair_coverage(completed, direction, pct=pct, n_params=n_pairs, all_trials=all_sampled, converged_trials=converged)
 
 
 @optuna_app.command(name="reset")
