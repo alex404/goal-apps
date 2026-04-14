@@ -20,7 +20,6 @@ from .util import (
     format_config_table,
     get_store_groups,
     print_objective_sparkline,
-    print_parameter_distributions,
     print_param_distributions_split,
     print_param_pair_coverage,
     print_sweep_tree,
@@ -242,6 +241,8 @@ def optuna_run(
 def optuna_status(
     study_name: str = typer.Argument(help="Name of the study to inspect"),
     top_n: int = typer.Option(10, "--top", "-t", help="Number of top trials to show"),
+    pct: float = typer.Option(10.0, "--pct", "-p", help="Top/bottom percentile to highlight in distributions"),
+    n_pairs: int = typer.Option(5, "--pairs", "-n", help="Number of sensitive params for pairwise grids (0 to skip)"),
 ):
     """Show study status: trial counts, best results, top configurations."""
     import optuna
@@ -288,35 +289,6 @@ def optuna_status(
 
     # Visualizations
     print_objective_sparkline(completed, direction)
-    print_parameter_distributions(completed, best.params)
-
-
-@optuna_app.command(name="plot")
-def optuna_plot(
-    study_name: str = typer.Argument(help="Name of the study to inspect"),
-    pct: float = typer.Option(10.0, "--pct", "-p", help="Top/bottom percentile to highlight"),
-    n_pairs: int = typer.Option(5, "--pairs", "-n", help="Number of sensitive params for pairwise grids (0 to skip)"),
-):
-    """Show parameter distributions and pairwise coverage grids in the terminal."""
-    import optuna
-    from optuna.trial import TrialState
-
-    from .sweep import _default_storage, _study_config_path
-
-    config_path = _study_config_path(study_name)
-    if not config_path.exists():
-        rprint(f"[red]Study '{study_name}' not found[/red]")
-        raise typer.Exit(1)
-
-    storage = _default_storage(study_name)
-    study = optuna.load_study(study_name=study_name, storage=storage)
-    completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
-
-    if not completed:
-        rprint("[red]No completed trials.[/red]")
-        raise typer.Exit(1)
-
-    direction = study.direction.name
     print_param_distributions_split(completed, direction, pct=pct)
     if n_pairs > 1:
         print_param_pair_coverage(completed, direction, pct=pct, n_params=n_pairs)
