@@ -291,6 +291,40 @@ def optuna_status(
     print_param_objective_scatter(completed, direction)
 
 
+@optuna_app.command(name="plot")
+def optuna_plot(
+    study_name: str = typer.Argument(help="Name of the study to plot"),
+    pct: float = typer.Option(10.0, "--pct", "-p", help="Top/bottom percentile to highlight"),
+    output: str = typer.Option("", "--output", "-o", help="Output path (default: <study>-params.png)"),
+):
+    """Plot parameter histograms: all trials vs top/bottom pct% by objective."""
+    import optuna
+    from pathlib import Path
+
+    from .sweep import _default_storage, _study_config_path
+    from .util import plot_param_histograms
+
+    config_path = _study_config_path(study_name)
+    if not config_path.exists():
+        rprint(f"[red]Study '{study_name}' not found[/red]")
+        raise typer.Exit(1)
+
+    storage = _default_storage(study_name)
+    study = optuna.load_study(study_name=study_name, storage=storage)
+
+    from optuna.trial import TrialState
+    completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
+
+    if not completed:
+        rprint("[red]No completed trials.[/red]")
+        raise typer.Exit(1)
+
+    direction = study.direction.name
+    out_path = Path(output) if output else Path(f"{study_name}-params.png")
+    saved = plot_param_histograms(completed, direction, pct=pct, output=out_path)
+    rprint(f"Saved to [bold]{saved}[/bold]  ({len(completed)} trials, {direction.lower()})")
+
+
 @optuna_app.command(name="reset")
 def optuna_reset(
     study_name: str = typer.Argument(help="Name of the study to reset"),

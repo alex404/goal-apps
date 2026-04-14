@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+from pathlib import Path
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
@@ -336,3 +337,144 @@ def print_param_objective_scatter(
             rprint(f"  {'':>8s} │{''.join(grid[row_idx])}")
         rprint(f"  {_fmt_val(y_lo):>8s} ┤{''.join(grid[height - 1])}")
         rprint(f"  {'':>8s}  └{'─' * width}")
+
+
+### Matplotlib Parameter Histogram Plot ###
+
+
+def plot_param_histograms(
+    trials: list[Any],
+    direction: str,
+    pct: float = 10.0,
+    output: Path | None = None,
+) -> Path:
+    """Generate parameter histogram figure comparing all trials vs top/bottom pct%.
+
+    For each searched parameter, draws two overlaid histograms:
+      - grey: all completed trials (coverage)
+      - coloured: top pct% by objective (good region)
+
+    Log-scale params (sampled with log=True) use log-binned x-axis.
+    Categorical params use a bar chart.
+
+    Args:
+        trials: Completed Optuna trials.
+        direction: "MAXIMIZE" or "MINIMIZE".
+        pct: Percentile threshold — top pct% (maximize) or bottom pct% (minimize).
+        output: Save path. Defaults to optuna-params.png in cwd.
+
+    Returns:
+        Path where the figure was saved.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import optuna.distributions as od
+
+    if not trials:
+        raise ValueError("No completed trials to plot.")
+
+    maximize = direction == "MAXIMIZE"
+    values = [t.value for t in trials if t.value is not None]
+    threshold = np.percentile(values, 100 - pct if maximize else pct)
+    good_set = set(
+        t.number
+        for t in trials
+        if t.value is not None and (t.value >= threshold if maximize else t.value <= threshold)
+    )
+
+    # Collect param values for all vs good
+    param_all: dict[str, list[Any]] = {}
+    param_good: dict[str, list[Any]] = {}
+    for t in trials:
+        for k, v in t.params.items():
+            param_all.setdefault(k, []).append(v)
+            if t.number in good_set:
+                param_good.setdefault(k, []).append(v)
+
+    params = sorted(param_all.keys())
+    n = len(params)
+    if n == 0:
+        raise ValueError("No parameters found in trials.")
+
+    ncols = min(4, n)
+    nrows = math.ceil(n / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 3.5, nrows * 2.8))
+    axes_flat = [axes] if n == 1 else list(np.array(axes).flat)
+
+    label_dir = "top" if maximize else "bottom"
+    color_good = "#e05252"
+    color_all = "#aaaaaa"
+    n_bins = 20
+
+    # Collect distributions: first trial that has each param wins
+    param_dist: dict[str, Any] = {}
+    for t in trials:
+        for k, d in t.distributions.items():
+            if k not in param_dist:
+                param_dist[k] = d
+
+    for ax, param in zip(axes_flat, params):
+        all_vals = param_all[param]
+        good_vals = param_good.get(param, [])
+
+        dist = param_dist.get(param)
+
+        # Determine axis type from the sampling distribution
+        is_categorical = isinstance(dist, od.CategoricalDistribution)
+        use_log = (
+            isinstance(dist, (od.FloatDistribution, od.IntDistribution))
+            and getattr(dist, "log", False)
+        )
+
+        if is_categorical:
+            categories = sorted(set(str(v) for v in all_vals))
+            all_counts = [sum(1 for v in all_vals if str(v) == c) for c in categories]
+            good_counts = [sum(1 for v in good_vals if str(v) == c) for c in categories]
+            x = np.arange(len(categories))
+            ax.bar(x, all_counts, color=color_all, label="all", zorder=2)
+            ax.bar(x, good_counts, color=color_good, alpha=0.85, label=f"{label_dir} {pct:.0f}%", zorder=3)
+            ax.set_xticks(x)
+            ax.set_xticklabels(categories, rotation=30, ha="right", fontsize=8)
+        else:
+            numeric_all = np.array([float(v) for v in all_vals])
+            numeric_good = np.array([float(v) for v in good_vals]) if good_vals else np.array([])
+            lo, hi = numeric_all.min(), numeric_all.max()
+
+            if use_log and lo > 0:
+                bins = np.logspace(math.log10(lo), math.log10(hi), n_bins + 1)
+                ax.set_xscale("log")
+            else:
+                bins = np.linspace(lo, hi, n_bins + 1)
+
+            ax.hist(numeric_all, bins=bins, color=color_all, label="all", zorder=2)
+            if len(numeric_good) > 0:
+                ax.hist(numeric_good, bins=bins, color=color_good, alpha=0.85,
+                        label=f"{label_dir} {pct:.0f}%", zorder=3)
+
+        ax.set_title(param, fontsize=9, fontweight="bold")
+        ax.set_ylabel("count", fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.legend(fontsize=7, loc="upper right")
+
+    # Hide unused axes
+    for ax in axes_flat[n:]:
+        ax.set_visible(False)
+
+    n_good = len(good_set)
+    fig.suptitle(
+        f"Parameter distributions — {len(trials)} trials, "
+        f"{label_dir} {pct:.0f}% highlighted (n={n_good}, "
+        f"objective ≥{threshold:.4g})" if maximize else
+        f"Parameter distributions — {len(trials)} trials, "
+        f"{label_dir} {pct:.0f}% highlighted (n={n_good}, "
+        f"objective ≤{threshold:.4g})",
+        fontsize=11,
+        y=1.01,
+    )
+    fig.tight_layout()
+
+    if output is None:
+        output = Path("optuna-params.png")
+    fig.savefig(output, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output
