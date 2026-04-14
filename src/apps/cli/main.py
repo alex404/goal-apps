@@ -21,6 +21,8 @@ from .util import (
     get_store_groups,
     print_objective_sparkline,
     print_parameter_distributions,
+    print_param_distributions_split,
+    print_param_pair_coverage,
     print_sweep_tree,
 )
 
@@ -291,16 +293,15 @@ def optuna_status(
 
 @optuna_app.command(name="plot")
 def optuna_plot(
-    study_name: str = typer.Argument(help="Name of the study to plot"),
+    study_name: str = typer.Argument(help="Name of the study to inspect"),
     pct: float = typer.Option(10.0, "--pct", "-p", help="Top/bottom percentile to highlight"),
-    output: str = typer.Option("", "--output", "-o", help="Output path (default: <study>-params.png)"),
+    n_pairs: int = typer.Option(5, "--pairs", "-n", help="Number of sensitive params for pairwise grids (0 to skip)"),
 ):
-    """Plot parameter histograms: all trials vs top/bottom pct% by objective."""
+    """Show parameter distributions and pairwise coverage grids in the terminal."""
     import optuna
-    from pathlib import Path
+    from optuna.trial import TrialState
 
     from .sweep import _default_storage, _study_config_path
-    from .util import plot_param_histograms
 
     config_path = _study_config_path(study_name)
     if not config_path.exists():
@@ -309,8 +310,6 @@ def optuna_plot(
 
     storage = _default_storage(study_name)
     study = optuna.load_study(study_name=study_name, storage=storage)
-
-    from optuna.trial import TrialState
     completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
 
     if not completed:
@@ -318,9 +317,9 @@ def optuna_plot(
         raise typer.Exit(1)
 
     direction = study.direction.name
-    out_path = Path(output) if output else Path(f"{study_name}-params.png")
-    saved = plot_param_histograms(completed, direction, pct=pct, output=out_path)
-    rprint(f"Saved to [bold]{saved}[/bold]  ({len(completed)} trials, {direction.lower()})")
+    print_param_distributions_split(completed, direction, pct=pct)
+    if n_pairs > 1:
+        print_param_pair_coverage(completed, direction, pct=pct, n_params=n_pairs)
 
 
 @optuna_app.command(name="reset")

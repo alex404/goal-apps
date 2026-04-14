@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import math
-from pathlib import Path
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
@@ -339,142 +338,259 @@ def print_param_objective_scatter(
         rprint(f"  {'':>8s}  └{'─' * width}")
 
 
-### Matplotlib Parameter Histogram Plot ###
+### Terminal Parameter Distribution Plot ###
 
 
-def plot_param_histograms(
-    trials: list[Any],
-    direction: str,
-    pct: float = 10.0,
-    output: Path | None = None,
-) -> Path:
-    """Generate parameter histogram figure comparing all trials vs top/bottom pct%.
-
-    For each searched parameter, draws two overlaid histograms:
-      - grey: all completed trials (coverage)
-      - coloured: top pct% by objective (good region)
-
-    Log-scale params (sampled with log=True) use log-binned x-axis.
-    Categorical params use a bar chart.
-
-    Args:
-        trials: Completed Optuna trials.
-        direction: "MAXIMIZE" or "MINIMIZE".
-        pct: Percentile threshold — top pct% (maximize) or bottom pct% (minimize).
-        output: Save path. Defaults to optuna-params.png in cwd.
-
-    Returns:
-        Path where the figure was saved.
-    """
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import optuna.distributions as od
-
-    if not trials:
-        raise ValueError("No completed trials to plot.")
-
-    maximize = direction == "MAXIMIZE"
+def _good_set(trials: list[Any], direction: str, pct: float) -> set[int]:
+    """Return trial numbers in the top/bottom pct% by objective."""
     values = [t.value for t in trials if t.value is not None]
-    threshold = np.percentile(values, 100 - pct if maximize else pct)
-    good_set = set(
+    if not values:
+        return set()
+    maximize = direction == "MAXIMIZE"
+    threshold = float(sorted(values, reverse=maximize)[max(0, int(len(values) * pct / 100) - 1)])
+    return {
         t.number
         for t in trials
         if t.value is not None and (t.value >= threshold if maximize else t.value <= threshold)
-    )
+    }
 
-    # Collect param values for all vs good
+
+def _param_dists(trials: list[Any]) -> dict[str, Any]:
+    """Collect Optuna distribution objects, one per parameter."""
+    dists: dict[str, Any] = {}
+    for t in trials:
+        for k, d in t.distributions.items():
+            if k not in dists:
+                dists[k] = d
+    return dists
+
+
+def _range_str(dist: Any) -> str:
+    """Format the configured search range from an Optuna distribution."""
+    import optuna.distributions as od
+    if isinstance(dist, od.CategoricalDistribution):
+        return f"{len(dist.choices)} categories"
+    lo, hi = dist.low, dist.high
+    use_log = getattr(dist, "log", False)
+    suffix = " [dim](log)[/dim]" if use_log else ""
+    return f"{_fmt_val(lo)} … {_fmt_val(hi)}{suffix}"
+
+
+def _hist_bar(values: list[float], lo: float, hi: float, use_log: bool, n_bins: int = 20) -> str:
+    """Render a histogram bar using the configured search range as fixed bin boundaries."""
+    if not values or lo == hi:
+        return "[dim](all same)[/dim]" if values else "[dim](none)[/dim]"
+    bins = [0] * n_bins
+    for v in values:
+        if use_log and lo > 0:
+            frac = (math.log10(v) - math.log10(lo)) / (math.log10(hi) - math.log10(lo))
+        else:
+            frac = (v - lo) / (hi - lo)
+        idx = min(n_bins - 1, max(0, int(frac * n_bins)))
+        bins[idx] += 1
+    max_count = max(bins)
+    if max_count == 0:
+        return ""
+    return "".join(_SPARK_CHARS[int(c / max_count * (len(_SPARK_CHARS) - 1))] for c in bins)
+
+
+def _cat_bar(values: list[Any], choices: list[Any], n_bins: int = 20) -> str:
+    """Render a categorical bar proportional to counts, truncated to n_bins chars."""
+    if not values:
+        return "[dim](none)[/dim]"
+    counts = {str(c): 0 for c in choices}
+    for v in values:
+        counts[str(v)] = counts.get(str(v), 0) + 1
+    max_count = max(counts.values()) or 1
+    bar = ""
+    for c in choices:
+        level = int(counts[str(c)] / max_count * (len(_SPARK_CHARS) - 1))
+        bar += _SPARK_CHARS[level]
+    # Truncate or pad to n_bins
+    return bar[:n_bins].ljust(n_bins)
+
+
+def print_param_distributions_split(
+    trials: list[Any],
+    direction: str,
+    pct: float = 10.0,
+    n_bins: int = 20,
+) -> None:
+    """Print a single Rich table showing coverage and top-pct% distributions side by side.
+
+    Bin boundaries are derived from each parameter's configured search range (Optuna
+    distribution), not from the observed sample range, so both columns are on the same
+    scale and gaps in coverage are visible.
+    """
+    import optuna.distributions as od
+
+    if not trials:
+        rprint("[red]No completed trials.[/red]")
+        return
+
+    maximize = direction == "MAXIMIZE"
+    good = _good_set(trials, direction, pct)
+    dists = _param_dists(trials)
+
     param_all: dict[str, list[Any]] = {}
     param_good: dict[str, list[Any]] = {}
     for t in trials:
         for k, v in t.params.items():
             param_all.setdefault(k, []).append(v)
-            if t.number in good_set:
+            if t.number in good:
                 param_good.setdefault(k, []).append(v)
 
-    params = sorted(param_all.keys())
-    n = len(params)
-    if n == 0:
-        raise ValueError("No parameters found in trials.")
-
-    ncols = min(4, n)
-    nrows = math.ceil(n / ncols)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 3.5, nrows * 2.8))
-    axes_flat = [axes] if n == 1 else list(np.array(axes).flat)
-
     label_dir = "top" if maximize else "bottom"
-    color_good = "#e05252"
-    color_all = "#aaaaaa"
-    n_bins = 20
+    n_good = len(good)
+    obj_vals = [t.value for t in trials if t.value is not None]
+    threshold_idx = max(0, int(len(obj_vals) * pct / 100) - 1)
+    threshold = sorted(obj_vals, reverse=maximize)[threshold_idx]
+    threshold_sym = "≥" if maximize else "≤"
 
-    # Collect distributions: first trial that has each param wins
-    param_dist: dict[str, Any] = {}
-    for t in trials:
-        for k, d in t.distributions.items():
-            if k not in param_dist:
-                param_dist[k] = d
+    table = Table(
+        title=f"Parameter Distributions  —  {len(trials)} trials  |  "
+              f"{label_dir} {pct:.4g}%: n={n_good}, objective {threshold_sym}{threshold:.4g}",
+        show_header=True,
+        header_style="bold",
+    )
+    table.add_column("Parameter", style="cyan", no_wrap=True)
+    table.add_column("Range", style="dim", no_wrap=True)
+    table.add_column(f"Coverage (n={len(trials)})", no_wrap=True)
+    table.add_column(f"{label_dir.capitalize()} {pct:.4g}% (n={n_good})", style="red", no_wrap=True)
 
-    for ax, param in zip(axes_flat, params):
+    for param in sorted(param_all.keys()):
+        dist = dists.get(param)
         all_vals = param_all[param]
         good_vals = param_good.get(param, [])
 
-        dist = param_dist.get(param)
-
-        # Determine axis type from the sampling distribution
-        is_categorical = isinstance(dist, od.CategoricalDistribution)
-        use_log = (
-            isinstance(dist, (od.FloatDistribution, od.IntDistribution))
-            and getattr(dist, "log", False)
-        )
-
-        if is_categorical:
-            categories = sorted(set(str(v) for v in all_vals))
-            all_counts = [sum(1 for v in all_vals if str(v) == c) for c in categories]
-            good_counts = [sum(1 for v in good_vals if str(v) == c) for c in categories]
-            x = np.arange(len(categories))
-            ax.bar(x, all_counts, color=color_all, label="all", zorder=2)
-            ax.bar(x, good_counts, color=color_good, alpha=0.85, label=f"{label_dir} {pct:.0f}%", zorder=3)
-            ax.set_xticks(x)
-            ax.set_xticklabels(categories, rotation=30, ha="right", fontsize=8)
+        if dist is None or isinstance(dist, od.CategoricalDistribution):
+            choices = list(dist.choices) if dist is not None else sorted(set(str(v) for v in all_vals))
+            range_str = f"{len(choices)} categories"
+            all_bar = _cat_bar([str(v) for v in all_vals], choices, n_bins)
+            good_bar = _cat_bar([str(v) for v in good_vals], choices, n_bins)
         else:
-            numeric_all = np.array([float(v) for v in all_vals])
-            numeric_good = np.array([float(v) for v in good_vals]) if good_vals else np.array([])
-            lo, hi = numeric_all.min(), numeric_all.max()
+            lo, hi = float(dist.low), float(dist.high)
+            use_log = bool(getattr(dist, "log", False))
+            range_str = _range_str(dist)
+            all_bar = _hist_bar([float(v) for v in all_vals], lo, hi, use_log, n_bins)
+            good_bar = _hist_bar([float(v) for v in good_vals], lo, hi, use_log, n_bins)
 
-            if use_log and lo > 0:
-                bins = np.logspace(math.log10(lo), math.log10(hi), n_bins + 1)
-                ax.set_xscale("log")
-            else:
-                bins = np.linspace(lo, hi, n_bins + 1)
+        table.add_row(param, range_str, all_bar, good_bar)
 
-            ax.hist(numeric_all, bins=bins, color=color_all, label="all", zorder=2)
-            if len(numeric_good) > 0:
-                ax.hist(numeric_good, bins=bins, color=color_good, alpha=0.85,
-                        label=f"{label_dir} {pct:.0f}%", zorder=3)
+    rprint()
+    rprint(table)
 
-        ax.set_title(param, fontsize=9, fontweight="bold")
-        ax.set_ylabel("count", fontsize=8)
-        ax.tick_params(labelsize=7)
-        ax.legend(fontsize=7, loc="upper right")
 
-    # Hide unused axes
-    for ax in axes_flat[n:]:
-        ax.set_visible(False)
+def print_param_pair_coverage(
+    trials: list[Any],
+    direction: str,
+    pct: float = 10.0,
+    n_params: int = 5,
+    grid_w: int = 24,
+    grid_h: int = 8,
+) -> None:
+    """Print 2D unicode grids for pairs of the top-N most sensitive parameters.
 
-    n_good = len(good_set)
-    fig.suptitle(
-        f"Parameter distributions — {len(trials)} trials, "
-        f"{label_dir} {pct:.0f}% highlighted (n={n_good}, "
-        f"objective ≥{threshold:.4g})" if maximize else
-        f"Parameter distributions — {len(trials)} trials, "
-        f"{label_dir} {pct:.0f}% highlighted (n={n_good}, "
-        f"objective ≤{threshold:.4g})",
-        fontsize=11,
-        y=1.01,
-    )
-    fig.tight_layout()
+    Each cell's fill character encodes the fraction of good trials in that bin:
+      space  — no trials (unexplored)
+      ·      — trials sampled, none in top pct%
+      ░ ▒ ▓ █ — increasing fraction of good trials
+    """
+    import optuna.distributions as od
 
-    if output is None:
-        output = Path("optuna-params.png")
-    fig.savefig(output, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return output
+    if len(trials) < 4:
+        return
+
+    good = _good_set(trials, direction, pct)
+    dists = _param_dists(trials)
+
+    # Only consider numeric params
+    numeric_params = [
+        p for p, d in dists.items()
+        if isinstance(d, (od.FloatDistribution, od.IntDistribution))
+    ]
+    if len(numeric_params) < 2:
+        return
+
+    # Rank by variance of mean objective across bins
+    param_scores: dict[str, float] = {}
+    for param in numeric_params:
+        pairs = [
+            (float(t.params[param]), t.value)
+            for t in trials
+            if param in t.params and t.value is not None
+        ]
+        if len(pairs) < 4:
+            continue
+        dist = dists[param]
+        lo, hi = float(dist.low), float(dist.high)
+        use_log = bool(getattr(dist, "log", False))
+        n_bins = 8
+        bin_sums = [0.0] * n_bins
+        bin_counts = [0] * n_bins
+        for v, obj in pairs:
+            frac = (math.log10(v) - math.log10(lo)) / (math.log10(hi) - math.log10(lo)) if (use_log and lo > 0) else (v - lo) / (hi - lo) if hi > lo else 0.5
+            idx = min(n_bins - 1, max(0, int(frac * n_bins)))
+            bin_sums[idx] += obj
+            bin_counts[idx] += 1
+        means = [bin_sums[i] / bin_counts[i] for i in range(n_bins) if bin_counts[i] > 0]
+        if len(means) >= 2:
+            mu = sum(means) / len(means)
+            param_scores[param] = sum((m - mu) ** 2 for m in means) / len(means)
+
+    top_params = sorted(param_scores, key=lambda p: param_scores[p], reverse=True)[:n_params]
+    if len(top_params) < 2:
+        return
+
+    rprint(f"\n[bold]Pairwise coverage[/bold] — top {len(top_params)} sensitive params, "
+           f"[dim]space[/dim]=unexplored  ·=sampled/no good  ░▒▓█=increasing good fraction")
+
+    _DENSITY = [" ", "·", "░", "▒", "▓", "█"]
+
+    for i, px in enumerate(top_params):
+        for py in top_params[i + 1:]:
+            dx, dy = dists[px], dists[py]
+            lox, hix = float(dx.low), float(dx.high)
+            loy, hiy = float(dy.low), float(dy.high)
+            log_x = bool(getattr(dx, "log", False))
+            log_y = bool(getattr(dy, "log", False))
+
+            def bin_val(v: float, lo: float, hi: float, use_log: bool, n: int) -> int:
+                if use_log and lo > 0:
+                    frac = (math.log10(v) - math.log10(lo)) / (math.log10(hi) - math.log10(lo))
+                else:
+                    frac = (v - lo) / (hi - lo) if hi > lo else 0.5
+                return min(n - 1, max(0, int(frac * n)))
+
+            all_grid = [[0] * grid_w for _ in range(grid_h)]
+            good_grid = [[0] * grid_w for _ in range(grid_h)]
+
+            for t in trials:
+                if px not in t.params or py not in t.params:
+                    continue
+                col = bin_val(float(t.params[px]), lox, hix, log_x, grid_w)
+                row = bin_val(float(t.params[py]), loy, hiy, log_y, grid_h)
+                all_grid[row][col] += 1
+                if t.number in good:
+                    good_grid[row][col] += 1
+
+            # Print grid (y=0 at bottom)
+            rprint(f"\n  [cyan]{px}[/cyan]  ×  [cyan]{py}[/cyan]")
+            rprint(f"  {_fmt_val(hiy):>8s} ╮")
+            for row in range(grid_h - 1, -1, -1):
+                line = ""
+                for col in range(grid_w):
+                    total = all_grid[row][col]
+                    n_good = good_grid[row][col]
+                    if total == 0:
+                        line += _DENSITY[0]
+                    elif n_good == 0:
+                        line += _DENSITY[1]
+                    else:
+                        frac = n_good / total
+                        idx = 2 + min(3, int(frac * 4))
+                        line += _DENSITY[idx]
+                rprint(f"  {'':>8s} │{line}")
+            rprint(f"  {_fmt_val(loy):>8s} ╯")
+            rprint(f"  {'':>8s}  {'':─<{grid_w}}")
+            rprint(f"  {'':>8s}  {_fmt_val(lox)!s:<{grid_w//2}}{_fmt_val(hix):>{grid_w//2}}")
