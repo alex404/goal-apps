@@ -75,19 +75,6 @@ class FullGradientTrainerConfig(GradientTrainerConfig):
 
 
 @dataclass
-class MixtureMaskGradientTrainerConfig(GradientTrainerConfig):
-    """FullGradientTrainer configured to update only mixture parameters.
-
-    Uses the full HMoG gradient but masks out LGM parameter updates,
-    giving the correct mixture gradient without the MixtureGradientTrainer
-    precomputation machinery.
-    """
-
-    _target_: str = "plugins.models.hmog.trainers.FullGradientTrainer"
-    mask_type: str = "MIXTURE"
-
-
-@dataclass
 class MixtureGradientTrainerConfig:
     """Configuration for fixed observable trainer.
 
@@ -111,8 +98,6 @@ class MixtureGradientTrainerConfig:
 
     # Parameter bounds for mixture components
     min_prob: float = 1e-4
-    lat_min_var: float = 1e-6
-    lat_jitter_var: float = 0.0
 
     # Precision matrix regularization
     upr_prs_reg: float = 1e-3
@@ -138,7 +123,7 @@ class HMoGConfig(ClusteringModelConfig):
     latent_dim: int = 10
     n_clusters: int = 10
     lgm_noise_scale: float = 0.01
-    mix_noise_scale: float = 0.01
+    mix_init_scale: float = 0.01
 
     # Training configuration
     pre: PreTrainerConfig = field(default=MISSING)
@@ -203,7 +188,7 @@ class ProjectionHMoGConfig(ClusteringModelConfig):
     latent_dim: int = 10
     n_clusters: int = 10
     lgm_noise_scale: float = 0.01
-    mix_noise_scale: float = 0.01
+    mix_init_scale: float = 0.01
     diagonal_latent: bool = True
     kmeans_init: bool = True
 
@@ -234,8 +219,7 @@ cs = ConfigStore.instance()
 # Register base configs
 cs.store(group="model/pre", name="gradient_pre", node=PreTrainerConfig)
 cs.store(group="model/lgm", name="gradient_lgm", node=LGMGradientTrainerConfig)
-cs.store(group="model/mix", name="gradient_mixture", node=MixtureMaskGradientTrainerConfig)
-cs.store(group="model/mix", name="gradient_mixture_legacy", node=MixtureGradientTrainerConfig)
+cs.store(group="model/mix", name="gradient_mixture", node=MixtureGradientTrainerConfig)
 cs.store(group="model/full", name="gradient_full", node=FullGradientTrainerConfig)
 
 # Register model configs

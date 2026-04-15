@@ -377,7 +377,7 @@ class ProjectionHMoGModel(
     pre: LGMPreTrainer
     projection: ProjectionTrainer
     lgm_noise_scale: float
-    mix_noise_scale: float
+    mix_init_scale: float
     analyses_config: ClusteringAnalysesConfig
 
     def __init__(
@@ -388,7 +388,7 @@ class ProjectionHMoGModel(
         pre: LGMPreTrainer,
         pro: ProjectionTrainer,
         lgm_noise_scale: float,
-        mix_noise_scale: float,
+        mix_init_scale: float,
         analyses: ClusteringAnalysesConfig,
         diagonal_latent: bool = True,
         kmeans_init: bool = True,
@@ -418,7 +418,7 @@ class ProjectionHMoGModel(
         self.pre = pre
         self.projection = pro
         self.lgm_noise_scale = lgm_noise_scale
-        self.mix_noise_scale = mix_noise_scale
+        self.mix_init_scale = mix_init_scale
         self.analyses_config = analyses
         self.kmeans_init = kmeans_init
 
@@ -481,7 +481,7 @@ class ProjectionHMoGModel(
         return lgm.join_conjugated(lkl_params, z)
 
     def _initialize_mixture(self, key: Array) -> Array:
-        return self.mixture.initialize(key, shape=self.mix_noise_scale)
+        return self.mixture.initialize(key, shape=self.mix_init_scale)
 
 
     def _initialize_mixture_from_projections(
@@ -723,7 +723,7 @@ class ProjectionHMoGModel(
                 )
             else:
                 mix_params = self.mixture.initialize_from_sample(
-                    key_mix_init, latent_locations, shape=self.mix_noise_scale
+                    key_mix_init, latent_locations, shape=self.mix_init_scale
                 )
 
             log.info(

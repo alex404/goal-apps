@@ -22,7 +22,7 @@ n_clusters: 100          # ~11x overclustering of 9 cell types
 num_cycles: 2
 lr_scales: [1.0, 0.3]
 lgm_noise_scale: 0.01
-mix_noise_scale: 0.01
+mix_init_scale: 0.01
 
 # Pre-training phases disabled
 pre:

@@ -8,7 +8,7 @@ n_clusters: 200
 num_cycles: 3
 
 lgm_noise_scale: 0.01
-mix_noise_scale: 0.01
+mix_init_scale: 0.01
 
 pre:
   n_epochs: 0

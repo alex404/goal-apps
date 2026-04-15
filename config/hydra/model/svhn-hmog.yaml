@@ -9,7 +9,7 @@ lr_scales: [1]
 num_cycles: 10
 
 lgm_noise_scale: 0.001
-mix_noise_scale: 0.001
+mix_init_scale: 0.001
 
 pre:
   lr: 3e-5

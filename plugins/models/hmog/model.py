@@ -95,7 +95,7 @@ class HMoGModel(
     num_cycles: int
 
     lgm_noise_scale: float
-    mix_noise_scale: float
+    mix_init_scale: float
 
     # Analysis configuration
     analyses_config: ClusteringAnalysesConfig
@@ -112,7 +112,7 @@ class HMoGModel(
         lr_scales: list[float],
         num_cycles: int,
         lgm_noise_scale: float,
-        mix_noise_scale: float,
+        mix_init_scale: float,
         analyses: ClusteringAnalysesConfig,
         diagonal_latent: bool = True,
     ) -> None:
@@ -135,7 +135,7 @@ class HMoGModel(
         self.lr_schedule = cycle_lr_schedule(lr_scales, num_cycles)
 
         self.lgm_noise_scale = lgm_noise_scale
-        self.mix_noise_scale = mix_noise_scale
+        self.mix_init_scale = mix_init_scale
 
         self.analyses_config = analyses
 
@@ -178,7 +178,7 @@ class HMoGModel(
         obs_params = self.manifold.obs_man.to_natural(obs_means)
 
         mix_params = self.manifold.pst_man.initialize(
-            key_comp, shape=self.mix_noise_scale
+            key_comp, shape=self.mix_init_scale
         )
 
         int_noise = self.lgm_noise_scale * jax.random.normal(
@@ -367,7 +367,7 @@ class HMoGModel(
             # the latent space has settled. The params from before pre-training are
             # meaningless in the trained latent space and cause analysis crashes.
             fresh_mix = self.manifold.pst_man.initialize(
-                mix_reinit_key, shape=self.mix_noise_scale
+                mix_reinit_key, shape=self.mix_init_scale
             )
             _, fresh_lat_int, fresh_cat = self.manifold.pst_man.split_coords(fresh_mix)
             lat_params = self.manifold.pst_man.join_coords(

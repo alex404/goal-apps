@@ -9,7 +9,7 @@ n_clusters: 60
 lr_scales: [1.0,0.3,0.1]
 num_cycles: 3
 lgm_noise_scale: 0.001
-mix_noise_scale: 0.001
+mix_init_scale: 0.001
 
 pre:
   lr: 3e-5

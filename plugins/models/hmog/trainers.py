@@ -28,7 +28,6 @@ class MaskingStrategy(Enum):
     """Enum defining which parameters to update during training."""
 
     LGM = auto()  # Only update LGM parameters (obs_params and int_params)
-    MIXTURE = auto()  # Only update mixture parameters (lat_params)
     FULL = auto()  # Update all parameters
 
 
@@ -260,20 +259,17 @@ class FullGradientTrainer:
                 "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
             }
 
-            # Gated terms: can produce NaN at boundary, must not be traced when coeff=0
-            if self.upr_prs_reg > 0 or self.lwr_prs_reg > 0:
-                prs_loss, prs_metrics = precision_regularizer(
-                    model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
-                )
-                total_loss = total_loss + prs_loss
-                metrics.update(prs_metrics)
+            prs_loss, prs_metrics = precision_regularizer(
+                model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
+            )
+            total_loss = total_loss + prs_loss
+            metrics.update(prs_metrics)
 
-            if self.ent_reg > 0:
-                ent_loss, ent_metrics = entropy_regularizer(
-                    model, rho, mix_params, self.ent_reg
-                )
-                total_loss = total_loss + ent_loss
-                metrics.update(ent_metrics)
+            ent_loss, ent_metrics = entropy_regularizer(
+                model, rho, mix_params, self.ent_reg
+            )
+            total_loss = total_loss + ent_loss
+            metrics.update(ent_metrics)
 
             return total_loss, metrics
 
@@ -290,16 +286,6 @@ class FullGradientTrainer:
                 obs_grad, int_grad, lat_grad = model.split_coords(grad)
                 zero_lat_grad = jnp.zeros_like(lat_grad)
                 return model.join_coords(obs_grad, int_grad, zero_lat_grad)
-
-        elif self.mask_type == MaskingStrategy.MIXTURE:
-            # Only update mixture parameters (lat_params)
-            def mask_fn(
-                grad: Array,
-            ) -> Array:
-                _, _, lat_grad = model.split_coords(grad)
-                zero_obs_grad = model.obs_man.zeros()
-                zero_int_grad = model.int_man.zeros()
-                return model.join_coords(zero_obs_grad, zero_int_grad, lat_grad)
 
         else:
             # No masking - update all parameters
@@ -338,7 +324,6 @@ class FullGradientTrainer:
 
             # Apply bounds to posterior statistics
             bounded_posterior_stats = self.bound_means(model, posterior_stats)
-            # debug_lat_obs_means(bounded_posterior, True)
 
             # Define the inner step function for scan
             def inner_step(
@@ -362,8 +347,6 @@ class FullGradientTrainer:
                     masked_grad, current_opt_state, current_params
                 )
                 new_params: Array = optax.apply_updates(current_params, updates)  # pyright: ignore[reportAssignmentType]
-
-                # new_params = self.reset_non_pd(model, new_params)
 
                 # Monitor parameters for debugging
                 logger.monitor_params(
@@ -575,7 +558,6 @@ class LGMPreTrainer:
 
             # Apply bounds to posterior statistics
             bounded_posterior_stats = self.bound_means(model, posterior_stats)
-            # debug_lat_obs_means(bounded_posterior, True)
 
             # Define the inner step function for scan
             def inner_step(
@@ -744,8 +726,6 @@ class MixtureGradientTrainer:
 
     # Parameter bounds
     min_prob: float
-    lat_min_var: float
-    lat_jitter_var: float
     upr_prs_reg: float
     lwr_prs_reg: float
 
@@ -832,20 +812,17 @@ class MixtureGradientTrainer:
                 "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
             }
 
-            # Gated terms: can produce NaN at boundary, must not be traced when coeff=0
-            if self.upr_prs_reg > 0 or self.lwr_prs_reg > 0:
-                prs_loss, prs_metrics = precision_regularizer(
-                    model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
-                )
-                total_loss = total_loss + prs_loss
-                metrics.update(prs_metrics)
+            prs_loss, prs_metrics = precision_regularizer(
+                model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
+            )
+            total_loss = total_loss + prs_loss
+            metrics.update(prs_metrics)
 
-            if self.ent_reg > 0:
-                ent_loss, ent_metrics = entropy_regularizer(
-                    model, rho, mix_params, self.ent_reg
-                )
-                total_loss = total_loss + ent_loss
-                metrics.update(ent_metrics)
+            ent_loss, ent_metrics = entropy_regularizer(
+                model, rho, mix_params, self.ent_reg
+            )
+            total_loss = total_loss + ent_loss
+            metrics.update(ent_metrics)
 
             return total_loss, metrics
 

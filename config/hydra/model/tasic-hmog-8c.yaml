@@ -11,7 +11,7 @@ n_clusters: 8        # Test moderate increase in clusters
 lr_scales: [1, 0.3, 0.1]  # Match newsgroups pattern
 num_cycles: 5             # Match MNIST efficiency
 lgm_noise_scale: 0.01     # Match successful configs
-mix_noise_scale: 0.01
+mix_init_scale: 0.01
 
 # Skip pre-training like successful configs
 pre:
