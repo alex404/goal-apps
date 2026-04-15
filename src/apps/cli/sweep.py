@@ -237,6 +237,7 @@ def validate_optuna_config(overrides: list[str], metric: str, study_name: str) -
         f"run_name={probe_run_name}",
         "use_wandb=false",
         "use_optuna=false",
+        "device=cpu",
     ]
     # Compute the probe dir upfront so we can clean it up even if
     # initialize_run raises before returning a handler.
