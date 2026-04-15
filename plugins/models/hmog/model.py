@@ -381,25 +381,9 @@ class HMoGModel(
         # Cycle between Mixture and LGM training
         for cycle in range(current_cycle, self.num_cycles):
             current_lr_scale = self.lr_schedule[cycle]
-            key_lgm, key_mix, key_full, key_reinit = jax.random.split(cycle_keys[cycle], 4)
+            key_lgm, key_mix, key_full = jax.random.split(cycle_keys[cycle], 3)
             log.info("Starting training cycle %d", cycle + 1)
             log.info(f"Learning rate scale: {current_lr_scale:.3f}")
-
-            # At cycle boundaries (after first), reinitialize mixture-specific params
-            # (lat_int and categorical weights) while keeping learned LGM structure.
-            # This prevents collapsed mixture state from persisting across cycles.
-            if cycle > 0 and self.mix_noise_scale > 0:
-                obs_params, int_params, lat_params = self.manifold.split_coords(params)
-                lat_obs_params, _, _ = self.manifold.pst_man.split_coords(lat_params)
-                fresh_mix = self.manifold.pst_man.initialize(
-                    key_reinit, shape=self.mix_noise_scale
-                )
-                _, fresh_lat_int, fresh_cat = self.manifold.pst_man.split_coords(fresh_mix)
-                lat_params = self.manifold.pst_man.join_coords(
-                    lat_obs_params, fresh_lat_int, fresh_cat
-                )
-                params = self.manifold.join_coords(obs_params, int_params, lat_params)
-                log.info("Reinitialized mixture params for cycle %d", cycle + 1)
 
             # Train LGM (mixture params fixed)
             if self.lgm.n_epochs > 0:
