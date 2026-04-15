@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any, ClassVar
 
 import jax.numpy as jnp
 from jax import Array
@@ -45,6 +46,21 @@ class Analysis[D, M, T: Artifact](ABC):
     @abstractmethod
     def artifact_type(self) -> type[T]:
         """Return the artifact class for type checking and loading."""
+
+    metrics_type: ClassVar[type[Any] | None] = None
+    """Optional TypedDict declaring the keys produced by ``metrics()``.
+
+    Set on subclasses whose ``metrics()`` returns a non-empty dict. Acts as
+    the single source of truth for ``metric_names`` — the validator uses it
+    to check that a requested optuna metric is actually produced.
+    """
+
+    @property
+    def metric_names(self) -> frozenset[str]:
+        """Keys this analysis can emit. Derived from ``metrics_type``."""
+        if self.metrics_type is None:
+            return frozenset()
+        return frozenset(self.metrics_type.__annotations__.keys())
 
     def metrics(self, artifact: T) -> MetricDict:
         """Return metrics collected during the analysis."""

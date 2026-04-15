@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from typing import Any, TypedDict, cast
 
 import jax
 import jax.numpy as jnp
@@ -20,6 +21,31 @@ log = logging.getLogger(__name__)
 
 STATS_LEVEL = jnp.array(STATS_NUM)
 INFO_LEVEL = jnp.array(logging.INFO)
+
+
+LLMetrics = TypedDict(
+    "LLMetrics",
+    {
+        "Log-Likelihood/Train": tuple[Array, Array],
+        "Log-Likelihood/Test": tuple[Array, Array],
+        "Log-Likelihood/Scaled BIC": tuple[Array, Array],
+    },
+)
+
+
+def as_metric_dict(td: Any) -> MetricDict:
+    """Widen a homogeneously-typed TypedDict to ``MetricDict``.
+
+    Python's type system can't express that a TypedDict whose fields all
+    have value type ``V`` is a ``dict[str, V]`` (``dict`` is invariant in
+    ``V``, and TypedDicts model fields nominally). This function is the
+    sole bridge: one place, one cast, documented.
+
+    Preconditions (enforced only by caller discipline):
+    - Every value type declared in the TypedDict must be
+      ``tuple[Array, Array]``.
+    """
+    return cast(MetricDict, td)
 
 
 def add_ll_metrics(
@@ -45,11 +71,12 @@ def add_ll_metrics(
         - Log-Likelihood/Scaled BIC
     """
     scaled_bic = -(model_dim * jnp.log(n_train_samples) / n_train_samples - 2 * train_ll) / 2
-    metrics.update({
+    ll: LLMetrics = {
         "Log-Likelihood/Train": (INFO_LEVEL, train_ll),
         "Log-Likelihood/Test": (INFO_LEVEL, test_ll),
         "Log-Likelihood/Scaled BIC": (INFO_LEVEL, scaled_bic),
-    })
+    }
+    metrics.update(as_metric_dict(ll))
     return metrics
 
 

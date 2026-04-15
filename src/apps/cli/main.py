@@ -9,6 +9,7 @@ from rich import print as rprint
 from rich.table import Table
 
 from .sweep import (
+    OptunaValidationError,
     _merge_from_template,
     clear_optuna_study,
     create_optuna_study,
@@ -16,6 +17,7 @@ from .sweep import (
     reset_optuna_study,
     run_optuna_trial,
     sample_sweep_args,
+    validate_optuna_config,
 )
 from .util import (
     format_config_table,
@@ -189,6 +191,11 @@ def optuna_create(
     template: str | None = typer.Option(
         None, "--template", "-t", help="Study name whose overrides serve as base values"
     ),
+    validate: bool = typer.Option(
+        True,
+        "--validate/--no-validate",
+        help="Probe one sampled configuration and verify the metric is produced",
+    ),
 ):
     """Create an Optuna study with a search space.
 
@@ -208,6 +215,14 @@ def optuna_create(
     if study_name is None:
         rprint("[red]Must provide --study or experiment= override[/red]")
         raise typer.Exit(1)
+
+    if validate:
+        _init_plugins()
+        try:
+            validate_optuna_config(overrides, metric, study_name)
+        except OptunaValidationError as e:
+            rprint(f"[red]Validation failed:[/red]\n{e}")
+            raise typer.Exit(1) from e
 
     study = create_optuna_study(
         overrides=overrides,

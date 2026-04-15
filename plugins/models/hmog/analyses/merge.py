@@ -8,7 +8,7 @@ apps.interface.clustering.analyses.merge.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, override
+from typing import Any, ClassVar, TypedDict, override
 
 import jax.numpy as jnp
 import numpy as np
@@ -25,12 +25,25 @@ from apps.interface.clustering.analyses.merge import (
     hierarchy_to_mapping,
     plot_merge_results,
 )
-from apps.runtime import STATS_NUM, MetricDict, RunHandler
+from apps.runtime import STATS_NUM, MetricDict, RunHandler, as_metric_dict
 
 from .base import cluster_probabilities, get_component_prototypes
 from .hierarchy import KLClusterHierarchy
 
 STATS_LEVEL = jnp.array(STATS_NUM)
+
+
+KLMergeMetrics = TypedDict(
+    "KLMergeMetrics",
+    {
+        "Merging/KL Train Accuracy": tuple[Array, Array],
+        "Merging/KL Train NMI": tuple[Array, Array],
+        "Merging/KL Train ARI": tuple[Array, Array],
+        "Merging/KL Test Accuracy": tuple[Array, Array],
+        "Merging/KL Test NMI": tuple[Array, Array],
+        "Merging/KL Test ARI": tuple[Array, Array],
+    },
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +58,8 @@ class KLMergeAnalysis(MergeAnalysis[KLMergeResults]):
     HMoG-specific: requires KLClusterHierarchy artifact which depends on
     computing KL divergence between mixture components.
     """
+
+    metrics_type: ClassVar[type[Any]] = KLMergeMetrics
 
     @property
     @override
@@ -107,7 +122,7 @@ class KLMergeAnalysis(MergeAnalysis[KLMergeResults]):
 
     @override
     def metrics(self, artifact: KLMergeResults) -> MetricDict:
-        return {
+        m: KLMergeMetrics = {
             "Merging/KL Train Accuracy": (STATS_LEVEL, jnp.array(artifact.train_accuracy)),
             "Merging/KL Train NMI": (STATS_LEVEL, jnp.array(artifact.train_nmi_score)),
             "Merging/KL Train ARI": (STATS_LEVEL, jnp.array(artifact.train_ari_score)),
@@ -115,3 +130,4 @@ class KLMergeAnalysis(MergeAnalysis[KLMergeResults]):
             "Merging/KL Test NMI": (STATS_LEVEL, jnp.array(artifact.test_nmi_score)),
             "Merging/KL Test ARI": (STATS_LEVEL, jnp.array(artifact.test_ari_score)),
         }
+        return as_metric_dict(m)

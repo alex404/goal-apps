@@ -8,14 +8,29 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from typing import TypedDict
 
 import jax
 import jax.numpy as jnp
 from jax import Array
 
+from apps.runtime.metrics import as_metric_dict
 from apps.runtime.util import MetricDict
 
 INFO_LEVEL = jnp.array(logging.INFO)
+
+
+ClusteringMetrics = TypedDict(
+    "ClusteringMetrics",
+    {
+        "Clustering/Train Accuracy": tuple[Array, Array],
+        "Clustering/Test Accuracy": tuple[Array, Array],
+        "Clustering/Train NMI": tuple[Array, Array],
+        "Clustering/Test NMI": tuple[Array, Array],
+        "Clustering/Train ARI": tuple[Array, Array],
+        "Clustering/Test ARI": tuple[Array, Array],
+    },
+)
 
 
 def _build_contingency(
@@ -205,12 +220,13 @@ def add_clustering_metrics(
     train_ari = clustering_ari(n_clusters, n_classes, train_clusters, train_labels)
     test_ari = clustering_ari(n_clusters, n_classes, test_clusters, test_labels)
 
-    metrics.update({
+    cm: ClusteringMetrics = {
         "Clustering/Train Accuracy": (INFO_LEVEL, train_acc),
         "Clustering/Test Accuracy": (INFO_LEVEL, test_acc),
         "Clustering/Train NMI": (INFO_LEVEL, train_nmi),
         "Clustering/Test NMI": (INFO_LEVEL, test_nmi),
         "Clustering/Train ARI": (INFO_LEVEL, train_ari),
         "Clustering/Test ARI": (INFO_LEVEL, test_ari),
-    })
+    }
+    metrics.update(as_metric_dict(cm))
     return metrics

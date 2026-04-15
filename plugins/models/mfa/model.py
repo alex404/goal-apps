@@ -25,12 +25,13 @@ from apps.interface.clustering.analyses import (
     OptimalMergeAnalysis,
 )
 from apps.interface.clustering.config import ClusteringAnalysesConfig
+from apps.interface.clustering.metrics import ClusteringMetrics
 from apps.interface.clustering.protocols import (
     CanComputePrototypes,
     HasSoftAssignments,
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
-from apps.runtime import Logger, RunHandler
+from apps.runtime import LLMetrics, Logger, RunHandler
 
 from .trainers import GradientTrainer
 from .types import MFA
@@ -382,3 +383,12 @@ class MFAModel(
                 )
 
         return analyses + list(dataset.get_dataset_analyses().values())
+
+    @override
+    def metric_names(self, dataset: ClusteringDataset) -> frozenset[str]:
+        names: set[str] = set(LLMetrics.__annotations__.keys())
+        if dataset.has_labels:
+            names |= ClusteringMetrics.__annotations__.keys()
+        for analysis in self.get_analyses(dataset):
+            names |= analysis.metric_names
+        return frozenset(names)

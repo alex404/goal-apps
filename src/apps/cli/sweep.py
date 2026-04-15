@@ -1,5 +1,6 @@
 ### Imports ###
 
+import difflib
 import logging
 import shutil
 from pathlib import Path
@@ -11,6 +12,10 @@ from omegaconf import OmegaConf
 log = logging.getLogger(__name__)
 
 TUNE_DIR = Path("runs/tune")
+
+
+class OptunaValidationError(Exception):
+    """Raised when validation of a proposed Optuna study configuration fails."""
 
 ### Sweep Management ###
 
@@ -96,6 +101,58 @@ def sample_sweep_args(sweep_config: dict[str, Any]) -> list[str]:
 ### Optuna ###
 
 
+def _parse_categorical_choices(choices_str: str) -> list[Any]:
+    """Parse a suggest_categorical value list into typed Python values."""
+    raw_choices = [c.strip() for c in choices_str.split(",")]
+    choices: list[Any] = []
+    for c in raw_choices:
+        try:
+            choices.append(float(c) if "." in c else int(c))
+        except ValueError:
+            choices.append(c)
+    return choices
+
+
+def _resolve_directive(value: str, sampler: Any) -> Any:
+    """Resolve a single suggest_* directive via ``sampler`` (an object with
+    ``suggest_float``, ``suggest_int``, ``suggest_categorical`` methods — e.g.
+    an ``optuna.trial.Trial``). Returns the sampled value, or ``None`` if
+    ``value`` isn't a directive.
+    """
+    if value.startswith("suggest_float:"):
+        parts = value.split(":")[1:]
+        low, high = float(parts[0]), float(parts[1])
+        use_log = len(parts) > 2 and parts[2] == "log"
+        return sampler.suggest_float("_", low, high, log=use_log)
+    if value.startswith("suggest_int:"):
+        parts = value.split(":")[1:]
+        low, high = int(parts[0]), int(parts[1])
+        return sampler.suggest_int("_", low, high)
+    if value.startswith("suggest_categorical:"):
+        choices_str = value.split(":", 1)[1]
+        return sampler.suggest_categorical("_", _parse_categorical_choices(choices_str))
+    return None
+
+
+class _FirstValueSampler:
+    """Sampler that returns the low/first value for each directive.
+
+    Mirrors the ``sample_sweep_args`` behaviour for wandb: pick a single
+    deterministic point from the search space so the config can be
+    instantiated without invoking optuna.
+    """
+
+    def suggest_float(self, _param: str, low: float, _high: float, log: bool = False) -> float:
+        del log
+        return low
+
+    def suggest_int(self, _param: str, low: int, _high: int) -> int:
+        return low
+
+    def suggest_categorical(self, _param: str, choices: list[Any]) -> Any:
+        return choices[0]
+
+
 def resolve_optuna_overrides(trial: Any, overrides: list[str]) -> list[str]:
     """Resolve overrides containing suggest_* directives into concrete values.
 
@@ -132,20 +189,82 @@ def resolve_optuna_overrides(trial: Any, overrides: list[str]) -> list[str]:
 
         elif value.startswith("suggest_categorical:"):
             choices_str = value.split(":", 1)[1]
-            raw_choices = [c.strip() for c in choices_str.split(",")]
-            choices: list[Any] = []
-            for c in raw_choices:
-                try:
-                    choices.append(float(c) if "." in c else int(c))
-                except ValueError:
-                    choices.append(c)
-            sampled = trial.suggest_categorical(param, choices)
+            sampled = trial.suggest_categorical(param, _parse_categorical_choices(choices_str))
             resolved.append(f"{param}={sampled}")
 
         else:
             resolved.append(override)
 
     return resolved
+
+
+def sample_optuna_overrides(overrides: list[str]) -> list[str]:
+    """Resolve suggest_* directives by picking a deterministic sample point.
+
+    Used for validation — no ``optuna.Trial`` required.
+    """
+    sampler = _FirstValueSampler()
+    resolved = []
+    for override in overrides:
+        if "=" not in override:
+            resolved.append(override)
+            continue
+        param, value = override.split("=", 1)
+        sampled = _resolve_directive(value, sampler)
+        if sampled is None:
+            resolved.append(override)
+        else:
+            resolved.append(f"{param}={sampled}")
+    return resolved
+
+
+def validate_optuna_config(overrides: list[str], metric: str, study_name: str) -> None:
+    """Validate a proposed Optuna study config by probing one sampled point.
+
+    Raises ``OptunaValidationError`` if:
+    - ``initialize_run`` fails to instantiate model + dataset, or
+    - ``metric`` is not in the model's declared ``metric_names`` for the
+      instantiated dataset.
+
+    The probe run directory is cleaned up on exit.
+    """
+    from .configs import ClusteringRunConfig
+    from .initialize import initialize_run
+
+    probe_run_name = f"__validate_{study_name}__"
+    probe_overrides = [
+        *sample_optuna_overrides(overrides),
+        f"run_name={probe_run_name}",
+        "use_wandb=false",
+        "use_optuna=false",
+    ]
+    # Compute the probe dir upfront so we can clean it up even if
+    # initialize_run raises before returning a handler.
+    probe_run_dir = Path("runs") / "single" / probe_run_name
+
+    try:
+        _, _, dataset, model, _ = initialize_run(
+            ClusteringRunConfig, probe_overrides
+        )
+
+        declared = model.metric_names(dataset)
+        if metric not in declared:
+            close = difflib.get_close_matches(metric, sorted(declared), n=5, cutoff=0.4)
+            lines = [
+                f"Metric {metric!r} is not produced by this model+dataset configuration.",
+            ]
+            if close:
+                lines.append("Did you mean one of:")
+                lines.extend(f"  - {c}" for c in close)
+            lines.append(
+                "Run with --no-validate to skip this check, or enable the analysis that produces the metric."
+            )
+            raise OptunaValidationError("\n".join(lines))
+
+        log.info(f"Validation passed: metric {metric!r} is declared by the model.")
+    finally:
+        if probe_run_dir.exists():
+            shutil.rmtree(probe_run_dir, ignore_errors=True)
 
 
 def _merge_from_template(template_name: str, new_overrides: list[str]) -> list[str]:

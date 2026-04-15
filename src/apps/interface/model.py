@@ -84,6 +84,21 @@ class Model[D: Dataset](ABC):
     def get_analyses(self, dataset: D) -> list[Analysis[D, Any, Any]]:
         """Return a list of analyses to run after training."""
 
+    def metric_names(self, dataset: D) -> frozenset[str]:
+        """Every metric key this model's pipeline can emit for ``dataset``.
+
+        Default: union of ``metric_names`` across ``get_analyses(dataset)``.
+        Subclasses should override to add training-loop metrics (e.g. log-
+        likelihood, clustering) that aren't emitted by an Analysis.
+
+        Used by the optuna study-creation validator to check that the
+        requested optimization metric is actually produced.
+        """
+        names: set[str] = set()
+        for analysis in self.get_analyses(dataset):
+            names |= analysis.metric_names
+        return frozenset(names)
+
     def process_checkpoint(
         self,
         key: Array,
