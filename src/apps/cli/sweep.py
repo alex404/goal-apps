@@ -218,6 +218,42 @@ def sample_optuna_overrides(overrides: list[str]) -> list[str]:
     return resolved
 
 
+def validate_wandb_config(sweep_config: dict[str, Any]) -> None:
+    """Validate a proposed wandb sweep by instantiating one sampled point.
+
+    Raises ``OptunaValidationError`` if ``initialize_run`` fails to instantiate
+    model + dataset. (Name is shared with the optuna validator for symmetry —
+    both are "config validation" errors.)
+
+    The probe run directory is cleaned up on exit.
+    """
+    from .configs import ClusteringRunConfig
+    from .initialize import initialize_run
+
+    sample_args = sample_sweep_args(sweep_config)
+    probe_run_name = "__validate_wandb__"
+    probe_overrides = [
+        *sample_args,
+        f"run_name={probe_run_name}",
+        "use_wandb=false",
+        "use_optuna=false",
+        "device=cpu",
+    ]
+    probe_run_dir = Path("runs") / "single" / probe_run_name
+
+    try:
+        try:
+            initialize_run(ClusteringRunConfig, probe_overrides)
+        except Exception as e:
+            raise OptunaValidationError(
+                f"Sample configuration failed to initialize: {e}"
+            ) from e
+        log.info("Validation passed: sample configuration initialized cleanly.")
+    finally:
+        if probe_run_dir.exists():
+            shutil.rmtree(probe_run_dir, ignore_errors=True)
+
+
 def validate_optuna_config(overrides: list[str], metric: str, study_name: str) -> None:
     """Validate a proposed Optuna study config by probing one sampled point.
 

@@ -16,8 +16,8 @@ from .sweep import (
     create_sweep_config,
     reset_optuna_study,
     run_optuna_trial,
-    sample_sweep_args,
     validate_optuna_config,
+    validate_wandb_config,
 )
 from .util import (
     format_config_table,
@@ -122,7 +122,9 @@ main.add_typer(tune_app, name="tune", help="Hyperparameter tuning commands.")
 
 tune_wandb_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and exit")
 tune_wandb_validate = typer.Option(
-    False, "--validate", help="Validate an example config from the sweep"
+    True,
+    "--validate/--no-validate",
+    help="Probe one sampled configuration before launching the sweep",
 )
 tune_wandb_project = typer.Option("goal", "--project", "-p", help="W&B project name")
 
@@ -141,28 +143,15 @@ def tune_wandb(
     """
     sweep_config = create_sweep_config(overrides)
 
-    # Create config tree visualization
     print_sweep_tree(sweep_config)
 
     if validate:
         _init_plugins()
-        from .configs import ClusteringRunConfig
-        from .initialize import initialize_run
-
-        dry_run = True
         try:
-            # Sample one configuration
-            sample_args = sample_sweep_args(sweep_config)
-
-            log.info("Validating a sample configuration from the sweep...")
-            log.info(f"Sample configuration: {' '.join(sample_args)}")
-
-            # Initialize without actually running the training
-            initialize_run(ClusteringRunConfig, sample_args)
-
-            log.info("Sample configuration is valid!")
-        except Exception:
-            logging.exception("Validation failed:")
+            validate_wandb_config(sweep_config)
+        except OptunaValidationError as e:
+            rprint(f"[red]Validation failed:[/red]\n{e}")
+            raise typer.Exit(1) from e
 
     if not dry_run:
         import wandb
