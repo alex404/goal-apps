@@ -158,6 +158,27 @@ class _FirstValueSampler:
         return choices[0]
 
 
+def _resolve_overrides(sampler: Any, overrides: list[str]) -> list[str]:
+    """Resolve suggest_* directives in overrides via ``sampler``.
+
+    ``sampler`` must expose ``suggest_float``, ``suggest_int``, and
+    ``suggest_categorical`` methods (e.g. an ``optuna.trial.Trial`` or
+    ``_FirstValueSampler``).
+    """
+    resolved = []
+    for override in overrides:
+        if "=" not in override:
+            resolved.append(override)
+            continue
+        param, value = override.split("=", 1)
+        sampled = _resolve_directive(param, value, sampler)
+        if sampled is None:
+            resolved.append(override)
+        else:
+            resolved.append(f"{param}={sampled}")
+    return resolved
+
+
 def resolve_optuna_overrides(trial: Any, overrides: list[str]) -> list[str]:
     """Resolve overrides containing suggest_* directives into concrete values.
 
@@ -171,18 +192,7 @@ def resolve_optuna_overrides(trial: Any, overrides: list[str]) -> list[str]:
     Returns:
         List of resolved override strings.
     """
-    resolved = []
-    for override in overrides:
-        if "=" not in override:
-            resolved.append(override)
-            continue
-        param, value = override.split("=", 1)
-        sampled = _resolve_directive(param, value, trial)
-        if sampled is None:
-            resolved.append(override)
-        else:
-            resolved.append(f"{param}={sampled}")
-    return resolved
+    return _resolve_overrides(trial, overrides)
 
 
 def sample_optuna_overrides(overrides: list[str]) -> list[str]:
@@ -190,19 +200,7 @@ def sample_optuna_overrides(overrides: list[str]) -> list[str]:
 
     Used for validation — no ``optuna.Trial`` required.
     """
-    sampler = _FirstValueSampler()
-    resolved = []
-    for override in overrides:
-        if "=" not in override:
-            resolved.append(override)
-            continue
-        param, value = override.split("=", 1)
-        sampled = _resolve_directive(param, value, sampler)
-        if sampled is None:
-            resolved.append(override)
-        else:
-            resolved.append(f"{param}={sampled}")
-    return resolved
+    return _resolve_overrides(_FirstValueSampler(), overrides)
 
 
 def validate_wandb_config(sweep_config: dict[str, Any]) -> None:

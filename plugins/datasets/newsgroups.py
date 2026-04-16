@@ -503,15 +503,8 @@ class NewsgroupsDataset(ClusteringDataset):
             top_indices = jnp.argsort(prototypes[i])[-words_per_cluster:]
             top_words = [self._feature_names[int(idx)] for idx in top_indices]
 
-            # Create text display
-            text_lines = []
-            for word in top_words:
-                text_lines.append(f"{word}")
-
-            # Display words
-            text_content = "\n".join(
-                reversed(text_lines)
-            )  # Reverse for better visual order
+            # Display words (reversed for better visual order)
+            text_content = "\n".join(reversed(top_words))
             ax.text(
                 0.05,
                 0.95,
