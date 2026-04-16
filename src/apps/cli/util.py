@@ -436,6 +436,51 @@ def _strip_model_prefix(name: str) -> str:
     return name[len("model.") :] if name.startswith("model.") else name
 
 
+def _human_round(value: float) -> str:
+    """Round to 1 significant digit; use scientific notation for |exponent| > 2."""
+    if value == 0:
+        return "0"
+    exp = math.floor(math.log10(abs(value)))
+    coeff = round(value / 10**exp)
+    rounded = coeff * 10**exp
+    if abs(exp) > 2:
+        return f"{coeff}e{exp}"
+    if exp >= 0:
+        return str(int(rounded))
+    return f"{rounded:.{-exp}f}"
+
+
+def print_human_best(
+    completed: list[Any],
+    direction: str,
+    pct: float = 10.0,
+) -> None:
+    """Print paper-ready params: median of top pct%, rounded to 1 significant digit."""
+    import statistics
+
+    import optuna.distributions as od
+
+    good_nums = _good_set(completed, direction, pct)
+    good_trials = [t for t in completed if t.number in good_nums]
+    if not good_trials:
+        return
+
+    dists = _param_dists(good_trials)
+    label_dir = "top" if direction == "MAXIMIZE" else "bottom"
+    rprint(f"\n[bold]Human best[/bold] (median of {label_dir} {pct:.4g}%, n={len(good_trials)}):")
+    for param in sorted(dists.keys()):
+        display = _strip_model_prefix(param)
+        values = [t.params[param] for t in good_trials if param in t.params]
+        if not values:
+            continue
+        if isinstance(dists[param], od.CategoricalDistribution):
+            best = max(set(values), key=values.count)
+            rprint(f"  {display}: {best}")
+        else:
+            median = statistics.median(values)
+            rprint(f"  {display}: {_human_round(median)}")
+
+
 def print_param_distributions_split(
     completed: list[Any],
     direction: str,
@@ -797,10 +842,10 @@ def print_param_pair_coverage(
     rprint(
         f"\n[bold]Pairwise coverage[/bold] — top {len(top_params)} params by objective variance across completed trials"
     )
-    rprint(
-        f"  [dim]space=unsampled  ·=all diverged  ░▒▓█=stable fraction  [/dim]"
-        f"[yellow]█[/yellow][dim]=completed  [/dim]"
-        f"[red]█[/red][dim]={label_dir} {pct:.4g}%[/dim]"
+    print(
+        f"  {_ANSI_DIM}space=unsampled  ·=all diverged  ░▒▓█=stable fraction  "
+        f"{_ANSI_RESET}{_ANSI_YELLOW}█{_ANSI_RESET}{_ANSI_DIM}=completed  "
+        f"{_ANSI_RESET}{_ANSI_RED}█{_ANSI_RESET}{_ANSI_DIM}={label_dir} {pct:.4g}%{_ANSI_RESET}"
     )
 
     pairs = [(px, py) for i, px in enumerate(top_params) for py in top_params[i + 1 :]]

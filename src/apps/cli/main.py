@@ -22,6 +22,7 @@ from .sweep import (
 from .util import (
     format_config_table,
     get_store_groups,
+    print_human_best,
     print_objective_sparkline,
     print_param_distributions_split,
     print_param_pair_coverage,
@@ -303,6 +304,9 @@ def optuna_status(
     rprint(f"\n[bold]Best trial: t{best.number}[/bold] (value: {best.value:.6f})")
     for k, v in best.params.items():
         rprint(f"  {k}: {v}")
+
+    # Human-readable best (median of top pct%)
+    print_human_best(completed, direction, pct)
 
     # Top N trials
     ranked = sorted(completed, key=lambda t: t.value or 0, reverse=(direction == "MAXIMIZE"))
