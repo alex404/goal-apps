@@ -450,35 +450,69 @@ def _human_round(value: float) -> str:
     return f"{rounded:.{-exp}f}"
 
 
-def print_human_best(
+def print_trial_summary(
     completed: list[Any],
     direction: str,
     pct: float = 10.0,
+    top_n: int = 10,
 ) -> None:
-    """Print paper-ready params: median of top pct%, rounded to 1 significant digit."""
+    """Print best trial params, human-rounded params, and top N in a compact layout."""
     import statistics
 
     import optuna.distributions as od
+    from rich.columns import Columns
+
+    maximize = direction == "MAXIMIZE"
+    best = max(completed, key=lambda t: t.value or 0) if maximize else min(completed, key=lambda t: t.value or 0)
+    ranked = sorted(completed, key=lambda t: t.value or 0, reverse=maximize)
 
     good_nums = _good_set(completed, direction, pct)
     good_trials = [t for t in completed if t.number in good_nums]
-    if not good_trials:
-        return
+    dists = _param_dists(completed)
+    label_dir = "top" if maximize else "bottom"
 
-    dists = _param_dists(good_trials)
-    label_dir = "top" if direction == "MAXIMIZE" else "bottom"
-    rprint(f"\n[bold]Human best[/bold] (median of {label_dir} {pct:.4g}%, n={len(good_trials)}):")
+    # --- Left: param table (best + human best) ---
+    param_table = Table(
+        title=f"Best trial: t{best.number} ({best.value:.6f})",
+        show_header=True,
+        header_style="bold",
+        title_style="bold",
+    )
+    param_table.add_column("Parameter", style="cyan", no_wrap=True)
+    param_table.add_column(f"t{best.number}", no_wrap=True)
+    param_table.add_column(
+        f"Human ({label_dir} {pct:.4g}%, n={len(good_trials)})",
+        style="green",
+        no_wrap=True,
+    )
+
     for param in sorted(dists.keys()):
         display = _strip_model_prefix(param)
-        values = [t.params[param] for t in good_trials if param in t.params]
-        if not values:
-            continue
-        if isinstance(dists[param], od.CategoricalDistribution):
-            best = max(set(values), key=values.count)
-            rprint(f"  {display}: {best}")
+        best_val = best.params.get(param)
+        # Human-rounded value
+        good_values = [t.params[param] for t in good_trials if param in t.params]
+        if isinstance(dists.get(param), od.CategoricalDistribution):
+            human_val = str(max(set(good_values), key=good_values.count)) if good_values else ""
+        elif good_values:
+            human_val = _human_round(statistics.median(good_values))
         else:
-            median = statistics.median(values)
-            rprint(f"  {display}: {_human_round(median)}")
+            human_val = ""
+        param_table.add_row(display, str(best_val), human_val)
+
+    # --- Right: top N list ---
+    top_table = Table(
+        title=f"Top {min(top_n, len(ranked))} trials",
+        show_header=True,
+        header_style="bold",
+        title_style="bold",
+    )
+    top_table.add_column("Trial", style="cyan", no_wrap=True)
+    top_table.add_column("Value", no_wrap=True)
+    for t in ranked[:top_n]:
+        top_table.add_row(f"t{t.number}", f"{t.value:.6f}")
+
+    rprint()
+    rprint(Columns([param_table, top_table], padding=(0, 2)))
 
 
 def print_param_distributions_split(

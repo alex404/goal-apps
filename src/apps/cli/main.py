@@ -22,11 +22,11 @@ from .sweep import (
 from .util import (
     format_config_table,
     get_store_groups,
-    print_human_best,
     print_objective_sparkline,
     print_param_distributions_split,
     print_param_pair_coverage,
     print_sweep_tree,
+    print_trial_summary,
 )
 
 # Set up logging
@@ -299,20 +299,8 @@ def optuna_status(
         rprint("\nNo completed trials yet.")
         return
 
-    # Best trial
-    best = study.best_trial
-    rprint(f"\n[bold]Best trial: t{best.number}[/bold] (value: {best.value:.6f})")
-    for k, v in best.params.items():
-        rprint(f"  {k}: {v}")
-
-    # Human-readable best (median of top pct%)
-    print_human_best(completed, direction, pct)
-
-    # Top N trials
-    ranked = sorted(completed, key=lambda t: t.value or 0, reverse=(direction == "MAXIMIZE"))
-    rprint(f"\n[bold]Top {min(top_n, len(ranked))} trials:[/bold]")
-    for t in ranked[:top_n]:
-        rprint(f"  t{t.number}: {t.value:.6f}")
+    # Best trial, human-rounded params, and top N
+    print_trial_summary(completed, direction, pct, top_n)
 
     # Visualizations
     print_objective_sparkline(completed, direction)
