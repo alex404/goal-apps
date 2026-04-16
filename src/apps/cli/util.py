@@ -416,22 +416,6 @@ def _hist_bar(
     )
 
 
-def _cat_bar(values: list[Any], choices: list[Any], n_bins: int = 20) -> str:
-    """Render a categorical bar proportional to counts, truncated to n_bins chars."""
-    if not values:
-        return "[dim](none)[/dim]"
-    counts = {str(c): 0 for c in choices}
-    for v in values:
-        counts[str(v)] = counts.get(str(v), 0) + 1
-    max_count = max(counts.values()) or 1
-    bar = ""
-    for c in choices:
-        level = int(counts[str(c)] / max_count * (len(_SPARK_CHARS) - 1))
-        bar += _SPARK_CHARS[level]
-    # Truncate or pad to n_bins
-    return bar[:n_bins].ljust(n_bins)
-
-
 def _strip_model_prefix(name: str) -> str:
     return name[len("model.") :] if name.startswith("model.") else name
 

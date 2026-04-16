@@ -15,6 +15,7 @@ from jax import Array
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
+from apps.interface.clustering import CLUSTERING_METRIC_KEYS
 from apps.interface.clustering.analyses import (
     ClusterStatistics,
     ClusterStatisticsAnalysis,
@@ -24,13 +25,12 @@ from apps.interface.clustering.analyses import (
     OptimalMergeAnalysis,
 )
 from apps.interface.clustering.config import ClusteringAnalysesConfig
-from apps.interface.clustering.metrics import ClusteringMetrics
 from apps.interface.clustering.protocols import (
     CanComputePrototypes,
     HasSoftAssignments,
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
-from apps.runtime import LLMetrics, Logger, RunHandler
+from apps.runtime import L1_L2_METRIC_KEYS, LL_METRIC_KEYS, Logger, RunHandler
 
 from .analyses.base import get_component_prototypes
 from .analyses.hierarchy import KLHierarchyAnalysis
@@ -258,14 +258,27 @@ class HMoGModel(
 
         return analyses + list(dataset.get_dataset_analyses().values())
 
+    @property
+    def training_metric_keys(self) -> frozenset[str]:
+        from .metrics import HMOG_PRE_TRAINING_METRIC_KEYS, HMOG_TRAINING_METRIC_KEYS
+        from .trainers import ENTROPY_REG_METRIC_KEYS, PRECISION_REG_METRIC_KEYS
+
+        return (
+            HMOG_PRE_TRAINING_METRIC_KEYS
+            | HMOG_TRAINING_METRIC_KEYS
+            | L1_L2_METRIC_KEYS
+            | PRECISION_REG_METRIC_KEYS
+            | ENTROPY_REG_METRIC_KEYS
+        )
+
     @override
     def metric_names(self, dataset: ClusteringDataset) -> frozenset[str]:
-        names: set[str] = set(LLMetrics.__annotations__.keys())
+        keys = LL_METRIC_KEYS | self.training_metric_keys
         if dataset.has_labels:
-            names |= ClusteringMetrics.__annotations__.keys()
+            keys = keys | CLUSTERING_METRIC_KEYS
         for analysis in self.get_analyses(dataset):
-            names |= analysis.metric_names
-        return frozenset(names)
+            keys = keys | analysis.metric_names
+        return keys
 
     @override
     def generate(self, params: Array, key: Array, n_samples: int) -> Array:

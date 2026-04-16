@@ -22,6 +22,8 @@ log = logging.getLogger(__name__)
 # Define a custom level
 STATS_NUM = 15  # Between INFO (20) and DEBUG (10)
 logging.addLevelName(STATS_NUM, "STATS")
+STATS_LEVEL: Array = jnp.array(STATS_NUM)
+INFO_LEVEL: Array = jnp.array(logging.INFO)
 
 
 class LogLevel(Enum):
@@ -73,6 +75,15 @@ def update_stats(
         }
     )
     return metrics
+
+
+def stats_keys(group: str, *names: str) -> frozenset[str]:
+    """Declare the metric keys that update_stats() will produce."""
+    return frozenset(
+        f"{group}/{name} {stat}"
+        for name in names
+        for stat in ("Min", "Median", "Max")
+    )
 
 
 ### Artifacts ###

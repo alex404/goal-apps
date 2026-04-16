@@ -17,6 +17,7 @@ TUNE_DIR = Path("runs/tune")
 class OptunaValidationError(Exception):
     """Raised when validation of a proposed Optuna study configuration fails."""
 
+
 ### Sweep Management ###
 
 
@@ -113,7 +114,7 @@ def _parse_categorical_choices(choices_str: str) -> list[Any]:
     return choices
 
 
-def _resolve_directive(value: str, sampler: Any) -> Any:
+def _resolve_directive(name: str, value: str, sampler: Any) -> Any:
     """Resolve a single suggest_* directive via ``sampler`` (an object with
     ``suggest_float``, ``suggest_int``, ``suggest_categorical`` methods — e.g.
     an ``optuna.trial.Trial``). Returns the sampled value, or ``None`` if
@@ -123,14 +124,16 @@ def _resolve_directive(value: str, sampler: Any) -> Any:
         parts = value.split(":")[1:]
         low, high = float(parts[0]), float(parts[1])
         use_log = len(parts) > 2 and parts[2] == "log"
-        return sampler.suggest_float("_", low, high, log=use_log)
+        return sampler.suggest_float(name, low, high, log=use_log)
     if value.startswith("suggest_int:"):
         parts = value.split(":")[1:]
         low, high = int(parts[0]), int(parts[1])
-        return sampler.suggest_int("_", low, high)
+        return sampler.suggest_int(name, low, high)
     if value.startswith("suggest_categorical:"):
         choices_str = value.split(":", 1)[1]
-        return sampler.suggest_categorical("_", _parse_categorical_choices(choices_str))
+        return sampler.suggest_categorical(
+            name, _parse_categorical_choices(choices_str)
+        )
     return None
 
 
@@ -142,7 +145,9 @@ class _FirstValueSampler:
     instantiated without invoking optuna.
     """
 
-    def suggest_float(self, _param: str, low: float, _high: float, log: bool = False) -> float:
+    def suggest_float(
+        self, _param: str, low: float, _high: float, log: bool = False
+    ) -> float:
         del log
         return low
 
@@ -171,30 +176,12 @@ def resolve_optuna_overrides(trial: Any, overrides: list[str]) -> list[str]:
         if "=" not in override:
             resolved.append(override)
             continue
-
         param, value = override.split("=", 1)
-
-        if value.startswith("suggest_float:"):
-            parts = value.split(":")[1:]
-            low, high = float(parts[0]), float(parts[1])
-            use_log = len(parts) > 2 and parts[2] == "log"
-            sampled = trial.suggest_float(param, low, high, log=use_log)
-            resolved.append(f"{param}={sampled}")
-
-        elif value.startswith("suggest_int:"):
-            parts = value.split(":")[1:]
-            low, high = int(parts[0]), int(parts[1])
-            sampled = trial.suggest_int(param, low, high)
-            resolved.append(f"{param}={sampled}")
-
-        elif value.startswith("suggest_categorical:"):
-            choices_str = value.split(":", 1)[1]
-            sampled = trial.suggest_categorical(param, _parse_categorical_choices(choices_str))
-            resolved.append(f"{param}={sampled}")
-
-        else:
+        sampled = _resolve_directive(param, value, trial)
+        if sampled is None:
             resolved.append(override)
-
+        else:
+            resolved.append(f"{param}={sampled}")
     return resolved
 
 
@@ -210,7 +197,7 @@ def sample_optuna_overrides(overrides: list[str]) -> list[str]:
             resolved.append(override)
             continue
         param, value = override.split("=", 1)
-        sampled = _resolve_directive(value, sampler)
+        sampled = _resolve_directive(param, value, sampler)
         if sampled is None:
             resolved.append(override)
         else:
@@ -280,9 +267,7 @@ def validate_optuna_config(overrides: list[str], metric: str, study_name: str) -
     probe_run_dir = Path("runs") / "single" / probe_run_name
 
     try:
-        _, _, dataset, model, _ = initialize_run(
-            ClusteringRunConfig, probe_overrides
-        )
+        _, _, dataset, model, _ = initialize_run(ClusteringRunConfig, probe_overrides)
 
         declared = model.metric_names(dataset)
         if metric not in declared:
@@ -364,13 +349,15 @@ def create_optuna_study(
     study_dir.mkdir(parents=True, exist_ok=True)
 
     # Save study config so workers can join with just the study name
-    config = OmegaConf.create({
-        "overrides": overrides,
-        "metric": metric,
-        "direction": direction,
-        "pruner": pruner_name,
-        "storage": storage,
-    })
+    config = OmegaConf.create(
+        {
+            "overrides": overrides,
+            "metric": metric,
+            "direction": direction,
+            "pruner": pruner_name,
+            "storage": storage,
+        }
+    )
     config_path = _study_config_path(study_name)
     OmegaConf.save(config, config_path)
     log.info(f"Study config saved to {config_path}")
@@ -424,13 +411,15 @@ def run_optuna_trial(
 
     def objective(trial: optuna.trial.Trial) -> float:
         trial_overrides = resolve_optuna_overrides(trial, overrides)
-        trial_overrides.extend([
-            "use_optuna=true",
-            f"optuna_metric={metric}",
-            f"experiment={study_name}",
-            f"run_name=t{trial.number}",
-            f"sweep_id={study_name}",
-        ])
+        trial_overrides.extend(
+            [
+                "use_optuna=true",
+                f"optuna_metric={metric}",
+                f"experiment={study_name}",
+                f"run_name=t{trial.number}",
+                f"sweep_id={study_name}",
+            ]
+        )
 
         handler, logger, dataset, model, seed = initialize_run(
             ClusteringRunConfig, trial_overrides, trial=trial
@@ -451,7 +440,9 @@ def run_optuna_trial(
         except Exception as e:
             # DivergentTrainingError from JAX callbacks gets wrapped in
             # XlaRuntimeError, losing the original type.
-            if "DivergentTrainingError" in str(e):
+            if isinstance(
+                e.__cause__, DivergentTrainingError
+            ) or "DivergentTrainingError" in str(e):
                 log.warning(f"Trial {trial.number} diverged: {e}")
                 logger.finalize(handler)
                 raise optuna.TrialPruned() from e

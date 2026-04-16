@@ -13,14 +13,17 @@ from goal.models import MixtureOfFactorAnalyzers
 from jax import Array
 
 from apps.interface import ClusteringDataset
-from apps.runtime import STATS_NUM, Logger, MetricDict
+from apps.runtime import STATS_LEVEL, Logger, MetricDict, l1_l2_regularizer
 
 from .metrics import log_epoch_metrics
 from .types import MFA
 
 log = logging.getLogger(__name__)
 
-STATS_LEVEL = jnp.array(STATS_NUM)
+ENTROPY_REG_METRIC_KEYS: frozenset[str] = frozenset({
+    "Regularization/Mixture Entropy",
+    "Regularization/Entropy Penalty",
+})
 
 
 def entropy_regularizer(
@@ -165,24 +168,11 @@ class GradientTrainer:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
         def loss_with_metrics(params: Array) -> tuple[Array, MetricDict]:
-            # Extract components for regularization
             obs_params, int_params, lat_params = mfa.split_coords(params)
 
-            # L1 regularization on interactions
-            l1_norm = jnp.sum(jnp.abs(int_params))
-            l1_loss = self.l1_reg * l1_norm
-
-            # L2 gradient penalty on all parameters
-            l2_norm = jnp.sum(jnp.square(params))
-            l2_loss = self.l2_reg * l2_norm
-
-            total_loss = l1_loss + l2_loss
-            metrics: MetricDict = {
-                "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
-                "Regularization/L1 Penalty": (STATS_LEVEL, l1_loss),
-                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
-                "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
-            }
+            total_loss, metrics = l1_l2_regularizer(
+                params, int_params, self.l1_reg, self.l2_reg
+            )
 
             # Gating on Python-level constants (frozen dataclass fields) so JAX eliminates
             # dead code at trace time.

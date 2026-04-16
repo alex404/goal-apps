@@ -17,6 +17,7 @@ from sklearn.cluster import KMeans
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
+from apps.interface.clustering import CLUSTERING_METRIC_KEYS
 from apps.interface.clustering.analyses import (
     ClusterStatistics,
     ClusterStatisticsAnalysis,
@@ -25,13 +26,12 @@ from apps.interface.clustering.analyses import (
     OptimalMergeAnalysis,
 )
 from apps.interface.clustering.config import ClusteringAnalysesConfig
-from apps.interface.clustering.metrics import ClusteringMetrics
 from apps.interface.clustering.protocols import (
     CanComputePrototypes,
     HasSoftAssignments,
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
-from apps.runtime import LLMetrics, Logger, RunHandler
+from apps.runtime import L1_L2_METRIC_KEYS, LL_METRIC_KEYS, Logger, RunHandler
 
 from .trainers import GradientTrainer
 from .types import MFA
@@ -384,11 +384,21 @@ class MFAModel(
 
         return analyses + list(dataset.get_dataset_analyses().values())
 
+    @property
+    def training_metric_keys(self) -> frozenset[str]:
+        from .metrics import MFA_TRAINING_METRIC_KEYS
+        from .trainers import ENTROPY_REG_METRIC_KEYS
+
+        keys = MFA_TRAINING_METRIC_KEYS | L1_L2_METRIC_KEYS
+        if self.trainer.ent_reg > 0:
+            keys = keys | ENTROPY_REG_METRIC_KEYS
+        return keys
+
     @override
     def metric_names(self, dataset: ClusteringDataset) -> frozenset[str]:
-        names: set[str] = set(LLMetrics.__annotations__.keys())
+        keys = LL_METRIC_KEYS | self.training_metric_keys
         if dataset.has_labels:
-            names |= ClusteringMetrics.__annotations__.keys()
+            keys = keys | CLUSTERING_METRIC_KEYS
         for analysis in self.get_analyses(dataset):
-            names |= analysis.metric_names
-        return frozenset(names)
+            keys = keys | analysis.metric_names
+        return keys

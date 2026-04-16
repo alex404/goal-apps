@@ -16,7 +16,7 @@ from jax import Array
 from apps.interface import (
     ClusteringDataset,
 )
-from apps.runtime import STATS_NUM, Logger, MetricDict, RunHandler
+from apps.runtime import STATS_LEVEL, Logger, MetricDict, RunHandler, l1_l2_regularizer
 
 from .metrics import log_epoch_metrics, pre_log_epoch_metrics
 from .types import AnyHMoG, AnyLGM
@@ -34,8 +34,20 @@ class MaskingStrategy(Enum):
 # Start logger
 log = logging.getLogger(__name__)
 
-STATS_LEVEL = jnp.array(STATS_NUM)
-INFO_LEVEL = jnp.array(logging.INFO)
+### Metric Key Constants ###
+
+PRECISION_REG_METRIC_KEYS: frozenset[str] = frozenset({
+    "Regularization/Precision Trace Sum",
+    "Regularization/Precision LogDet Sum",
+    "Regularization/Trace Penalty",
+    "Regularization/LogDet Penalty",
+})
+
+ENTROPY_REG_METRIC_KEYS: frozenset[str] = frozenset({
+    "Regularization/Mixture Entropy",
+    "Regularization/Entropy Penalty",
+})
+
 
 ### Helpers ###
 
@@ -243,21 +255,9 @@ class FullGradientTrainer:
             lkl_params = model.lkl_fun_man.join_coords(obs_params, int_params)
             rho = model.conjugation_parameters(lkl_params)
 
-            # L1 regularization on interactions
-            l1_norm = jnp.sum(jnp.abs(int_params))
-            l1_loss = self.l1_reg * l1_norm
-
-            # L2 gradient penalty on all parameters
-            l2_norm = jnp.sum(jnp.square(params))
-            l2_loss = self.l2_reg * l2_norm
-
-            total_loss = l1_loss + l2_loss
-            metrics: MetricDict = {
-                "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
-                "Regularization/L1 Penalty": (STATS_LEVEL, l1_loss),
-                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
-                "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
-            }
+            total_loss, metrics = l1_l2_regularizer(
+                params, int_params, self.l1_reg, self.l2_reg
+            )
 
             prs_loss, prs_metrics = precision_regularizer(
                 model, rho, mix_params, self.upr_prs_reg, self.lwr_prs_reg
@@ -512,27 +512,8 @@ class LGMPreTrainer:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
         def loss_with_metrics(params: Array) -> tuple[Array, MetricDict]:
-            # Extract components for regularization
             _, int_params, _ = model.split_coords(params)
-
-            # L1 regularization on interactions
-            l1_norm = jnp.sum(jnp.abs(int_params))
-            l1_loss = self.l1_reg * l1_norm
-
-            # L2 gradient penalty on all parameters
-            l2_norm = jnp.sum(jnp.square(params))
-            l2_loss = self.l2_reg * l2_norm
-
-            total_loss = l1_loss + l2_loss
-
-            metrics: MetricDict = {
-                "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
-                "Regularization/L1 Penalty": (STATS_LEVEL, l1_loss),
-                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
-                "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
-            }
-
-            return total_loss, metrics
+            return l1_l2_regularizer(params, int_params, self.l1_reg, self.l2_reg)
 
         # Create a function that computes loss, metrics, and gradients in one pass
         return jax.grad(loss_with_metrics, has_aux=True)

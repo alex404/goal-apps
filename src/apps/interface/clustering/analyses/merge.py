@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC
 from dataclasses import dataclass
-from typing import Any, ClassVar, TypedDict, override
+from typing import Any, ClassVar, override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -22,42 +22,21 @@ from numpy.typing import NDArray
 from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
-from ....runtime import STATS_NUM, Artifact, MetricDict, RunHandler, as_metric_dict
+from ....runtime import STATS_LEVEL, Artifact, MetricDict, RunHandler
 from ...analysis import Analysis
 from ..dataset import ClusteringDataset
 from ..metrics import fit_cluster_mapping
 from .hierarchy import ClusterHierarchy, CoAssignmentHierarchy
 
-STATS_LEVEL = jnp.array(STATS_NUM)
+OPTIMAL_MERGE_METRIC_KEYS: frozenset[str] = frozenset({
+    "Merging/Optimal Train Accuracy", "Merging/Optimal Train NMI", "Merging/Optimal Train ARI",
+    "Merging/Optimal Test Accuracy", "Merging/Optimal Test NMI", "Merging/Optimal Test ARI",
+})
 
-
-### Metric TypedDicts ###
-
-
-OptimalMergeMetrics = TypedDict(
-    "OptimalMergeMetrics",
-    {
-        "Merging/Optimal Train Accuracy": tuple[Array, Array],
-        "Merging/Optimal Train NMI": tuple[Array, Array],
-        "Merging/Optimal Train ARI": tuple[Array, Array],
-        "Merging/Optimal Test Accuracy": tuple[Array, Array],
-        "Merging/Optimal Test NMI": tuple[Array, Array],
-        "Merging/Optimal Test ARI": tuple[Array, Array],
-    },
-)
-
-
-CoAssignmentMergeMetrics = TypedDict(
-    "CoAssignmentMergeMetrics",
-    {
-        "Merging/CoAssignment Train Accuracy": tuple[Array, Array],
-        "Merging/CoAssignment Train NMI": tuple[Array, Array],
-        "Merging/CoAssignment Train ARI": tuple[Array, Array],
-        "Merging/CoAssignment Test Accuracy": tuple[Array, Array],
-        "Merging/CoAssignment Test NMI": tuple[Array, Array],
-        "Merging/CoAssignment Test ARI": tuple[Array, Array],
-    },
-)
+COASSIGNMENT_MERGE_METRIC_KEYS: frozenset[str] = frozenset({
+    "Merging/CoAssignment Train Accuracy", "Merging/CoAssignment Train NMI", "Merging/CoAssignment Train ARI",
+    "Merging/CoAssignment Test Accuracy", "Merging/CoAssignment Test NMI", "Merging/CoAssignment Test ARI",
+})
 
 
 ### Utility Functions ###
@@ -297,7 +276,7 @@ class MergeAnalysis[T: MergeResults](Analysis[ClusteringDataset, Any, T], ABC):
 class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
     """Merge clusters using optimal (Hungarian) assignment to classes."""
 
-    metrics_type: ClassVar[type[Any]] = OptimalMergeMetrics
+    metric_keys: ClassVar[frozenset[str]] = OPTIMAL_MERGE_METRIC_KEYS
 
     @property
     @override
@@ -355,7 +334,7 @@ class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
 
     @override
     def metrics(self, artifact: OptimalMergeResults) -> MetricDict:
-        m: OptimalMergeMetrics = {
+        return {
             "Merging/Optimal Train Accuracy": (STATS_LEVEL, jnp.array(artifact.train_accuracy)),
             "Merging/Optimal Train NMI": (STATS_LEVEL, jnp.array(artifact.train_nmi_score)),
             "Merging/Optimal Train ARI": (STATS_LEVEL, jnp.array(artifact.train_ari_score)),
@@ -363,14 +342,13 @@ class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
             "Merging/Optimal Test NMI": (STATS_LEVEL, jnp.array(artifact.test_nmi_score)),
             "Merging/Optimal Test ARI": (STATS_LEVEL, jnp.array(artifact.test_ari_score)),
         }
-        return as_metric_dict(m)
 
 
 @dataclass(frozen=True)
 class CoAssignmentMergeAnalysis(MergeAnalysis[CoAssignmentMergeResults]):
     """Merge clusters using co-assignment hierarchy."""
 
-    metrics_type: ClassVar[type[Any]] = CoAssignmentMergeMetrics
+    metric_keys: ClassVar[frozenset[str]] = COASSIGNMENT_MERGE_METRIC_KEYS
 
     @property
     @override
@@ -427,7 +405,7 @@ class CoAssignmentMergeAnalysis(MergeAnalysis[CoAssignmentMergeResults]):
 
     @override
     def metrics(self, artifact: CoAssignmentMergeResults) -> MetricDict:
-        m: CoAssignmentMergeMetrics = {
+        return {
             "Merging/CoAssignment Train Accuracy": (STATS_LEVEL, jnp.array(artifact.train_accuracy)),
             "Merging/CoAssignment Train NMI": (STATS_LEVEL, jnp.array(artifact.train_nmi_score)),
             "Merging/CoAssignment Train ARI": (STATS_LEVEL, jnp.array(artifact.train_ari_score)),
@@ -435,4 +413,3 @@ class CoAssignmentMergeAnalysis(MergeAnalysis[CoAssignmentMergeResults]):
             "Merging/CoAssignment Test NMI": (STATS_LEVEL, jnp.array(artifact.test_nmi_score)),
             "Merging/CoAssignment Test ARI": (STATS_LEVEL, jnp.array(artifact.test_ari_score)),
         }
-        return as_metric_dict(m)

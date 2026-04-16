@@ -2,31 +2,63 @@
 
 from __future__ import annotations
 
-import logging
-
 import jax.numpy as jnp
 from goal.geometry import Replicated
-from goal.models import FactorAnalysis, FullNormal
+from goal.models import FullNormal
 from jax import Array
 
 from apps.interface import ClusteringDataset
 from apps.interface.clustering import add_clustering_metrics, clustering_nmi
 from apps.runtime import (
-    STATS_NUM,
+    INFO_LEVEL,
+    STATS_LEVEL,
     Logger,
     MetricDict,
     add_ll_metrics,
     log_with_frequency,
+    stats_keys,
     update_stats,
 )
 
 from .analyses.base import analyze_component, cluster_assignments
 from .types import AnyHMoG, AnyLGM
 
-log = logging.getLogger(__name__)
+_CONJUGATION_KEYS = frozenset({
+    "Conjugation/Location Norm", "Conjugation/Mean Norm",
+    "Conjugation/Precision Cond", "Conjugation/Covariance Cond",
+    "Conjugation/Precision LogDet", "Conjugation/Covariance LogDet",
+})
 
-STATS_LEVEL = jnp.array(STATS_NUM)
-INFO_LEVEL = jnp.array(logging.INFO)
+_MIXTURE_KEYS = frozenset({
+    "Mixture/Entropy", "Mixture/Effective Components",
+    "Mixture/Dead Components", "Mixture/Dying Components",
+})
+
+# Keys produced by pre_log_epoch_metrics (LGM pretraining phase)
+HMOG_PRE_TRAINING_METRIC_KEYS: frozenset[str] = (
+    frozenset({"Regularization/Loading Sparsity", "Timing/Wall Clock (s)"})
+    | _CONJUGATION_KEYS
+    | stats_keys("Params", "Obs Location", "Obs Precision", "Obs Interaction",
+                 "Lat Location", "Lat Precision")
+    | stats_keys("Means", "Obs Mean", "Obs Cov", "Obs Interaction",
+                 "Lat Mean", "Lat Cov")
+    | stats_keys("Grad Norms", "Obs Location", "Obs Precision", "Obs Interaction",
+                 "Lat Location", "Lat Precision")
+)
+
+# Keys produced by log_epoch_metrics (full HMoG training phase)
+HMOG_TRAINING_METRIC_KEYS: frozenset[str] = (
+    frozenset({"Regularization/Loading Sparsity", "Timing/Wall Clock (s)"})
+    | _CONJUGATION_KEYS | _MIXTURE_KEYS
+    | stats_keys("Params", "Obs Location", "Obs Precision", "Obs Interaction",
+                 "Lat Location", "Lat Precision", "Lat Interaction", "Categorical")
+    | stats_keys("Means", "Obs Mean", "Obs Cov", "Obs Interaction",
+                 "Lat Mean", "Lat Cov", "Lat Interaction", "Categorical")
+    | stats_keys("Grad Norms", "Obs Location", "Obs Precision", "Obs Interaction",
+                 "Lat Location", "Lat Precision", "Lat Interaction", "Categorical")
+    | stats_keys("Components", "Location Norm", "Mean Norm", "Precision Cond",
+                 "Covariance Cond", "Precision LogDet", "Covariance LogDet")
+)
 
 
 def add_conjugation_metrics(
@@ -50,11 +82,11 @@ def add_conjugation_metrics(
 
 def pre_log_epoch_metrics(
     dataset: ClusteringDataset,
-    model: AnyLGM | FactorAnalysis,
+    model: AnyLGM,
     logger: Logger,
     params: Array,
     epoch: Array,
-    initial_metrics: MetricDict,
+    reg_metrics: MetricDict,
     batch_grads: Array | None = None,
     log_freq: int = 1,
 ) -> None:
@@ -63,7 +95,7 @@ def pre_log_epoch_metrics(
     test_data = dataset.test_data
 
     def compute_metrics() -> MetricDict:
-        metrics: MetricDict = dict(initial_metrics)
+        metrics: MetricDict = dict(reg_metrics)
 
         # Log-likelihood metrics
         train_ll = model.average_log_observable_density(params, train_data)
@@ -135,7 +167,7 @@ def log_epoch_metrics(
     logger: Logger,
     params: Array,
     epoch: Array,
-    initial_metrics: MetricDict,
+    reg_metrics: MetricDict,
     batch_grads: Array | None = None,
     log_freq: int = 1,
 ) -> None:
@@ -144,7 +176,7 @@ def log_epoch_metrics(
     test_data = dataset.test_data
 
     def compute_metrics() -> MetricDict:
-        metrics: MetricDict = dict(initial_metrics)
+        metrics: MetricDict = dict(reg_metrics)
 
         # Log-likelihood metrics
         train_ll = model.average_log_observable_density(params, train_data)

@@ -17,6 +17,7 @@ from .config import (
 )
 from .dataset import ClusteringDataset, ClusteringDatasetConfig
 from .metrics import (
+    CLUSTERING_METRIC_KEYS,
     add_clustering_metrics,
     cluster_accuracy,
     clustering_nmi,
@@ -31,6 +32,7 @@ from .protocols import (
 )
 
 __all__ = [
+    "CLUSTERING_METRIC_KEYS",
     "AnalysisConfig",
     "CanComputePrototypes",
     "ClusterStatisticsConfig",

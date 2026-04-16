@@ -6,31 +6,22 @@ These can be used within jax.jit-compiled training loops.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
-from typing import TypedDict
 
 import jax
 import jax.numpy as jnp
 from jax import Array
 
-from apps.runtime.metrics import as_metric_dict
-from apps.runtime.util import MetricDict
+from apps.runtime import INFO_LEVEL, MetricDict
 
-INFO_LEVEL = jnp.array(logging.INFO)
-
-
-ClusteringMetrics = TypedDict(
-    "ClusteringMetrics",
-    {
-        "Clustering/Train Accuracy": tuple[Array, Array],
-        "Clustering/Test Accuracy": tuple[Array, Array],
-        "Clustering/Train NMI": tuple[Array, Array],
-        "Clustering/Test NMI": tuple[Array, Array],
-        "Clustering/Train ARI": tuple[Array, Array],
-        "Clustering/Test ARI": tuple[Array, Array],
-    },
-)
+CLUSTERING_METRIC_KEYS: frozenset[str] = frozenset({
+    "Clustering/Train Accuracy",
+    "Clustering/Test Accuracy",
+    "Clustering/Train NMI",
+    "Clustering/Test NMI",
+    "Clustering/Train ARI",
+    "Clustering/Test ARI",
+})
 
 
 def _build_contingency(
@@ -51,7 +42,7 @@ def _build_contingency(
 def fit_cluster_mapping(
     true_labels: Array, pred_clusters: Array, n_clusters: int, n_classes: int
 ) -> Array:
-    """Derive greedy cluster→class mapping from labeled data.
+    """Derive greedy cluster->class mapping from labeled data.
 
     Builds a contingency matrix and assigns each cluster to its most frequent
     class. Returns the mapping array so it can be applied to a held-out split.
@@ -63,7 +54,7 @@ def fit_cluster_mapping(
         n_classes: Number of ground-truth classes
 
     Returns:
-        cluster_to_label: Array of shape (n_clusters,) mapping cluster index → class label
+        cluster_to_label: Array of shape (n_clusters,) mapping cluster index -> class label
     """
     contingency = _build_contingency(n_clusters, n_classes, pred_clusters, true_labels)
     return jnp.argmax(contingency, axis=1)
@@ -74,7 +65,7 @@ def cluster_accuracy(
 ) -> Array:
     """Compute clustering accuracy with greedy label assignment.
 
-    Fits the cluster→class mapping from the same data it evaluates on.
+    Fits the cluster->class mapping from the same data it evaluates on.
     Use fit_cluster_mapping + direct evaluation when you need to apply a
     mapping derived from a separate (training) split.
 
@@ -186,7 +177,7 @@ def add_clustering_metrics(
 ) -> MetricDict:
     """Add clustering evaluation metrics.
 
-    The cluster→class mapping is derived from the training split and applied
+    The cluster->class mapping is derived from the training split and applied
     to both splits, so test accuracy is a proper held-out evaluation.
 
     Args:
@@ -200,13 +191,7 @@ def add_clustering_metrics(
         clustering_nmi_fn: Function to compute normalized mutual information
 
     Returns:
-        Updated metrics dict with:
-        - Clustering/Train Accuracy
-        - Clustering/Test Accuracy
-        - Clustering/Train NMI
-        - Clustering/Test NMI
-        - Clustering/Train ARI
-        - Clustering/Test ARI
+        Updated metrics dict with clustering accuracy, NMI, and ARI.
     """
     train_mapping = fit_cluster_mapping(
         train_labels, train_clusters, n_clusters, n_classes
@@ -220,13 +205,12 @@ def add_clustering_metrics(
     train_ari = clustering_ari(n_clusters, n_classes, train_clusters, train_labels)
     test_ari = clustering_ari(n_clusters, n_classes, test_clusters, test_labels)
 
-    cm: ClusteringMetrics = {
+    metrics.update({
         "Clustering/Train Accuracy": (INFO_LEVEL, train_acc),
         "Clustering/Test Accuracy": (INFO_LEVEL, test_acc),
         "Clustering/Train NMI": (INFO_LEVEL, train_nmi),
         "Clustering/Test NMI": (INFO_LEVEL, test_nmi),
         "Clustering/Train ARI": (INFO_LEVEL, train_ari),
         "Clustering/Test ARI": (INFO_LEVEL, test_ari),
-    }
-    metrics.update(as_metric_dict(cm))
+    })
     return metrics

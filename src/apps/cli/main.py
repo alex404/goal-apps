@@ -10,6 +10,7 @@ from rich.table import Table
 
 from .sweep import (
     OptunaValidationError,
+    _default_storage,
     _merge_from_template,
     clear_optuna_study,
     create_optuna_study,
@@ -77,7 +78,9 @@ def train(overrides: list[str] = overrides, dry_run: bool = train_dry_run):
     from .configs import ClusteringRunConfig
     from .initialize import initialize_run
 
-    handler, logger, dataset, model, seed = initialize_run(ClusteringRunConfig, overrides)
+    handler, logger, dataset, model, seed = initialize_run(
+        ClusteringRunConfig, overrides
+    )
     key = jax.random.PRNGKey(seed)
     if dry_run:
         return
@@ -107,7 +110,9 @@ def analyze(overrides: list[str] = overrides):
     from .configs import ClusteringRunConfig
     from .initialize import initialize_run
 
-    handler, logger, dataset, model, seed = initialize_run(ClusteringRunConfig, overrides)
+    handler, logger, dataset, model, seed = initialize_run(
+        ClusteringRunConfig, overrides
+    )
     key = jax.random.PRNGKey(seed)
 
     # Run analysis
@@ -121,7 +126,9 @@ def analyze(overrides: list[str] = overrides):
 tune_app = typer.Typer()
 main.add_typer(tune_app, name="tune", help="Hyperparameter tuning commands.")
 
-tune_wandb_dry_run = typer.Option(False, "--dry-run", help="Print sweep config and exit")
+tune_wandb_dry_run = typer.Option(
+    False, "--dry-run", help="Print sweep config and exit"
+)
 tune_wandb_validate = typer.Option(
     True,
     "--validate/--no-validate",
@@ -161,7 +168,9 @@ def tune_wandb(
 
 
 optuna_app = typer.Typer()
-tune_app.add_typer(optuna_app, name="optuna", help="Optuna hyperparameter optimization.")
+tune_app.add_typer(
+    optuna_app, name="optuna", help="Optuna hyperparameter optimization."
+)
 
 
 @optuna_app.command(name="create")
@@ -223,7 +232,7 @@ def optuna_create(
         storage=storage,
     )
     rprint(f"Created study: {study.study_name}")
-    rprint(f"Storage: {study._storage}")
+    rprint(f"Storage: {storage or _default_storage(study_name)}")
     rprint(f"Run trials with: goal tune optuna run {study_name}")
 
 
@@ -253,13 +262,20 @@ def optuna_run(
 def optuna_status(
     study_name: str = typer.Argument(help="Name of the study to inspect"),
     top_n: int = typer.Option(10, "--top", "-t", help="Number of top trials to show"),
-    pct: float = typer.Option(10.0, "--pct", "-p", help="Top/bottom percentile to highlight in distributions"),
-    n_pairs: int = typer.Option(4, "--pairs", "-n", help="Number of top sensitive params for pairwise grids (0 to skip)"),
+    pct: float = typer.Option(
+        10.0, "--pct", "-p", help="Top/bottom percentile to highlight in distributions"
+    ),
+    n_pairs: int = typer.Option(
+        4,
+        "--pairs",
+        "-n",
+        help="Number of top sensitive params for pairwise grids (0 to skip)",
+    ),
 ):
     """Show study status: trial counts, best results, top configurations."""
     import optuna
 
-    from .sweep import _default_storage, _study_config_path
+    from .sweep import _study_config_path
 
     config_path = _study_config_path(study_name)
     if not config_path.exists():
@@ -293,7 +309,9 @@ def optuna_status(
 
     rprint(f"\n[bold]Study: {study_name}[/bold]")
     rprint(f"Metric: {metric}  (direction: {direction.lower()})")
-    rprint(f"Trials: {len(completed)} completed, {len(early_stopped)} early-stopped, {len(diverged)} diverged, {len(failed)} failed, {len(running)} running")
+    rprint(
+        f"Trials: {len(completed)} completed, {len(early_stopped)} early-stopped, {len(diverged)} diverged, {len(failed)} failed, {len(running)} running"
+    )
 
     if not completed:
         rprint("\nNo completed trials yet.")
@@ -304,9 +322,18 @@ def optuna_status(
 
     # Visualizations
     print_objective_sparkline(completed, direction)
-    print_param_distributions_split(completed, direction, pct=pct, all_trials=all_sampled)
-    if n_pairs > 1:
-        print_param_pair_coverage(completed, direction, pct=pct, n_params=n_pairs, all_trials=all_sampled, converged_trials=converged)
+    print_param_distributions_split(
+        completed, direction, pct=pct, all_trials=all_sampled
+    )
+    if n_pairs > 0:
+        print_param_pair_coverage(
+            completed,
+            direction,
+            pct=pct,
+            n_params=n_pairs,
+            all_trials=all_sampled,
+            converged_trials=converged,
+        )
 
 
 @optuna_app.command(name="reset")
