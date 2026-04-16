@@ -379,6 +379,7 @@ class ProjectionHMoGModel(
     lgm_noise_scale: float
     mix_init_scale: float
     analyses_config: ClusteringAnalysesConfig
+    kmeans_init: bool
 
     def __init__(
         self,

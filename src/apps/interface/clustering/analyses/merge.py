@@ -127,7 +127,7 @@ def hierarchy_to_mapping(
     return mapping
 
 
-def _fit_label_permutation(
+def fit_label_permutation(
     mapping: Array, probs: Array, labels: Array, n_classes: int
 ) -> Array:
     """Derive the merged-class→true-label permutation from labeled data."""
@@ -150,7 +150,7 @@ def compute_merge_metrics(
         probs: Soft cluster assignment probabilities (n_samples, n_clusters)
         labels: Ground-truth class labels (n_samples,)
         label_permutation: Merged-class→true-label permutation derived from
-            training data via _fit_label_permutation. Must not be fit on the
+            training data via fit_label_permutation. Must not be fit on the
             same split being evaluated.
     """
     merged_probs = jnp.matmul(probs, mapping)
@@ -314,7 +314,7 @@ class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
         for i, cluster_idx in enumerate(valid_clusters):
             full_mapping = full_mapping.at[cluster_idx].set(filtered_mapping[i])
 
-        label_permutation = _fit_label_permutation(full_mapping, train_probs, dataset.train_labels, n_classes)
+        label_permutation = fit_label_permutation(full_mapping, train_probs, dataset.train_labels, n_classes)
         train_metrics = compute_merge_metrics(full_mapping, train_probs, dataset.train_labels, label_permutation=label_permutation)
         test_probs = model.posterior_soft_assignments(params, dataset.test_data)
         test_metrics = compute_merge_metrics(full_mapping, test_probs, dataset.test_labels, label_permutation=label_permutation)
@@ -385,7 +385,7 @@ class CoAssignmentMergeAnalysis(MergeAnalysis[CoAssignmentMergeResults]):
         for i, cluster_idx in enumerate(valid_clusters):
             full_mapping = full_mapping.at[cluster_idx].set(filtered_mapping[i])
 
-        label_permutation = _fit_label_permutation(full_mapping, train_probs, dataset.train_labels, n_classes)
+        label_permutation = fit_label_permutation(full_mapping, train_probs, dataset.train_labels, n_classes)
         train_metrics = compute_merge_metrics(full_mapping, train_probs, dataset.train_labels, label_permutation=label_permutation)
         test_probs = model.posterior_soft_assignments(params, dataset.test_data)
         test_metrics = compute_merge_metrics(full_mapping, test_probs, dataset.test_labels, label_permutation=label_permutation)

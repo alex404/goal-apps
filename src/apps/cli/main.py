@@ -10,11 +10,11 @@ from rich.table import Table
 
 from .sweep import (
     OptunaValidationError,
-    _default_storage,
-    _merge_from_template,
     clear_optuna_study,
     create_optuna_study,
     create_sweep_config,
+    default_storage,
+    merge_from_template,
     reset_optuna_study,
     run_optuna_trial,
     validate_optuna_config,
@@ -204,7 +204,7 @@ def optuna_create(
             model.full.ent_reg=suggest_float:1e-1:3e0:log
     """
     if template is not None:
-        overrides = _merge_from_template(template, overrides)
+        overrides = merge_from_template(template, overrides)
 
     if study_name is None:
         for o in overrides:
@@ -232,7 +232,7 @@ def optuna_create(
         storage=storage,
     )
     rprint(f"Created study: {study.study_name}")
-    rprint(f"Storage: {storage or _default_storage(study_name)}")
+    rprint(f"Storage: {storage or default_storage(study_name)}")
     rprint(f"Run trials with: goal tune optuna run {study_name}")
 
 
@@ -275,9 +275,9 @@ def optuna_status(
     """Show study status: trial counts, best results, top configurations."""
     import optuna
 
-    from .sweep import _study_config_path
+    from .sweep import study_config_path
 
-    config_path = _study_config_path(study_name)
+    config_path = study_config_path(study_name)
     if not config_path.exists():
         rprint(f"[red]Study '{study_name}' not found[/red]")
         raise typer.Exit(1)
@@ -287,7 +287,7 @@ def optuna_status(
     study_config = OmegaConf.load(config_path)
     metric: str = study_config.metric
 
-    storage = _default_storage(study_name)
+    storage = default_storage(study_name)
     study = optuna.load_study(study_name=study_name, storage=storage)
     trials = study.trials
 

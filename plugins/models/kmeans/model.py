@@ -27,7 +27,7 @@ from apps.interface import (
 )
 from apps.interface.clustering.analyses import ClusterStatisticsAnalysis
 from apps.interface.clustering.protocols import CanComputePrototypes
-from apps.runtime import Logger, RunHandler
+from apps.runtime import INFO_LEVEL, Logger, RunHandler
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +56,17 @@ cs.store(group="model", name="kmeans", node=KMeansConfig)
 
 class KMeansModel(ClusteringModel, CanComputePrototypes):
     """K-means clustering benchmark model."""
+
+    _n_clusters: int
+    _data_dim: int
+    random_state: int
+    max_iter: int
+    n_init: int
+    tol: float
+    algorithm: str
+    _kmeans: KMeans | None
+    _cluster_centers: np.ndarray[Any, Any] | None
+    _train_data: np.ndarray[Any, Any] | None
 
     def __init__(
         self,
@@ -121,7 +132,7 @@ class KMeansModel(ClusteringModel, CanComputePrototypes):
             n_clusters=self._n_clusters,
             random_state=self.random_state,
             max_iter=self.max_iter,
-            n_init=self.n_init,
+            n_init=self.n_init,  # pyright: ignore[reportArgumentType]
             tol=self.tol,
             algorithm=self.algorithm,
         )
@@ -157,13 +168,13 @@ class KMeansModel(ClusteringModel, CanComputePrototypes):
             accuracy = float(np.mean(cluster_to_class[train_labels] == true_labels))
 
             logger.log_metrics(
-                {"K-means/Train NMI": (20, jnp.array(nmi))}, jnp.array(0)
+                {"K-means/Train NMI": (INFO_LEVEL, jnp.array(nmi))}, jnp.array(0)
             )
             logger.log_metrics(
-                {"K-means/Train ARI": (20, jnp.array(ari))}, jnp.array(0)
+                {"K-means/Train ARI": (INFO_LEVEL, jnp.array(ari))}, jnp.array(0)
             )
             logger.log_metrics(
-                {"K-means/Train Accuracy": (20, jnp.array(accuracy))}, jnp.array(0)
+                {"K-means/Train Accuracy": (INFO_LEVEL, jnp.array(accuracy))}, jnp.array(0)
             )
 
             # Test metrics
@@ -176,13 +187,13 @@ class KMeansModel(ClusteringModel, CanComputePrototypes):
             test_accuracy = float(np.mean(cluster_to_class[test_labels] == test_true_labels))
 
             logger.log_metrics(
-                {"K-means/Test NMI": (20, jnp.array(test_nmi))}, jnp.array(0)
+                {"K-means/Test NMI": (INFO_LEVEL, jnp.array(test_nmi))}, jnp.array(0)
             )
             logger.log_metrics(
-                {"K-means/Test ARI": (20, jnp.array(test_ari))}, jnp.array(0)
+                {"K-means/Test ARI": (INFO_LEVEL, jnp.array(test_ari))}, jnp.array(0)
             )
             logger.log_metrics(
-                {"K-means/Test Accuracy": (20, jnp.array(test_accuracy))}, jnp.array(0)
+                {"K-means/Test Accuracy": (INFO_LEVEL, jnp.array(test_accuracy))}, jnp.array(0)
             )
 
             log.info(
@@ -316,6 +327,20 @@ cs.store(group="model", name="pca_kmeans", node=PCAKMeansConfig)
 class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
     """PCA + K-means clustering benchmark model."""
 
+    _n_clusters: int
+    _data_dim: int
+    n_components: int | float
+    pca_random_state: int
+    random_state: int
+    max_iter: int
+    n_init: int
+    tol: float
+    algorithm: str
+    _pipeline: Pipeline | None
+    _pca: PCA | None
+    _kmeans: KMeans | None
+    _train_data: np.ndarray[Any, Any] | None
+
     def __init__(
         self,
         n_clusters: int,
@@ -396,7 +421,7 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
             n_clusters=self._n_clusters,
             random_state=self.random_state,
             max_iter=self.max_iter,
-            n_init=self.n_init,
+            n_init=self.n_init,  # pyright: ignore[reportArgumentType]
             tol=self.tol,
             algorithm=self.algorithm,
         )
@@ -415,11 +440,11 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
                 f"PCA explains {explained_var:.3f} of variance with {self._pca.n_components_} components"
             )
             logger.log_metrics(
-                {"PCA/Explained_Variance_Ratio": (20, jnp.array(explained_var))},
+                {"PCA/Explained_Variance_Ratio": (INFO_LEVEL, jnp.array(explained_var))},
                 jnp.array(0),
             )
             logger.log_metrics(
-                {"PCA/N_Components": (20, jnp.array(self._pca.n_components_))},
+                {"PCA/N_Components": (INFO_LEVEL, jnp.array(self._pca.n_components_))},
                 jnp.array(0),
             )
 
@@ -448,13 +473,13 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
             accuracy = float(np.mean(cluster_to_class[train_labels] == true_labels))
 
             logger.log_metrics(
-                {"PCA+K-means/Train NMI": (20, jnp.array(nmi))}, jnp.array(0)
+                {"PCA+K-means/Train NMI": (INFO_LEVEL, jnp.array(nmi))}, jnp.array(0)
             )
             logger.log_metrics(
-                {"PCA+K-means/Train ARI": (20, jnp.array(ari))}, jnp.array(0)
+                {"PCA+K-means/Train ARI": (INFO_LEVEL, jnp.array(ari))}, jnp.array(0)
             )
             logger.log_metrics(
-                {"PCA+K-means/Train Accuracy": (20, jnp.array(accuracy))}, jnp.array(0)
+                {"PCA+K-means/Train Accuracy": (INFO_LEVEL, jnp.array(accuracy))}, jnp.array(0)
             )
 
             # Test metrics
@@ -467,13 +492,13 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
             test_accuracy = float(np.mean(cluster_to_class[test_labels] == test_true_labels))
 
             logger.log_metrics(
-                {"PCA+K-means/Test NMI": (20, jnp.array(test_nmi))}, jnp.array(0)
+                {"PCA+K-means/Test NMI": (INFO_LEVEL, jnp.array(test_nmi))}, jnp.array(0)
             )
             logger.log_metrics(
-                {"PCA+K-means/Test ARI": (20, jnp.array(test_ari))}, jnp.array(0)
+                {"PCA+K-means/Test ARI": (INFO_LEVEL, jnp.array(test_ari))}, jnp.array(0)
             )
             logger.log_metrics(
-                {"PCA+K-means/Test Accuracy": (20, jnp.array(test_accuracy))},
+                {"PCA+K-means/Test Accuracy": (INFO_LEVEL, jnp.array(test_accuracy))},
                 jnp.array(0),
             )
 
@@ -496,7 +521,7 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
 
     def generate(self, params: Array, key: Array, n_samples: int) -> Array:
         """Generate samples by sampling from clusters and inverse PCA transform."""
-        if self._pipeline is None:
+        if self._pipeline is None or self._kmeans is None or self._pca is None:
             raise ValueError("Model must be trained before generating samples")
 
         rng = np.random.RandomState(int(key[0]) if len(key) > 0 else 42)
@@ -530,7 +555,7 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
 
     def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get cluster prototypes in original space (inverse transform of PCA centers)."""
-        if self._pipeline is None:
+        if self._kmeans is None or self._pca is None:
             raise ValueError("Model must be trained before getting prototypes")
 
         cluster_centers_pca = self._kmeans.cluster_centers_
@@ -540,7 +565,7 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
     @override
     def compute_cluster_prototypes(self, params: Array) -> list[Array]:
         """Compute cluster prototypes in original space (inverse transform of PCA centers)."""
-        if self._pipeline is None:
+        if self._kmeans is None or self._pca is None:
             raise ValueError("Model must be trained before computing prototypes")
 
         cluster_centers_pca = self._kmeans.cluster_centers_

@@ -23,7 +23,7 @@ from apps.interface import (
     ClusteringModel,
     ClusteringModelConfig,
 )
-from apps.runtime import Logger, RunHandler
+from apps.runtime import INFO_LEVEL, Logger, RunHandler
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +52,18 @@ cs.store(group="model", name="lda", node=LDAConfig)
 class LDAModel(ClusteringModel):
     """LDA topic modeling benchmark for clustering."""
 
+    _n_clusters: int
+    _data_dim: int
+    random_state: int
+    max_iter: int
+    learning_method: str
+    alpha: float
+    beta: float
+    learning_decay: float
+    perp_tol: float
+    _lda: LatentDirichletAllocation | None
+    _train_data: np.ndarray[Any, Any] | None
+
     def __init__(
         self,
         n_clusters: int,
@@ -74,7 +86,6 @@ class LDAModel(ClusteringModel):
         self.learning_decay = learning_decay
         self.perp_tol = perp_tol
         self._lda = None
-        self._topic_distributions = None
         self._train_data = None
 
     @property
@@ -163,10 +174,10 @@ class LDAModel(ClusteringModel):
 
             accuracy = float(np.mean(topic_to_class[train_labels] == true_labels))
 
-            logger.log_metrics({"LDA/Train NMI": (20, jnp.array(nmi))}, jnp.array(0))
-            logger.log_metrics({"LDA/Train ARI": (20, jnp.array(ari))}, jnp.array(0))
+            logger.log_metrics({"LDA/Train NMI": (INFO_LEVEL, jnp.array(nmi))}, jnp.array(0))
+            logger.log_metrics({"LDA/Train ARI": (INFO_LEVEL, jnp.array(ari))}, jnp.array(0))
             logger.log_metrics(
-                {"LDA/Train Accuracy": (20, jnp.array(accuracy))}, jnp.array(0)
+                {"LDA/Train Accuracy": (INFO_LEVEL, jnp.array(accuracy))}, jnp.array(0)
             )
 
             # Test metrics
@@ -183,13 +194,13 @@ class LDAModel(ClusteringModel):
             test_accuracy = float(np.mean(topic_to_class[test_labels] == test_true_labels))
 
             logger.log_metrics(
-                {"LDA/Test NMI": (20, jnp.array(test_nmi))}, jnp.array(0)
+                {"LDA/Test NMI": (INFO_LEVEL, jnp.array(test_nmi))}, jnp.array(0)
             )
             logger.log_metrics(
-                {"LDA/Test ARI": (20, jnp.array(test_ari))}, jnp.array(0)
+                {"LDA/Test ARI": (INFO_LEVEL, jnp.array(test_ari))}, jnp.array(0)
             )
             logger.log_metrics(
-                {"LDA/Test Accuracy": (20, jnp.array(test_accuracy))}, jnp.array(0)
+                {"LDA/Test Accuracy": (INFO_LEVEL, jnp.array(test_accuracy))}, jnp.array(0)
             )
 
             log.info(
@@ -202,7 +213,7 @@ class LDAModel(ClusteringModel):
         # Log perplexity (lower is better for LDA)
         perplexity = self._lda.perplexity(train_data)
         logger.log_metrics(
-            {"LDA/Train Perplexity": (20, jnp.array(perplexity))}, jnp.array(0)
+            {"LDA/Train Perplexity": (INFO_LEVEL, jnp.array(perplexity))}, jnp.array(0)
         )
         log.info(f"LDA Train Perplexity: {perplexity:.3f}")
 

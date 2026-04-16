@@ -862,8 +862,8 @@ def print_param_pair_coverage(
     )
     print(
         f"  {_ANSI_DIM}space=unsampled  ·=all diverged  ░▒▓█=stable fraction  "
-        f"{_ANSI_RESET}{_ANSI_YELLOW}█{_ANSI_RESET}{_ANSI_DIM}=completed  "
-        f"{_ANSI_RESET}{_ANSI_RED}█{_ANSI_RESET}{_ANSI_DIM}={label_dir} {pct:.4g}%{_ANSI_RESET}"
+        + f"{_ANSI_RESET}{_ANSI_YELLOW}█{_ANSI_RESET}{_ANSI_DIM}=completed  "
+        + f"{_ANSI_RESET}{_ANSI_RED}█{_ANSI_RESET}{_ANSI_DIM}={label_dir} {pct:.4g}%{_ANSI_RESET}"
     )
 
     pairs = [(px, py) for i, px in enumerate(top_params) for py in top_params[i + 1 :]]

@@ -289,9 +289,9 @@ def validate_optuna_config(overrides: list[str], metric: str, study_name: str) -
             shutil.rmtree(probe_run_dir, ignore_errors=True)
 
 
-def _merge_from_template(template_name: str, new_overrides: list[str]) -> list[str]:
+def merge_from_template(template_name: str, new_overrides: list[str]) -> list[str]:
     """Merge new overrides on top of an existing study's overrides."""
-    config_path = _study_config_path(template_name)
+    config_path = study_config_path(template_name)
     if not config_path.exists():
         raise FileNotFoundError(f"Template study not found: {config_path}")
     template_config = OmegaConf.load(config_path)
@@ -309,11 +309,11 @@ def _study_dir(study_name: str) -> Path:
     return TUNE_DIR / study_name
 
 
-def _study_config_path(study_name: str) -> Path:
+def study_config_path(study_name: str) -> Path:
     return _study_dir(study_name) / "study-config.yaml"
 
 
-def _default_storage(study_name: str) -> str:
+def default_storage(study_name: str) -> str:
     return f"sqlite:///{_study_dir(study_name).resolve()}/study.db"
 
 
@@ -358,11 +358,11 @@ def create_optuna_study(
             "storage": storage,
         }
     )
-    config_path = _study_config_path(study_name)
+    config_path = study_config_path(study_name)
     OmegaConf.save(config, config_path)
     log.info(f"Study config saved to {config_path}")
 
-    resolved_storage = storage or _default_storage(study_name)
+    resolved_storage = storage or default_storage(study_name)
     return optuna.create_study(
         study_name=study_name,
         storage=resolved_storage,
@@ -392,7 +392,7 @@ def run_optuna_trial(
     from .initialize import initialize_run
 
     # Load study config
-    config_path = _study_config_path(study_name)
+    config_path = study_config_path(study_name)
     if not config_path.exists():
         msg = f"Study config not found at {config_path}. Run 'goal tune optuna create' first."
         raise FileNotFoundError(msg)
@@ -401,7 +401,7 @@ def run_optuna_trial(
     overrides: list[str] = list(config.overrides)
     metric: str = config.metric
     pruner_name: str = config.pruner
-    storage: str = config.storage or _default_storage(study_name)
+    storage: str = config.storage or default_storage(study_name)
 
     study = optuna.load_study(
         study_name=study_name,
@@ -465,7 +465,7 @@ def reset_optuna_study(study_name: str) -> None:
     import optuna
 
     study_dir = _study_dir(study_name)
-    config_path = _study_config_path(study_name)
+    config_path = study_config_path(study_name)
 
     # Delete everything except the config
     if study_dir.exists():
@@ -481,7 +481,7 @@ def reset_optuna_study(study_name: str) -> None:
     # Recreate study from saved config
     if config_path.exists():
         config = OmegaConf.load(config_path)
-        storage = _default_storage(study_name)
+        storage = default_storage(study_name)
         optuna.create_study(
             study_name=study_name,
             storage=storage,

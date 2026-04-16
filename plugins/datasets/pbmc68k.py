@@ -13,7 +13,7 @@ import logging
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import override
+from typing import Any, override
 
 import h5py
 import jax.numpy as jnp
@@ -163,7 +163,8 @@ class PBMC68kDataset(ClusteringDataset):
 
         if processed_path.exists():
             log.info("Loading cached PBMC 68k processed data: %s", processed_path)
-            with h5py.File(processed_path, "r") as f:
+            with h5py.File(processed_path, "r") as hf:
+                f: Any = hf  # h5py stubs don't support dataset subscript
                 expression_data = np.array(f["expression"][:], dtype=np.float32)
                 gene_names = [
                     g.decode() if isinstance(g, bytes) else g
@@ -375,8 +376,8 @@ def _extract_mex(cache_dir: Path) -> Path:
     if not tarball.exists():
         raise FileNotFoundError(
             f"PBMC 68k tarball not found at:\n  {tarball}\n\n"
-            f"Download '{_TARBALL_NAME}' from:\n  {_DOWNLOAD_URL}\n"
-            f"and place it in:\n  {cache_dir}/"
+            + f"Download '{_TARBALL_NAME}' from:\n  {_DOWNLOAD_URL}\n"
+            + f"and place it in:\n  {cache_dir}/"
         )
 
     log.info("Extracting PBMC 68k tarball...")

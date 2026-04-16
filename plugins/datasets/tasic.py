@@ -3,7 +3,7 @@
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import override
+from typing import Any, override
 from urllib.request import urlretrieve
 from zipfile import ZipFile
 
@@ -129,7 +129,8 @@ class TasicDataset(ClusteringDataset):
             print(f"Using cached Tasic dataset: {data_file}")
 
         # Load data from HDF5 file
-        with h5py.File(data_file, "r") as f:
+        with h5py.File(data_file, "r") as hf:
+            f: Any = hf  # h5py stubs don't support dataset subscript
             expression_data = f["expression"][:]  # cells x genes
             gene_names = [
                 g.decode() if isinstance(g, bytes) else g for g in f["gene_names"][:]
@@ -464,7 +465,6 @@ def _download_tasic_data(output_path: Path) -> None:
     ]
 
     cell_labels_str = None
-    selected_column = None
 
     for col in label_columns:
         if col in samples_df.columns:
@@ -473,7 +473,6 @@ def _download_tasic_data(output_path: Path) -> None:
                 unique_count > 1 and unique_count < len(samples_df) * 0.8
             ):  # Not too few, not too many
                 cell_labels_str = samples_df[col].values
-                selected_column = col
                 print(f"Using {col} as cell type labels ({unique_count} unique types)")
                 break
 
@@ -484,7 +483,6 @@ def _download_tasic_data(output_path: Path) -> None:
             unique_count = len(samples_df[col].unique())
             if 2 <= unique_count <= 200:  # Reasonable range for cell types
                 cell_labels_str = samples_df[col].values
-                selected_column = col
                 print(f"Using {col} as cell type labels ({unique_count} unique types)")
                 break
 

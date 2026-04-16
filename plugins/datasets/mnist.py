@@ -148,6 +148,7 @@ Original error: {e!s}"""
         return N_ROWS * N_COLS
 
     @property
+    @override
     def n_classes(self) -> int:
         return 10  # Digits 0-9
 

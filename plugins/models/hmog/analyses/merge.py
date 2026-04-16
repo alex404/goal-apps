@@ -19,8 +19,8 @@ from apps.interface import ClusteringDataset
 from apps.interface.clustering.analyses.merge import (
     MergeAnalysis,
     MergeResults,
-    _fit_label_permutation,
     compute_merge_metrics,
+    fit_label_permutation,
     get_valid_clusters,
     hierarchy_to_mapping,
     plot_merge_results,
@@ -88,7 +88,7 @@ class KLMergeAnalysis(MergeAnalysis[KLMergeResults]):
         for i, cluster_idx in enumerate(valid_clusters):
             full_mapping = full_mapping.at[cluster_idx].set(filtered_mapping[i])
 
-        label_permutation = _fit_label_permutation(full_mapping, train_probs, dataset.train_labels, n_classes)
+        label_permutation = fit_label_permutation(full_mapping, train_probs, dataset.train_labels, n_classes)
         train_metrics = compute_merge_metrics(full_mapping, train_probs, dataset.train_labels, label_permutation=label_permutation)
         test_probs = cluster_probabilities(manifold, params, dataset.test_data)
         test_metrics = compute_merge_metrics(full_mapping, test_probs, dataset.test_labels, label_permutation=label_permutation)

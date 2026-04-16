@@ -464,12 +464,12 @@ class BadenBerens(Artifact):
     def load_from_hdf5(cls, file: File) -> BadenBerens:
         """Load Baden-Berens analysis from HDF5."""
         # Load arrays
-        cluster_assignments = jnp.array(file["cluster_assignments"][()])  # pyright: ignore[reportIndexIssue]
-        celltype_labels = jnp.array(file["celltype_labels"][()])  # pyright: ignore[reportIndexIssue]
+        cluster_assignments = jnp.array(file["cluster_assignments"][()])
+        celltype_labels = jnp.array(file["celltype_labels"][()])
 
-        cluster_chirp_traces = jnp.array(file["cluster_chirp_traces"][()])  # pyright: ignore[reportIndexIssue]
-        cluster_bar_traces = jnp.array(file["cluster_bar_traces"][()])  # pyright: ignore[reportIndexIssue]
-        cluster_noise_traces = jnp.array(file["cluster_noise_traces"][()])  # pyright: ignore[reportIndexIssue]
+        cluster_chirp_traces = jnp.array(file["cluster_chirp_traces"][()])
+        cluster_bar_traces = jnp.array(file["cluster_bar_traces"][()])
+        cluster_noise_traces = jnp.array(file["cluster_noise_traces"][()])
 
         # Load metric value lists
         n_clusters = int(file.attrs.get("n_clusters", 0))
@@ -492,11 +492,11 @@ class BadenBerens(Artifact):
             jnp.array(os_group[f"cluster_{i}"]) for i in range(n_clusters)
         ]
 
-        cluster_soma_x = jnp.array(file["cluster_soma_x"][()])  # pyright: ignore[reportIndexIssue]
-        cluster_soma_y = jnp.array(file["cluster_soma_y"][()])  # pyright: ignore[reportIndexIssue]
+        cluster_soma_x = jnp.array(file["cluster_soma_x"][()])
+        cluster_soma_y = jnp.array(file["cluster_soma_y"][()])
 
-        cluster_sizes = jnp.array(file["cluster_sizes"][()])  # pyright: ignore[reportIndexIssue]
-        linkage_matrix = jnp.array(file["linkage_matrix"][()])  # pyright: ignore[reportIndexIssue]
+        cluster_sizes = jnp.array(file["cluster_sizes"][()])
+        linkage_matrix = jnp.array(file["linkage_matrix"][()])
 
         # Load cluster names
         cluster_names = [str(file.attrs[f"cluster_name_{i}"]) for i in range(n_clusters)]
