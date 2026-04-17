@@ -36,7 +36,14 @@ def generate_loading_matrices(
     model: AnyHMoG,
     params: Array,
 ) -> LoadingMatrixArtifact:
-    """Extract loading matrices in both natural and mean parameterizations."""
+    """Extract loading matrices in both natural and mean parameterizations.
+
+    The natural loading matrix is the model's interaction matrix Λ (the raw
+    weights that link latent codes to observable natural parameters). For
+    interpretability we also return the mean-parameter loading
+    ``Σ_x · Λ``, which expresses the loading as the covariance-weighted
+    influence on the observable mean. Both are (data_dim, latent_dim).
+    """
     # Extract the interaction parameters
     obs_params, int_params, _ = model.split_coords(params)
 

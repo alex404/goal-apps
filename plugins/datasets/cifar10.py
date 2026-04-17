@@ -61,6 +61,7 @@ class CIFAR10Dataset(ClusteringDataset):
     def load(
         cls,
         cache_dir: Path,
+        seed: int = 0,
         greyscale: bool = True,
         normalize: bool = False,
     ) -> "CIFAR10Dataset":
@@ -68,12 +69,15 @@ class CIFAR10Dataset(ClusteringDataset):
 
         Args:
             cache_dir: Directory for caching downloaded data
+            seed: Unused (CIFAR10 ships with a fixed train/test split); accepted
+                so the CLI-seed can be passed uniformly through ``instantiate``.
             greyscale: Whether to convert to grayscale
             normalize: Whether to normalize data
 
         Returns:
             Loaded CIFAR10 dataset
         """
+        del seed
 
         def transform_tensor(img):
             x = img.numpy()

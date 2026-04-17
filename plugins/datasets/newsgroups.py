@@ -33,7 +33,7 @@ class NewsgroupsConfig(ClusteringDatasetConfig):
         max_features: Maximum number of features for TF-IDF (None for all)
         min_df: Minimum document frequency for TF-IDF (sklearn standard: 2)
         max_df: Maximum document frequency for TF-IDF (sklearn standard: 0.95)
-        random_seed: Random seed for reproducibility
+        seed: Random seed for reproducibility
         use_count_vectorizer: Use count vectorization instead of TF-IDF
         n_top_words: Number of top words to show in visualization
     """
@@ -50,9 +50,6 @@ class NewsgroupsConfig(ClusteringDatasetConfig):
     max_features: int | None = None  # None for all features
     min_df: int = 2  # Standard sklearn default
     max_df: float = 0.95  # Standard sklearn default
-
-    # Reproducibility
-    random_seed: int = 42
 
     # Vectorization method
     use_count_vectorizer: bool = False  # False for TF-IDF, True for count
@@ -90,12 +87,12 @@ class NewsgroupsDataset(ClusteringDataset):
     def load(
         cls,
         cache_dir: Path,
+        seed: int,
         categories: list[str] | None,
         remove: list[str],
         max_features: int | None,
         min_df: int,
         max_df: float,
-        random_seed: int,
         use_count_vectorizer: bool,
         n_top_words: int,
     ) -> "NewsgroupsDataset":
@@ -108,7 +105,7 @@ class NewsgroupsDataset(ClusteringDataset):
             max_features: Maximum TF-IDF features (None for all features)
             min_df: Minimum document frequency
             max_df: Maximum document frequency
-            random_seed: Random seed
+            seed: Random seed
             n_top_words: Top words for visualization
 
         Returns:
@@ -118,8 +115,12 @@ class NewsgroupsDataset(ClusteringDataset):
 
         log.info("Loading 20 Newsgroups dataset...")
 
-        # Check for cached processed data
-        cache_file = cache_dir / "newsgroups_raw.npz"
+        # Include the parameters that actually affect the cached raw texts
+        # (categories and remove) in the cache filename so changing them
+        # invalidates stale caches rather than silently returning the old ones.
+        cat_tag = "all" if categories is None else "-".join(sorted(categories))
+        remove_tag = "-".join(sorted(remove)) if remove else "none"
+        cache_file = cache_dir / f"newsgroups_raw_cat-{cat_tag}_rm-{remove_tag}.npz"
 
         if cache_file.exists():
             log.info("Loading cached newsgroups data...")
@@ -137,7 +138,7 @@ class NewsgroupsDataset(ClusteringDataset):
                 categories=categories,
                 remove=tuple(remove),
                 shuffle=True,
-                random_state=random_seed,
+                random_state=seed,
                 download_if_missing=True,
                 data_home=str(cache_dir),
             )
@@ -336,9 +337,7 @@ class NewsgroupsDataset(ClusteringDataset):
 
         # Create horizontal bar plot
         y_pos = np.arange(len(top_words))
-        words_ax.barh(
-            y_pos, top_scores, color="darkgreen", alpha=0.8, height=0.7
-        )
+        words_ax.barh(y_pos, top_scores, color="darkgreen", alpha=0.8, height=0.7)
         words_ax.set_yticks(y_pos)
         words_ax.set_yticklabels(top_words, fontsize=11, fontweight="bold")
         words_ax.set_xlabel("TF-IDF Score", fontsize=11)

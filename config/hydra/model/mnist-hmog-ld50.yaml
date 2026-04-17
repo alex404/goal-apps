@@ -49,11 +49,7 @@ analyses:
     min_cluster_size: 0.0005
   co_assignment_merge:
     enabled: true
-    filter_empty_clusters: true
-    min_cluster_size: 0.0005
   kl_hierarchy:
     enabled: true
   kl_merge:
     enabled: true
-    filter_empty_clusters: true
-    min_cluster_size: 0.0005

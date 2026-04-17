@@ -6,6 +6,7 @@ different strategies (optimal assignment, co-assignment hierarchy).
 
 from __future__ import annotations
 
+import logging
 from abc import ABC
 from dataclasses import dataclass
 from typing import Any, ClassVar, override
@@ -14,29 +15,41 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.cluster.hierarchy
-import scipy.spatial.distance
 from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from numpy.typing import NDArray
 from scipy.optimize import linear_sum_assignment
-from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 from ....runtime import STATS_LEVEL, Artifact, MetricDict, RunHandler
 from ...analysis import Analysis
 from ..dataset import ClusteringDataset
-from ..metrics import fit_cluster_mapping
-from .hierarchy import ClusterHierarchy, CoAssignmentHierarchy
+from ..metrics import clustering_ari, clustering_nmi, fit_cluster_mapping
+from .hierarchy import ClusterHierarchy, CoAssignmentHierarchy, get_valid_clusters
 
-OPTIMAL_MERGE_METRIC_KEYS: frozenset[str] = frozenset({
-    "Merging/Optimal Train Accuracy", "Merging/Optimal Train NMI", "Merging/Optimal Train ARI",
-    "Merging/Optimal Test Accuracy", "Merging/Optimal Test NMI", "Merging/Optimal Test ARI",
-})
+log = logging.getLogger(__name__)
 
-COASSIGNMENT_MERGE_METRIC_KEYS: frozenset[str] = frozenset({
-    "Merging/CoAssignment Train Accuracy", "Merging/CoAssignment Train NMI", "Merging/CoAssignment Train ARI",
-    "Merging/CoAssignment Test Accuracy", "Merging/CoAssignment Test NMI", "Merging/CoAssignment Test ARI",
-})
+OPTIMAL_MERGE_METRIC_KEYS: frozenset[str] = frozenset(
+    {
+        "Merging/Optimal Train Accuracy",
+        "Merging/Optimal Train NMI",
+        "Merging/Optimal Train ARI",
+        "Merging/Optimal Test Accuracy",
+        "Merging/Optimal Test NMI",
+        "Merging/Optimal Test ARI",
+    }
+)
+
+COASSIGNMENT_MERGE_METRIC_KEYS: frozenset[str] = frozenset(
+    {
+        "Merging/CoAssignment Train Accuracy",
+        "Merging/CoAssignment Train NMI",
+        "Merging/CoAssignment Train ARI",
+        "Merging/CoAssignment Test Accuracy",
+        "Merging/CoAssignment Test NMI",
+        "Merging/CoAssignment Test ARI",
+    }
+)
 
 
 ### Utility Functions ###
@@ -62,7 +75,9 @@ def compute_optimal_mapping(
 
     # Create contingency matrix
     contingency = np.zeros((n_clusters, n_classes))
-    np.add.at(contingency, (np.asarray(cluster_assignments), np.asarray(true_labels)), 1)
+    np.add.at(
+        contingency, (np.asarray(cluster_assignments), np.asarray(true_labels)), 1
+    )
 
     # Use Hungarian algorithm for optimal assignment
     row_ind, col_ind = linear_sum_assignment(-contingency)
@@ -75,52 +90,26 @@ def compute_optimal_mapping(
     return mapping
 
 
-def get_valid_clusters(
-    train_assignments: Array,
-    n_clusters: int,
-    n_classes: int,
-    filter_empty_clusters: bool,
-    min_cluster_size: float,
-    n_train_samples: int,
-) -> Array:
-    """Get valid cluster indices, filtering empty/small clusters if requested."""
-    valid_clusters = jnp.arange(n_clusters)
-
-    if filter_empty_clusters:
-        cluster_counts = jnp.zeros(n_clusters).at[train_assignments].add(1)
-
-        min_count = max(1, int(min_cluster_size * n_train_samples))
-        valid_clusters = jnp.where(cluster_counts >= min_count)[0]
-
-        # Ensure we have at least min(n_clusters, n_classes) valid clusters
-        min_required = min(n_clusters, n_classes)
-        if len(valid_clusters) < min_required:
-            valid_clusters = jnp.argsort(-cluster_counts)[:min_required]
-
-    return valid_clusters
-
-
 def hierarchy_to_mapping(
-    hierarchy: ClusterHierarchy, valid_clusters: Array, n_classes: int
+    hierarchy: ClusterHierarchy, n_classes: int
 ) -> NDArray[np.int32]:
-    """Convert cluster hierarchy to mapping using hierarchical clustering."""
-    # Extract submatrix for valid clusters only
-    filtered_dist = hierarchy.distance_matrix[valid_clusters][:, valid_clusters]
+    """Cut a hierarchy's linkage into ``n_classes`` groups and return the
+    per-valid-cluster one-hot class assignment.
 
-    # Convert to condensed form and run hierarchical clustering
-    condensed_distances = scipy.spatial.distance.squareform(filtered_dist)
-    filtered_linkage = scipy.cluster.hierarchy.linkage(
-        condensed_distances, method="average"
-    )
+    ``hierarchy.linkage_matrix`` is already computed over
+    ``hierarchy.valid_clusters`` (see ``ClusterHierarchy``), so we can
+    call ``fcluster`` on it directly — no re-filtering of the distance
+    matrix.
 
-    # Cut the tree to get n_classes clusters
+    Returned shape: ``(len(hierarchy.valid_clusters), n_classes)``.
+    """
     cluster_ids = scipy.cluster.hierarchy.fcluster(
-        filtered_linkage, n_classes, criterion="maxclust"
+        hierarchy.linkage_matrix, n_classes, criterion="maxclust"
     )
 
-    # Convert cluster IDs to one-hot mapping matrix
-    mapping = np.zeros((len(valid_clusters), n_classes), dtype=np.int32)
-    for i in range(len(valid_clusters)):
+    n_valid = len(hierarchy.valid_clusters)
+    mapping = np.zeros((n_valid, n_classes), dtype=np.int32)
+    for i in range(n_valid):
         class_id = cluster_ids[i] - 1  # fcluster returns 1-indexed
         mapping[i, class_id] = 1
 
@@ -143,22 +132,26 @@ def compute_merge_metrics(
     *,
     label_permutation: Array,
 ) -> tuple[float, float, float]:
-    """Compute accuracy, NMI, and ARI for given mapping.
+    """Compute accuracy, NMI, and ARI for a given cluster→merged-class mapping.
 
-    Args:
-        mapping: Cluster→merged-class mapping matrix
-        probs: Soft cluster assignment probabilities (n_samples, n_clusters)
-        labels: Ground-truth class labels (n_samples,)
-        label_permutation: Merged-class→true-label permutation derived from
-            training data via fit_label_permutation. Must not be fit on the
-            same split being evaluated.
+    ``label_permutation`` maps merged-class indices to ground-truth labels and
+    is always fit on the training split by the caller. Consequently:
+    - when ``labels`` is the train split, accuracy reflects a fit-on-same-
+      split ceiling (standard clustering-accuracy convention);
+    - when ``labels`` is the test split, accuracy is properly held out.
+
+    NMI and ARI are label-permutation invariant, so the permutation argument
+    doesn't change them. They're computed with the JAX implementations in
+    ``..metrics`` so the numbers line up with training-loop clustering
+    metrics bit-for-bit.
     """
+    n_classes = mapping.shape[1]
     merged_probs = jnp.matmul(probs, mapping)
     merged_assignments = jnp.argmax(merged_probs, axis=1)
     mapped = label_permutation[merged_assignments]
     accuracy = float(jnp.mean(mapped == labels))
-    nmi = float(normalized_mutual_info_score(np.array(labels), np.array(merged_assignments)))
-    ari = float(adjusted_rand_score(np.array(labels), np.array(merged_assignments)))
+    nmi = float(clustering_nmi(n_classes, n_classes, merged_assignments, labels))
+    ari = float(clustering_ari(n_classes, n_classes, merged_assignments, labels))
     return accuracy, nmi, ari
 
 
@@ -171,7 +164,11 @@ class MergeResults(Artifact):
 
     prototypes: list[Array]
     mapping: NDArray[np.int32]
-    """Binary cluster→class mapping. Shape (n_clusters, n_classes), mapping[i,j]=1 means cluster i maps to class j."""
+    """Binary cluster→class mapping, shape (n_clusters, n_classes). Each row
+    is either one-hot (``sum(row) == 1`` for valid clusters) or all zeros
+    (for clusters filtered out by the hierarchy's ``valid_clusters``). So
+    ``argmax(mapping, axis=1)`` is only meaningful for indices present in
+    ``valid_clusters``."""
     train_accuracy: float
     train_nmi_score: float
     train_ari_score: float
@@ -262,10 +259,13 @@ class MergeAnalysis[T: MergeResults](Analysis[ClusteringDataset, Any, T], ABC):
     - HasSoftAssignments (posterior_soft_assignments)
     - CanComputePrototypes (compute_cluster_prototypes)
     - n_clusters property
-    """
 
-    filter_empty_clusters: bool = True
-    min_cluster_size: float = 0.0005
+    Subclasses that depend on a ``ClusterHierarchy`` artifact (co-assignment,
+    KL) read the already-pruned ``hierarchy.valid_clusters`` — they don't
+    expose ``filter_empty_clusters`` / ``min_cluster_size`` themselves.
+    ``OptimalMergeAnalysis`` runs the Hungarian algorithm directly on the
+    model output and therefore carries its own filter fields.
+    """
 
     @override
     def plot(self, artifact: T, dataset: ClusteringDataset) -> Figure:
@@ -276,6 +276,8 @@ class MergeAnalysis[T: MergeResults](Analysis[ClusteringDataset, Any, T], ABC):
 class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
     """Merge clusters using optimal (Hungarian) assignment to classes."""
 
+    filter_empty_clusters: bool = True
+    min_cluster_size: float = 0.0005
     metric_keys: ClassVar[frozenset[str]] = OPTIMAL_MERGE_METRIC_KEYS
 
     @property
@@ -301,8 +303,12 @@ class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
         n_classes = dataset.n_classes
 
         valid_clusters = get_valid_clusters(
-            train_assignments, n_clusters, n_classes,
-            self.filter_empty_clusters, self.min_cluster_size, len(dataset.train_data),
+            train_assignments,
+            n_clusters,
+            n_classes,
+            self.filter_empty_clusters,
+            self.min_cluster_size,
+            len(dataset.train_data),
         )
 
         filtered_train_probs = train_probs[:, valid_clusters]
@@ -314,10 +320,22 @@ class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
         for i, cluster_idx in enumerate(valid_clusters):
             full_mapping = full_mapping.at[cluster_idx].set(filtered_mapping[i])
 
-        label_permutation = fit_label_permutation(full_mapping, train_probs, dataset.train_labels, n_classes)
-        train_metrics = compute_merge_metrics(full_mapping, train_probs, dataset.train_labels, label_permutation=label_permutation)
+        label_permutation = fit_label_permutation(
+            full_mapping, train_probs, dataset.train_labels, n_classes
+        )
+        train_metrics = compute_merge_metrics(
+            full_mapping,
+            train_probs,
+            dataset.train_labels,
+            label_permutation=label_permutation,
+        )
         test_probs = model.posterior_soft_assignments(params, dataset.test_data)
-        test_metrics = compute_merge_metrics(full_mapping, test_probs, dataset.test_labels, label_permutation=label_permutation)
+        test_metrics = compute_merge_metrics(
+            full_mapping,
+            test_probs,
+            dataset.test_labels,
+            label_permutation=label_permutation,
+        )
 
         return OptimalMergeResults(
             prototypes=prototypes,
@@ -335,12 +353,30 @@ class OptimalMergeAnalysis(MergeAnalysis[OptimalMergeResults]):
     @override
     def metrics(self, artifact: OptimalMergeResults) -> MetricDict:
         return {
-            "Merging/Optimal Train Accuracy": (STATS_LEVEL, jnp.array(artifact.train_accuracy)),
-            "Merging/Optimal Train NMI": (STATS_LEVEL, jnp.array(artifact.train_nmi_score)),
-            "Merging/Optimal Train ARI": (STATS_LEVEL, jnp.array(artifact.train_ari_score)),
-            "Merging/Optimal Test Accuracy": (STATS_LEVEL, jnp.array(artifact.test_accuracy)),
-            "Merging/Optimal Test NMI": (STATS_LEVEL, jnp.array(artifact.test_nmi_score)),
-            "Merging/Optimal Test ARI": (STATS_LEVEL, jnp.array(artifact.test_ari_score)),
+            "Merging/Optimal Train Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_accuracy),
+            ),
+            "Merging/Optimal Train NMI": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_nmi_score),
+            ),
+            "Merging/Optimal Train ARI": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_ari_score),
+            ),
+            "Merging/Optimal Test Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_accuracy),
+            ),
+            "Merging/Optimal Test NMI": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_nmi_score),
+            ),
+            "Merging/Optimal Test ARI": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_ari_score),
+            ),
         }
 
 
@@ -367,28 +403,37 @@ class CoAssignmentMergeAnalysis(MergeAnalysis[CoAssignmentMergeResults]):
     ) -> CoAssignmentMergeResults:
         prototypes = model.compute_cluster_prototypes(params)
         train_probs = model.posterior_soft_assignments(params, dataset.train_data)
-        train_assignments = jnp.argmax(train_probs, axis=1)
 
         n_clusters = model.n_clusters
         n_classes = dataset.n_classes
 
-        valid_clusters = get_valid_clusters(
-            train_assignments, n_clusters, n_classes,
-            self.filter_empty_clusters, self.min_cluster_size, len(dataset.train_data),
-        )
-
-        # Load co-assignment hierarchy and compute mapping
+        # The hierarchy already pre-filtered its valid clusters; reuse that
+        # set here so hierarchy and merge agree on which clusters survive.
         hierarchy = handler.load_artifact(epoch, CoAssignmentHierarchy)
-        filtered_mapping = hierarchy_to_mapping(hierarchy, valid_clusters, n_classes)
+        valid_clusters = hierarchy.valid_clusters
+
+        filtered_mapping = hierarchy_to_mapping(hierarchy, n_classes)
 
         full_mapping = jnp.zeros((n_clusters, n_classes), dtype=jnp.int32)
         for i, cluster_idx in enumerate(valid_clusters):
             full_mapping = full_mapping.at[cluster_idx].set(filtered_mapping[i])
 
-        label_permutation = fit_label_permutation(full_mapping, train_probs, dataset.train_labels, n_classes)
-        train_metrics = compute_merge_metrics(full_mapping, train_probs, dataset.train_labels, label_permutation=label_permutation)
+        label_permutation = fit_label_permutation(
+            full_mapping, train_probs, dataset.train_labels, n_classes
+        )
+        train_metrics = compute_merge_metrics(
+            full_mapping,
+            train_probs,
+            dataset.train_labels,
+            label_permutation=label_permutation,
+        )
         test_probs = model.posterior_soft_assignments(params, dataset.test_data)
-        test_metrics = compute_merge_metrics(full_mapping, test_probs, dataset.test_labels, label_permutation=label_permutation)
+        test_metrics = compute_merge_metrics(
+            full_mapping,
+            test_probs,
+            dataset.test_labels,
+            label_permutation=label_permutation,
+        )
 
         return CoAssignmentMergeResults(
             prototypes=prototypes,
@@ -406,10 +451,28 @@ class CoAssignmentMergeAnalysis(MergeAnalysis[CoAssignmentMergeResults]):
     @override
     def metrics(self, artifact: CoAssignmentMergeResults) -> MetricDict:
         return {
-            "Merging/CoAssignment Train Accuracy": (STATS_LEVEL, jnp.array(artifact.train_accuracy)),
-            "Merging/CoAssignment Train NMI": (STATS_LEVEL, jnp.array(artifact.train_nmi_score)),
-            "Merging/CoAssignment Train ARI": (STATS_LEVEL, jnp.array(artifact.train_ari_score)),
-            "Merging/CoAssignment Test Accuracy": (STATS_LEVEL, jnp.array(artifact.test_accuracy)),
-            "Merging/CoAssignment Test NMI": (STATS_LEVEL, jnp.array(artifact.test_nmi_score)),
-            "Merging/CoAssignment Test ARI": (STATS_LEVEL, jnp.array(artifact.test_ari_score)),
+            "Merging/CoAssignment Train Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_accuracy),
+            ),
+            "Merging/CoAssignment Train NMI": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_nmi_score),
+            ),
+            "Merging/CoAssignment Train ARI": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_ari_score),
+            ),
+            "Merging/CoAssignment Test Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_accuracy),
+            ),
+            "Merging/CoAssignment Test NMI": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_nmi_score),
+            ),
+            "Merging/CoAssignment Test ARI": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_ari_score),
+            ),
         }

@@ -6,16 +6,20 @@ can implement, enabling generic analyses across model types.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from jax import Array
 
 
+@runtime_checkable
 class HasLogLikelihood(Protocol):
     """Protocol for models that can compute log-likelihood of data.
 
     Models implementing this protocol can use likelihood-based analyses
-    and metrics.
+    and metrics. ``ClusteringModel.metric_names`` uses ``isinstance`` against
+    this protocol to decide whether to include ``LL_METRIC_KEYS``, so a
+    model that implements ``log_likelihood`` gets LL metrics declared
+    automatically — no manual override needed.
     """
 
     def log_likelihood(self, params: Array, data: Array) -> float:

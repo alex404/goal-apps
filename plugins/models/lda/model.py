@@ -10,12 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 from hydra.core.config_store import ConfigStore
 from jax import Array
-from scipy.optimize import linear_sum_assignment
 from sklearn.decomposition import LatentDirichletAllocation
-from sklearn.metrics import (
-    adjusted_rand_score,
-    normalized_mutual_info_score,
-)
 
 from apps.interface import (
     Analysis,
@@ -23,7 +18,8 @@ from apps.interface import (
     ClusteringModel,
     ClusteringModelConfig,
 )
-from apps.runtime import INFO_LEVEL, Logger, RunHandler
+from apps.interface.clustering import add_clustering_metrics
+from apps.runtime import INFO_LEVEL, Logger, MetricDict, RunHandler
 
 log = logging.getLogger(__name__)
 
@@ -151,64 +147,26 @@ class LDAModel(ClusteringModel):
         train_topic_dist = self._lda.transform(train_data)
 
         # Assign documents to dominant topics for clustering evaluation
-        train_labels = np.argmax(train_topic_dist, axis=1)
+        train_clusters = jnp.array(np.argmax(train_topic_dist, axis=1))
 
         if dataset.has_labels:
-            true_labels = np.array(dataset.train_labels)
-            nmi = normalized_mutual_info_score(true_labels, train_labels)
-            ari = adjusted_rand_score(true_labels, train_labels)
-
-            # Compute optimal topic-to-class mapping via Hungarian algorithm on TRAIN data
-            n_topics_k = len(np.unique(train_labels))
-            n_classes_k = len(np.unique(true_labels))
-            cost_matrix = np.zeros((n_topics_k, n_classes_k))
-            unique_topics_k = np.unique(train_labels)
-            unique_classes_k = np.unique(true_labels)
-            for li, ti in enumerate(unique_topics_k):
-                for lj, cj in enumerate(unique_classes_k):
-                    cost_matrix[li, lj] = -np.sum((train_labels == ti) & (true_labels == cj))
-            row_ind, col_ind = linear_sum_assignment(cost_matrix)
-            topic_to_class = np.full(self._n_clusters, -1)
-            for li, lj in zip(row_ind, col_ind):
-                topic_to_class[unique_topics_k[li]] = unique_classes_k[lj]
-
-            accuracy = float(np.mean(topic_to_class[train_labels] == true_labels))
-
-            logger.log_metrics({"LDA/Train NMI": (INFO_LEVEL, jnp.array(nmi))}, jnp.array(0))
-            logger.log_metrics({"LDA/Train ARI": (INFO_LEVEL, jnp.array(ari))}, jnp.array(0))
-            logger.log_metrics(
-                {"LDA/Train Accuracy": (INFO_LEVEL, jnp.array(accuracy))}, jnp.array(0)
-            )
-
-            # Test metrics
             test_data = np.array(dataset.test_data)
             if np.any(test_data < 0):
                 test_data = np.abs(test_data)
-
             test_topic_dist = self._lda.transform(test_data)
-            test_labels = np.argmax(test_topic_dist, axis=1)
-            test_true_labels = np.array(dataset.test_labels)
+            test_clusters = jnp.array(np.argmax(test_topic_dist, axis=1))
 
-            test_nmi = normalized_mutual_info_score(test_true_labels, test_labels)
-            test_ari = adjusted_rand_score(test_true_labels, test_labels)
-            test_accuracy = float(np.mean(topic_to_class[test_labels] == test_true_labels))
-
-            logger.log_metrics(
-                {"LDA/Test NMI": (INFO_LEVEL, jnp.array(test_nmi))}, jnp.array(0)
+            metrics: MetricDict = {}
+            add_clustering_metrics(
+                metrics,
+                n_clusters=self._n_clusters,
+                n_classes=dataset.n_classes,
+                train_labels=dataset.train_labels,
+                test_labels=dataset.test_labels,
+                train_clusters=train_clusters,
+                test_clusters=test_clusters,
             )
-            logger.log_metrics(
-                {"LDA/Test ARI": (INFO_LEVEL, jnp.array(test_ari))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"LDA/Test Accuracy": (INFO_LEVEL, jnp.array(test_accuracy))}, jnp.array(0)
-            )
-
-            log.info(
-                f"LDA Train NMI: {nmi:.3f}, ARI: {ari:.3f}, Accuracy: {accuracy:.3f}"
-            )
-            log.info(
-                f"LDA Test NMI: {test_nmi:.3f}, ARI: {test_ari:.3f}, Accuracy: {test_accuracy:.3f}"
-            )
+            logger.log_metrics(metrics, jnp.array(0))
 
         # Log perplexity (lower is better for LDA)
         perplexity = self._lda.perplexity(train_data)

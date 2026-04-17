@@ -17,7 +17,7 @@ from sklearn.cluster import KMeans
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
-from apps.interface.clustering import CLUSTERING_METRIC_KEYS
+from apps.interface.clustering import cycle_lr_schedule, run_cyclic_training
 from apps.interface.clustering.analyses import (
     ClusterStatistics,
     ClusterStatisticsAnalysis,
@@ -31,7 +31,7 @@ from apps.interface.clustering.protocols import (
     HasSoftAssignments,
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
-from apps.runtime import L1_L2_METRIC_KEYS, LL_METRIC_KEYS, Logger, RunHandler
+from apps.runtime import L1_L2_METRIC_KEYS, Logger, RunHandler
 
 from .trainers import GradientTrainer
 from .types import MFA
@@ -60,6 +60,8 @@ class MFAModel(
         n_clusters: int,
         trainer: GradientTrainer,
         analyses: ClusteringAnalysesConfig,
+        num_cycles: int = 1,
+        lr_scales: list[float] | None = None,
         diagonal: bool = False,
         kmeans_init: bool = True,
         init_scale: float = 0.01,
@@ -73,6 +75,11 @@ class MFAModel(
             n_clusters: Number of mixture components
             trainer: Trainer instance for optimization
             analyses: Configuration for analyses
+            num_cycles: Number of training cycles. Total epochs =
+                ``num_cycles * trainer.n_epochs``. Each cycle emits a
+                checkpoint so Optuna can prune between cycles.
+            lr_scales: Per-cycle LR multipliers (interpolated across
+                ``num_cycles``). ``None``/empty → 1.0 per cycle.
             diagonal: Use diagonal covariance (NormalLGM) instead of FactorAnalysis
             init_scale: Scale for parameter initialization (smaller for high-dim data)
             min_var: Minimum variance for regularization (prevents NaN for zero-variance pixels)
@@ -86,6 +93,8 @@ class MFAModel(
         self.kmeans_init: bool = kmeans_init
         self.init_scale: float = init_scale
         self.min_var: float = min_var
+        self.num_cycles: int = num_cycles
+        self.lr_schedule: list[float] = cycle_lr_schedule(lr_scales or [], num_cycles)
 
         # Create MFA model from goal-jax
         if diagonal:
@@ -109,8 +118,8 @@ class MFAModel(
     @property
     @override
     def n_epochs(self) -> int:
-        """Number of training epochs."""
-        return self.trainer.n_epochs
+        """Total training epochs across all cycles."""
+        return self.num_cycles * self.trainer.n_epochs
 
     @property
     @override
@@ -151,8 +160,9 @@ class MFAModel(
         if self.kmeans_init:
             # Run k-means and compute per-cluster statistics
             log.info("Running k-means for initialization...")
+            km_seed = int(jax.random.randint(keys[0], (), 0, 2**31 - 1))
             kmeans = KMeans(
-                n_clusters=self.n_clusters, random_state=int(keys[0][0]), n_init="auto"
+                n_clusters=self.n_clusters, random_state=km_seed, n_init="auto"
             )
             kmeans.fit(np.asarray(data))
             centers = jax.numpy.asarray(kmeans.cluster_centers_)
@@ -189,7 +199,9 @@ class MFAModel(
         int_key = keys[1]
         for k in range(self.n_clusters):
             # Observable: mean=center, cov=diag(reg_var) -> convert to natural
-            obs_cov_params = cluster_vars[k]  # 1D variance vector — correct cov_man coords for Diagonal
+            obs_cov_params = cluster_vars[
+                k
+            ]  # 1D variance vector — correct cov_man coords for Diagonal
             obs_means = obs_man_fa.join_mean_covariance(centers[k], obs_cov_params)
             obs_params = obs_man_fa.to_natural(obs_means)
 
@@ -290,31 +302,59 @@ class MFAModel(
     ) -> None:
         """Train the MFA model.
 
-        Args:
-            key: Random key
-            handler: Run handler for saving/loading
-            logger: Logger for metrics
-            dataset: Dataset to train on
+        Phase layout: ``num_cycles`` cycles, each running ``trainer.n_epochs``
+        gradient-EM epochs with a per-cycle learning-rate scale drawn from
+        ``lr_schedule``. A checkpoint is written at the end of every cycle
+        so Optuna can prune between them. Unlike HMoG, MFA has no pretraining
+        phase — cycling starts immediately at epoch 0.
+
+        Resume semantics: the epoch loaded from checkpoint is mapped back
+        to the starting cycle; the loop picks up at the beginning of that
+        cycle (mid-cycle state is not restored — cycle boundaries are the
+        only resumable points).
         """
+        init_key, cycle_key = jax.random.split(key, 2)
+
         # Initialize or load parameters
-        params = self.prepare_model(key, handler, dataset.train_data)
+        params = self.prepare_model(init_key, handler, dataset.train_data)
         epoch = handler.resolve_epoch or 0
 
-        # Train with gradient descent
-        log.info(f"Training MFA model for {self.trainer.n_epochs} epochs")
-        params = self.trainer.train(
-            mfa=self.mfa,
-            dataset=dataset,
-            logger=logger,
-            epoch_offset=epoch,
-            params0=params,
-            key=key,
-        )
-        epoch += self.trainer.n_epochs
+        def run_cycle(
+            cycle_k: Array,
+            cycle_params: Array,
+            cycle_idx: int,
+            lr_scale: float,
+            epoch_offset: int,
+        ) -> tuple[Array, int]:
+            log.info(
+                f"Cycle {cycle_idx + 1}/{self.num_cycles}: training MFA for "
+                f"{self.trainer.n_epochs} epochs"
+            )
+            cycle_params = self.trainer.train(
+                mfa=self.mfa,
+                dataset=dataset,
+                logger=logger,
+                epoch_offset=epoch_offset,
+                params0=cycle_params,
+                key=cycle_k,
+                learning_rate_scale=lr_scale,
+            )
+            return cycle_params, epoch_offset + self.trainer.n_epochs
 
-        # Final checkpoint
-        log.info(f"Saving final checkpoint at epoch {epoch}")
-        self.process_checkpoint(key, handler, logger, dataset, self, epoch, params)
+        run_cyclic_training(
+            self,
+            cycle_key,
+            handler,
+            logger,
+            dataset,
+            params,
+            num_cycles=self.num_cycles,
+            lr_scales=self.lr_schedule,
+            epochs_per_cycle=self.trainer.n_epochs,
+            cycle_start_epoch=0,
+            current_epoch=epoch,
+            run_cycle=run_cycle,
+        )
 
     @override
     def analyze(
@@ -362,7 +402,12 @@ class MFAModel(
             analyses.append(ClusterStatisticsAnalysis())
 
         if cfg.co_assignment_hierarchy.enabled:
-            analyses.append(CoAssignmentHierarchyAnalysis())
+            analyses.append(
+                CoAssignmentHierarchyAnalysis(
+                    filter_empty_clusters=cfg.co_assignment_hierarchy.filter_empty_clusters,
+                    min_cluster_size=cfg.co_assignment_hierarchy.min_cluster_size,
+                )
+            )
 
         # Merge analyses require ground truth labels
         if dataset.has_labels:
@@ -375,16 +420,12 @@ class MFAModel(
                 )
 
             if cfg.co_assignment_merge.enabled:
-                analyses.append(
-                    CoAssignmentMergeAnalysis(
-                        filter_empty_clusters=cfg.co_assignment_merge.filter_empty_clusters,
-                        min_cluster_size=cfg.co_assignment_merge.min_cluster_size,
-                    )
-                )
+                analyses.append(CoAssignmentMergeAnalysis())
 
         return analyses + list(dataset.get_dataset_analyses().values())
 
     @property
+    @override
     def training_metric_keys(self) -> frozenset[str]:
         from .metrics import MFA_TRAINING_METRIC_KEYS
         from .trainers import ENTROPY_REG_METRIC_KEYS
@@ -392,13 +433,4 @@ class MFAModel(
         keys = MFA_TRAINING_METRIC_KEYS | L1_L2_METRIC_KEYS
         if self.trainer.ent_reg > 0:
             keys = keys | ENTROPY_REG_METRIC_KEYS
-        return keys
-
-    @override
-    def metric_names(self, dataset: ClusteringDataset) -> frozenset[str]:
-        keys = LL_METRIC_KEYS | self.training_metric_keys
-        if dataset.has_labels:
-            keys = keys | CLUSTERING_METRIC_KEYS
-        for analysis in self.get_analyses(dataset):
-            keys = keys | analysis.metric_names
         return keys

@@ -447,7 +447,11 @@ def print_trial_summary(
     from rich.columns import Columns
 
     maximize = direction == "MAXIMIZE"
-    best = max(completed, key=lambda t: t.value or 0) if maximize else min(completed, key=lambda t: t.value or 0)
+    best = (
+        max(completed, key=lambda t: t.value or 0)
+        if maximize
+        else min(completed, key=lambda t: t.value or 0)
+    )
     ranked = sorted(completed, key=lambda t: t.value or 0, reverse=maximize)
 
     good_nums = _good_set(completed, direction, pct)
@@ -476,7 +480,9 @@ def print_trial_summary(
         # Human-rounded value
         good_values = [t.params[param] for t in good_trials if param in t.params]
         if isinstance(dists.get(param), od.CategoricalDistribution):
-            human_val = str(max(set(good_values), key=good_values.count)) if good_values else ""
+            human_val = (
+                str(max(set(good_values), key=good_values.count)) if good_values else ""
+            )
         elif good_values:
             human_val = _human_round(statistics.median(good_values))
         else:
@@ -700,10 +706,10 @@ def _render_grid(
             frac = (v - lo) / (hi - lo) if hi > lo else 0.5
         return min(n - 1, max(0, int(frac * n)))
 
-    sampled_grid   = [[0] * grid_w for _ in range(grid_h)]
+    sampled_grid = [[0] * grid_w for _ in range(grid_h)]
     converged_grid = [[0] * grid_w for _ in range(grid_h)]
     completed_grid = [[0] * grid_w for _ in range(grid_h)]
-    good_grid      = [[0] * grid_w for _ in range(grid_h)]
+    good_grid = [[0] * grid_w for _ in range(grid_h)]
 
     for t in coverage_trials:
         if px not in t.params or py not in t.params:
@@ -749,10 +755,10 @@ def _render_grid(
     for row in range(grid_h - 1, -1, -1):
         line = ""
         for col in range(grid_w):
-            n_sampled   = sampled_grid[row][col]
+            n_sampled = sampled_grid[row][col]
             n_converged = converged_grid[row][col]
             n_completed = completed_grid[row][col]
-            n_good      = good_grid[row][col]
+            n_good = good_grid[row][col]
             if n_sampled == 0:
                 line += " "
             elif n_converged == 0:
@@ -872,7 +878,14 @@ def print_param_pair_coverage(
         row_pairs = pairs[i : i + 3]
         rendered = [
             _render_grid(
-                px, py, dists, coverage_trials, completed, good, grid_w, grid_h,
+                px,
+                py,
+                dists,
+                coverage_trials,
+                completed,
+                good,
+                grid_w,
+                grid_h,
                 converged_trials=converged_trials,
             )
             for px, py in row_pairs

@@ -50,15 +50,18 @@ class MNISTDataset(ClusteringDataset):
     _test_labels: Array
 
     @classmethod
-    def load(cls, cache_dir: Path) -> "MNISTDataset":
+    def load(cls, cache_dir: Path, seed: int = 0) -> "MNISTDataset":
         """Load MNIST dataset.
 
         Args:
             cache_dir: Directory for caching downloaded data
+            seed: Unused (MNIST ships with a fixed train/test split); accepted
+                so the CLI-seed can be passed uniformly through ``instantiate``.
 
         Returns:
             Loaded MNIST dataset
         """
+        del seed
 
         def transform_tensor(x: NDArray[np.uint8]) -> NDArray[np.float32]:
             return x.reshape(-1).astype(np.float32)

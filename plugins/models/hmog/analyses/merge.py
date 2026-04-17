@@ -21,7 +21,6 @@ from apps.interface.clustering.analyses.merge import (
     MergeResults,
     compute_merge_metrics,
     fit_label_permutation,
-    get_valid_clusters,
     hierarchy_to_mapping,
     plot_merge_results,
 )
@@ -30,10 +29,16 @@ from apps.runtime import STATS_LEVEL, MetricDict, RunHandler
 from .base import cluster_probabilities, get_component_prototypes
 from .hierarchy import KLClusterHierarchy
 
-KL_MERGE_METRIC_KEYS: frozenset[str] = frozenset({
-    "Merging/KL Train Accuracy", "Merging/KL Train NMI", "Merging/KL Train ARI",
-    "Merging/KL Test Accuracy", "Merging/KL Test NMI", "Merging/KL Test ARI",
-})
+KL_MERGE_METRIC_KEYS: frozenset[str] = frozenset(
+    {
+        "Merging/KL Train Accuracy",
+        "Merging/KL Train NMI",
+        "Merging/KL Train ARI",
+        "Merging/KL Test Accuracy",
+        "Merging/KL Test NMI",
+        "Merging/KL Test ARI",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -70,28 +75,37 @@ class KLMergeAnalysis(MergeAnalysis[KLMergeResults]):
 
         prototypes = get_component_prototypes(manifold, params)
         train_probs = cluster_probabilities(manifold, params, dataset.train_data)
-        train_assignments = jnp.argmax(train_probs, axis=1)
 
-        n_clusters = manifold.pst_man.n_categories
+        n_clusters = manifold.prr_man.n_categories
         n_classes = dataset.n_classes
 
-        valid_clusters = get_valid_clusters(
-            train_assignments, n_clusters, n_classes,
-            self.filter_empty_clusters, self.min_cluster_size, len(dataset.train_data),
-        )
-
-        # Load KL hierarchy and compute mapping
+        # Reuse the hierarchy's pre-computed valid_clusters so the two stages
+        # operate on the same filtered set.
         hierarchy = handler.load_artifact(epoch, KLClusterHierarchy)
-        filtered_mapping = hierarchy_to_mapping(hierarchy, valid_clusters, n_classes)
+        valid_clusters = hierarchy.valid_clusters
+
+        filtered_mapping = hierarchy_to_mapping(hierarchy, n_classes)
 
         full_mapping = jnp.zeros((n_clusters, n_classes), dtype=jnp.int32)
         for i, cluster_idx in enumerate(valid_clusters):
             full_mapping = full_mapping.at[cluster_idx].set(filtered_mapping[i])
 
-        label_permutation = fit_label_permutation(full_mapping, train_probs, dataset.train_labels, n_classes)
-        train_metrics = compute_merge_metrics(full_mapping, train_probs, dataset.train_labels, label_permutation=label_permutation)
+        label_permutation = fit_label_permutation(
+            full_mapping, train_probs, dataset.train_labels, n_classes
+        )
+        train_metrics = compute_merge_metrics(
+            full_mapping,
+            train_probs,
+            dataset.train_labels,
+            label_permutation=label_permutation,
+        )
         test_probs = cluster_probabilities(manifold, params, dataset.test_data)
-        test_metrics = compute_merge_metrics(full_mapping, test_probs, dataset.test_labels, label_permutation=label_permutation)
+        test_metrics = compute_merge_metrics(
+            full_mapping,
+            test_probs,
+            dataset.test_labels,
+            label_permutation=label_permutation,
+        )
 
         return KLMergeResults(
             prototypes=prototypes,
@@ -113,10 +127,16 @@ class KLMergeAnalysis(MergeAnalysis[KLMergeResults]):
     @override
     def metrics(self, artifact: KLMergeResults) -> MetricDict:
         return {
-            "Merging/KL Train Accuracy": (STATS_LEVEL, jnp.array(artifact.train_accuracy)),
+            "Merging/KL Train Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.train_accuracy),
+            ),
             "Merging/KL Train NMI": (STATS_LEVEL, jnp.array(artifact.train_nmi_score)),
             "Merging/KL Train ARI": (STATS_LEVEL, jnp.array(artifact.train_ari_score)),
-            "Merging/KL Test Accuracy": (STATS_LEVEL, jnp.array(artifact.test_accuracy)),
+            "Merging/KL Test Accuracy": (
+                STATS_LEVEL,
+                jnp.array(artifact.test_accuracy),
+            ),
             "Merging/KL Test NMI": (STATS_LEVEL, jnp.array(artifact.test_nmi_score)),
             "Merging/KL Test ARI": (STATS_LEVEL, jnp.array(artifact.test_ari_score)),
         }

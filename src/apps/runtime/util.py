@@ -49,7 +49,11 @@ type MetricHistory = dict[str, list[tuple[int, float]]]  # Time series
 
 
 def update_stats(
-    group: str, name: str, stats: Array, metrics: MetricDict, level: int = STATS_NUM
+    group: str,
+    name: str,
+    stats: Array,
+    metrics: MetricDict,
+    level: Array = STATS_LEVEL,
 ) -> MetricDict:
     """Add min/median/max statistics for an array to a metrics dict.
 
@@ -58,7 +62,9 @@ def update_stats(
         name: Metric name within group (e.g., "Obs Location")
         stats: Array of values to compute statistics over
         metrics: Existing metrics dict to update
-        level: Log level for these metrics (default: STATS_NUM)
+        level: Log level for these metrics. Pass the module-level
+            ``STATS_LEVEL`` / ``INFO_LEVEL`` constants — they're pre-built
+            JAX arrays so no per-call allocation.
 
     Returns:
         Updated metrics dict with three new entries:
@@ -66,12 +72,11 @@ def update_stats(
         - "{group}/{name} Median"
         - "{group}/{name} Max"
     """
-    level_arr = jnp.array(level)
     metrics.update(
         {
-            f"{group}/{name} Min": (level_arr, jnp.min(stats)),
-            f"{group}/{name} Median": (level_arr, jnp.median(stats)),
-            f"{group}/{name} Max": (level_arr, jnp.max(stats)),
+            f"{group}/{name} Min": (level, jnp.min(stats)),
+            f"{group}/{name} Median": (level, jnp.median(stats)),
+            f"{group}/{name} Max": (level, jnp.max(stats)),
         }
     )
     return metrics
@@ -80,9 +85,7 @@ def update_stats(
 def stats_keys(group: str, *names: str) -> frozenset[str]:
     """Declare the metric keys that update_stats() will produce."""
     return frozenset(
-        f"{group}/{name} {stat}"
-        for name in names
-        for stat in ("Min", "Median", "Max")
+        f"{group}/{name} {stat}" for name in names for stat in ("Min", "Median", "Max")
     )
 
 

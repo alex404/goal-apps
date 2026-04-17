@@ -35,7 +35,7 @@ from sklearn.cluster import KMeans
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
-from apps.interface.clustering import add_clustering_metrics, clustering_nmi
+from apps.interface.clustering import add_clustering_metrics
 from apps.interface.clustering.analyses import (
     ClusterStatisticsAnalysis,
     CoAssignmentHierarchyAnalysis,
@@ -49,6 +49,7 @@ from apps.interface.clustering.protocols import (
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
 from apps.runtime import (
+    L1_L2_METRIC_KEYS,
     Logger,
     RunHandler,
     add_ll_metrics,
@@ -56,6 +57,7 @@ from apps.runtime import (
 )
 from apps.runtime.util import MetricDict
 
+from .metrics import HMOG_PRE_TRAINING_METRIC_KEYS
 from .trainers import LGMPreTrainer
 
 # Start logger
@@ -113,7 +115,6 @@ def to_analytic_params(
     return analytic_manifold.join_conjugated(lkl_params, full_mix_params)
 
 
-# TODO: defaults should go in configstore, not hardcoded in the trainer
 @dataclass(frozen=True)
 class ProjectionTrainer:
     """Trainer for projection-based training of mixture models.
@@ -448,6 +449,16 @@ class ProjectionHMoGModel(
     def n_parameters(self) -> int:
         return self.lgm.dim - self.lgm.lat_man.dim + self.mixture.dim
 
+    @property
+    @override
+    def training_metric_keys(self) -> frozenset[str]:
+        # Pretraining phase emits HMOG_PRE_TRAINING_METRIC_KEYS (and L1/L2 via
+        # LGMPreTrainer's l1_l2_regularizer). The projection phase only emits
+        # LL + clustering metrics, which ClusteringModel.metric_names adds
+        # automatically via HasLogLikelihood + label detection — we don't
+        # need to declare them here.
+        return HMOG_PRE_TRAINING_METRIC_KEYS | L1_L2_METRIC_KEYS
+
     # Initialization
 
     @override
@@ -484,7 +495,6 @@ class ProjectionHMoGModel(
     def _initialize_mixture(self, key: Array) -> Array:
         return self.mixture.initialize(key, shape=self.mix_init_scale)
 
-
     def _initialize_mixture_from_projections(
         self, key: Array, latent_locations: Array
     ) -> Array:
@@ -495,7 +505,8 @@ class ProjectionHMoGModel(
         """
         mix = self.mixture
         log.info("Running k-means on latent projections for mixture initialization...")
-        km = KMeans(n_clusters=self.n_clusters, n_init="auto", random_state=int(key[0]))
+        km_seed = int(jax.random.randint(key, (), 0, 2**31 - 1))
+        km = KMeans(n_clusters=self.n_clusters, n_init="auto", random_state=km_seed)
         km.fit(np.asarray(latent_locations))
         centers = jnp.array(km.cluster_centers_)
         log.info("K-means mixture initialization complete")
@@ -607,7 +618,12 @@ class ProjectionHMoGModel(
             analyses.append(ClusterStatisticsAnalysis())
 
         if cfg.co_assignment_hierarchy.enabled:
-            analyses.append(CoAssignmentHierarchyAnalysis())
+            analyses.append(
+                CoAssignmentHierarchyAnalysis(
+                    filter_empty_clusters=cfg.co_assignment_hierarchy.filter_empty_clusters,
+                    min_cluster_size=cfg.co_assignment_hierarchy.min_cluster_size,
+                )
+            )
 
         if dataset.has_labels:
             if cfg.optimal_merge.enabled:
@@ -618,12 +634,7 @@ class ProjectionHMoGModel(
                     )
                 )
             if cfg.co_assignment_merge.enabled:
-                analyses.append(
-                    CoAssignmentMergeAnalysis(
-                        filter_empty_clusters=cfg.co_assignment_merge.filter_empty_clusters,
-                        min_cluster_size=cfg.co_assignment_merge.min_cluster_size,
-                    )
-                )
+                analyses.append(CoAssignmentMergeAnalysis())
 
         return analyses + list(dataset.get_dataset_analyses().values())
 
@@ -775,7 +786,6 @@ class ProjectionHMoGModel(
                             test_labels=dataset.test_labels,
                             train_clusters=train_clusters,
                             test_clusters=test_clusters,
-                                clustering_nmi_fn=clustering_nmi,
                         )
                     return metrics
 

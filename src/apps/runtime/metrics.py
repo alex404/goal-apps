@@ -19,11 +19,13 @@ from .util import INFO_LEVEL, STATS_LEVEL, MetricDict
 log = logging.getLogger(__name__)
 
 
-LL_METRIC_KEYS: frozenset[str] = frozenset({
-    "Log-Likelihood/Train",
-    "Log-Likelihood/Test",
-    "Log-Likelihood/Scaled BIC",
-})
+LL_METRIC_KEYS: frozenset[str] = frozenset(
+    {
+        "Log-Likelihood/Train",
+        "Log-Likelihood/Test",
+        "Log-Likelihood/Scaled BIC",
+    }
+)
 
 
 def add_ll_metrics(
@@ -34,6 +36,13 @@ def add_ll_metrics(
     n_train_samples: int,
 ) -> MetricDict:
     """Add log-likelihood and BIC metrics.
+
+    ``Scaled BIC`` is the per-sample, sign-flipped BIC:
+    ``train_ll - (model_dim * log(n)) / (2 * n)``. Standard BIC is
+    ``model_dim * log(n) - 2 * n * train_ll`` and is minimized; dividing by
+    ``2 * n`` and negating gives a quantity that's on the same scale as
+    ``train_ll`` and is maximized. Use this when you want BIC to plot
+    alongside log-likelihood without flipping axes.
 
     Args:
         metrics: Existing metrics dict to update
@@ -48,21 +57,27 @@ def add_ll_metrics(
         - Log-Likelihood/Test
         - Log-Likelihood/Scaled BIC
     """
-    scaled_bic = -(model_dim * jnp.log(n_train_samples) / n_train_samples - 2 * train_ll) / 2
-    metrics.update({
-        "Log-Likelihood/Train": (INFO_LEVEL, train_ll),
-        "Log-Likelihood/Test": (INFO_LEVEL, test_ll),
-        "Log-Likelihood/Scaled BIC": (INFO_LEVEL, scaled_bic),
-    })
+    scaled_bic = (
+        -(model_dim * jnp.log(n_train_samples) / n_train_samples - 2 * train_ll) / 2
+    )
+    metrics.update(
+        {
+            "Log-Likelihood/Train": (INFO_LEVEL, train_ll),
+            "Log-Likelihood/Test": (INFO_LEVEL, test_ll),
+            "Log-Likelihood/Scaled BIC": (INFO_LEVEL, scaled_bic),
+        }
+    )
     return metrics
 
 
-L1_L2_METRIC_KEYS: frozenset[str] = frozenset({
-    "Regularization/L1 Norm",
-    "Regularization/L1 Penalty",
-    "Regularization/L2 Norm",
-    "Regularization/L2 Penalty",
-})
+L1_L2_METRIC_KEYS: frozenset[str] = frozenset(
+    {
+        "Regularization/L1 Norm",
+        "Regularization/L1 Penalty",
+        "Regularization/L2 Norm",
+        "Regularization/L2 Penalty",
+    }
+)
 
 
 def l1_l2_regularizer(
@@ -99,6 +114,7 @@ def log_with_frequency(
         log_freq: Log every log_freq epochs
         compute_fn: Function that computes and returns MetricDict
     """
+
     def do_log() -> None:
         metrics = compute_fn()
         logger.log_metrics(metrics, epoch + 1)

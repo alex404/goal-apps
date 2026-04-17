@@ -384,7 +384,7 @@ def run_optuna_trial(
     """
     import optuna
 
-    from apps.runtime import DivergentTrainingError
+    from apps.runtime import DivergentTrainingError, Logger
 
     from .configs import ClusteringRunConfig
     from .initialize import initialize_run
@@ -436,11 +436,10 @@ def run_optuna_trial(
             logger.finalize(handler)
             raise optuna.TrialPruned() from e
         except Exception as e:
-            # DivergentTrainingError from JAX callbacks gets wrapped in
-            # XlaRuntimeError, losing the original type.
-            if isinstance(
-                e.__cause__, DivergentTrainingError
-            ) or "DivergentTrainingError" in str(e):
+            # DivergentTrainingError raised from an io_callback inside JIT is
+            # wrapped in XlaRuntimeError with no __cause__. Logger.monitor_params
+            # sets a module-level flag before raising, which survives the wrap.
+            if Logger.divergence_raised():
                 log.warning(f"Trial {trial.number} diverged: {e}")
                 logger.finalize(handler)
                 raise optuna.TrialPruned() from e

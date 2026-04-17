@@ -206,7 +206,7 @@ goal-apps/
 │       │   └── analyses/   # HMoG-specific analyses (KL hierarchy, loadings)
 │       └── mfa/            # Mixture of Factor Analyzers
 │           ├── model.py    # MFAModel (full and diagonal variants)
-│           ├── trainers.py # Single-phase gradient trainer
+│           ├── trainers.py # Gradient-EM trainer (cycled via shared driver)
 │           └── configs.py  # MFAConfig, MFADiagonalConfig
 │
 ├── config/hydra/           # Hydra configuration files
@@ -250,6 +250,95 @@ goal-apps/
    - Generate visualizations and metrics
    - Results saved to epoch directories
 
+### Navigation Map
+
+Where common concerns live across the codebase:
+
+- **Where metrics come from.** Two sources, both write into the same
+  `MetricHistory` buffer: (1) *training-loop metrics* emitted from
+  `model.train()` via `logger.log_metrics(...)` — e.g. log-likelihood, BIC,
+  clustering NMI/ARI, regularization penalties, timing. These are added by
+  helpers like `add_ll_metrics`, `add_clustering_metrics`, `l1_l2_regularizer`
+  (`src/apps/runtime/metrics.py`, `src/apps/interface/clustering/metrics.py`).
+  (2) *Analysis metrics* emitted from `Analysis.process(...)` via
+  `analysis.metrics(artifact)`.
+- **`metric_names` is auto-composed for clustering models.**
+  `ClusteringModel.metric_names(dataset)` merges: `LL_METRIC_KEYS` if the
+  model implements `HasLogLikelihood` (runtime-checkable protocol),
+  `CLUSTERING_METRIC_KEYS` if `dataset.has_labels`, whatever the subclass
+  declares in the `training_metric_keys` property (model-specific stats /
+  regularization keys), and the union of `metric_keys` across
+  `get_analyses(dataset)`. Subclasses normally only declare
+  `training_metric_keys` and never override `metric_names` itself. Used by
+  the Optuna create validator to reject typos in `--metric`.
+- **Metric keys are frozensets.** Each helper (`add_ll_metrics`,
+  `add_clustering_metrics`, `l1_l2_regularizer`, `update_stats` via
+  `stats_keys(...)`) ships with a sibling frozenset of the keys it
+  produces. Declaring `training_metric_keys` is just unioning those
+  siblings. Update the frozenset whenever you rename or add a key.
+- **Optuna study artifacts.** One study dir per experiment:
+  `runs/tune/<study>/study-config.yaml` (overrides, metric, direction,
+  pruner, storage) and `runs/tune/<study>/study.db` (SQLite). Trial runs
+  land in `runs/tune/<study>/t<N>/` with the usual `run-config.yaml`,
+  `metrics.joblib`, `epoch_<N>/` layout.
+- **Divergence-to-prune flow.** `Logger.monitor_params` is called inside
+  jitted training steps. On NaN it enters an `io_callback` that flips the
+  module-level `_divergence_raised` flag and raises
+  `DivergentTrainingError`. JAX wraps that in `XlaRuntimeError` with no
+  exception chaining, so `sweep.py`'s trial objective reads
+  `Logger.divergence_raised()` in its `except Exception` branch and
+  converts to `optuna.TrialPruned` — never string-match on the error.
+- **Atomic checkpoints.** `handler._atomic_dump` does dump-to-`.tmp` +
+  `os.replace` for params, metrics, and artifacts so a crashed write
+  never leaves a truncated resume target. `save_debug_state` is
+  intentionally non-atomic (debug only).
+- **Metrics fail fast.** Clustering metrics (`clustering_nmi`,
+  `clustering_ari`) do NOT guard degenerate denominators. A single-
+  cluster / single-class split genuinely has undefined NMI/ARI, and the
+  maintainer prefers `NaN` in the log over a fudged zero that silently
+  poisons Optuna. If you find yourself tempted to add `+ eps` to a
+  denominator, stop and surface the degeneracy instead.
+- **Entropy uses library primitive in mean coordinates.** Entropy
+  computations delegate to `Categorical.negative_entropy`, which takes
+  *mean coordinates* (K-1 dim; the 0th probability is dropped by
+  `from_probs` and reconstructed inside the library as `1 - sum(means)`).
+  Do not hand-roll `jnp.log` / `xlogy` loops in metric code — use
+  `cat.negative_entropy(cat.from_probs(probs))`. Natural coordinates
+  (log-odds) would give identical entropy via `dual_potential`, but
+  clustering probabilities are already in mean form, so `from_probs` is
+  the zero-conversion path.
+- **Hierarchy filters once, merge reuses.** `CoAssignmentHierarchyAnalysis`
+  and `KLHierarchyAnalysis` take `filter_empty_clusters` /
+  `min_cluster_size` and persist the resulting `valid_clusters` inside
+  the `ClusterHierarchy` artifact. Downstream `CoAssignmentMergeAnalysis`
+  and `KLMergeAnalysis` load the hierarchy artifact and read
+  `hierarchy.valid_clusters` — they do NOT expose their own filter
+  fields and must run at an epoch where the matching hierarchy artifact
+  already exists. `OptimalMergeAnalysis` doesn't depend on a hierarchy
+  (Hungarian on the raw contingency) and keeps its own filter fields.
+  `model.get_analyses()` controls the ordering.
+
+### Testing Protocol (Gold Standard)
+
+For library-wide changes (`src/apps`, trainers, Optuna integration,
+config plumbing), the most thorough smoke test is a small Optuna study:
+
+```bash
+uv run goal tune optuna create --metric "Clustering/Test ARI" \
+    experiment=smoke dataset=mnist model=mnist-hmog-ld20 \
+    use_wandb=false \
+    <small search space>
+uv run goal tune optuna run smoke  # a handful of trials
+uv run goal tune optuna status smoke
+```
+
+This exercises config composition, training, analyses, metric logging,
+Optuna pruning/reporting, divergence handling, and checkpoint I/O in a
+single run. Heavier than `--dry-run`; not required for every change, but
+the right default when touching cross-cutting code. Pass
+`use_wandb=false` for local verification without creating public W&B
+runs — the local metrics buffer and Optuna DB are still populated.
+
 ### Batch Size vs Batch Steps
 
 Training supports two distinct strategies controlled by `batch_size` and `batch_steps`:
@@ -282,14 +371,44 @@ Shared clustering analyses (from `src/apps/interface/clustering/analyses/`):
 
 The Mixture of Factor Analyzers (MFA) is a simpler clustering model:
 - Supports both full factor analysis and diagonal covariance variants
-- Single-phase gradient training via `GradientTrainer`
+- Gradient-EM training via `GradientTrainer` (no pretraining phase)
 - Initialized from k-means cluster centers
 - Registered as `mfa` and `mfa-diagonal` in Hydra
 - Implements `ClusteringModel`, `HasLogLikelihood`, `IsGenerative`, `HasSoftAssignments`, `CanComputePrototypes`
+- Shares the cycle-orchestration driver (`run_cyclic_training`, `cycle_lr_schedule` in `src/apps/interface/clustering/model.py`) with HMoG, so `model.num_cycles` + `model.lr_scales` behave identically across the two — per-cycle checkpoints, per-cycle LR multipliers, resume-at-cycle-boundary. MFA has no pretraining phase, so cycling starts at epoch 0.
+
+### Cyclic Training and Optuna Pruning
+
+HMoG and MFA both expose `num_cycles` + `lr_scales` at the model-config
+level. The shared driver lives in
+`src/apps/interface/clustering/model.py` and:
+- writes a checkpoint at the end of every cycle (so Optuna's
+  `check_pruning` sees each cycle as a reportable step),
+- resumes mid-training by mapping the loaded epoch back to a cycle
+  index — cycle boundaries are the only resumable points, mid-cycle
+  state is not restored,
+- interpolates `lr_scales` (arbitrary-length keypoint list) across
+  `num_cycles` so a small set of anchor values drives any number of
+  cycles.
+
+Within a cycle, HMoG still runs three sub-phases (`lgm` / `mix` /
+`full`); MFA runs a single `trainer` phase. The driver is agnostic to
+what happens inside a cycle — the model's `run_cycle` callback owns that.
+
+### Single-Source Seed Convention
+
+All randomness in goal-apps flows from the CLI-set `seed` field on
+`RunConfig` (default 0). `initialize_run` threads `seed=cfg.seed`
+into `instantiate(cfg.dataset, ...)`, so dataset `load` methods receive
+it as a keyword argument. Do NOT add local `random_seed` fields to
+dataset configs or model configs — the CLI seed is the single source of
+truth. Sklearn components that need a Python `int` seed should derive
+it deterministically from the JAX key via
+`int(jax.random.randint(key, (), 0, 2**31 - 1))`.
 
 ### Configuration Composition
 
-Hydra composes configs in order: base defaults → dataset config → model config → CLI overrides → saved config (on resume). Model parameters are nested under the `model` key (e.g., `model.n_clusters=60`, `model.full.ent_reg=1e-1`). Top-level params like `run_name`, `device`, `jit`, `use_wandb`, `log_level` are overridden directly.
+Effective precedence (later wins): base defaults ⟶ Hydra group selection (`dataset=X`, `model=Y`) ⟶ saved `run-config.yaml` (if resuming) ⟶ CLI overrides. On resume, `filter_group_defaults` (in `cli/initialize.py`) drops any `dataset=` / `model=` override because the saved subtree is already composed and a bare scalar would clobber it; subkey overrides like `dataset.n_samples=1000` still take effect. Model parameters are nested under `model` (e.g. `model.n_clusters=60`, `model.full.ent_reg=1e-1`); top-level params like `run_name`, `device`, `jit`, `use_wandb`, `log_level` override directly.
 
 ### Hyperparameter Tuning
 

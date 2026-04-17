@@ -33,11 +33,9 @@ analyses:
   cluster_statistics:
     enabled: true
   co_assignment_hierarchy:
-    enabled: false
+    enabled: true  # CoAssignmentMergeAnalysis reads valid_clusters from this artifact
   co_assignment_merge:
     enabled: true
-    filter_empty_clusters: true
-    min_cluster_size: 0.0005
   optimal_merge:
     enabled: true
     filter_empty_clusters: true

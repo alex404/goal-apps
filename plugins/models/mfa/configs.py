@@ -98,6 +98,17 @@ class MFAConfig(ClusteringModelConfig):
     min_var: float = 0.01
     """Minimum variance for regularization (prevents NaN for zero-variance pixels)."""
 
+    # Cycle structure (matches HMoG's num_cycles / lr_scales). Each cycle
+    # runs ``trainer.n_epochs`` epochs and emits a per-cycle checkpoint,
+    # so Optuna can prune between cycles and sweep ``lr_scales`` as a
+    # separate dimension.
+    num_cycles: int = 1
+    """Number of training cycles. Total epochs = num_cycles * trainer.n_epochs."""
+
+    lr_scales: list[float] = field(default_factory=list)
+    """Per-cycle LR multipliers. Empty list → 1.0 per cycle. Interpolated
+    across num_cycles via cycle_lr_schedule."""
+
     # Trainer
     trainer: GradientTrainerConfig = field(default_factory=GradientTrainerConfig)
     """Trainer configuration."""

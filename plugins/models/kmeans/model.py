@@ -10,13 +10,8 @@ import jax.numpy as jnp
 import numpy as np
 from hydra.core.config_store import ConfigStore
 from jax import Array
-from scipy.optimize import linear_sum_assignment
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.metrics import (
-    adjusted_rand_score,
-    normalized_mutual_info_score,
-)
 from sklearn.pipeline import Pipeline
 
 from apps.interface import (
@@ -25,9 +20,10 @@ from apps.interface import (
     ClusteringModel,
     ClusteringModelConfig,
 )
+from apps.interface.clustering import add_clustering_metrics
 from apps.interface.clustering.analyses import ClusterStatisticsAnalysis
 from apps.interface.clustering.protocols import CanComputePrototypes
-from apps.runtime import INFO_LEVEL, Logger, RunHandler
+from apps.runtime import INFO_LEVEL, Logger, MetricDict, RunHandler
 
 log = logging.getLogger(__name__)
 
@@ -144,64 +140,23 @@ class KMeansModel(ClusteringModel, CanComputePrototypes):
         self._cluster_centers = self._kmeans.cluster_centers_
 
         # Compute and log basic metrics
-        train_labels = self._kmeans.predict(train_data)
+        train_clusters = jnp.array(self._kmeans.predict(train_data))
 
         if dataset.has_labels:
-            true_labels = np.array(dataset.train_labels)
-            nmi = normalized_mutual_info_score(true_labels, train_labels)
-            ari = adjusted_rand_score(true_labels, train_labels)
+            test_data_np = np.array(dataset.test_data)
+            test_clusters = jnp.array(self._kmeans.predict(test_data_np))
 
-            # Compute optimal cluster-to-class mapping via Hungarian algorithm on TRAIN data
-            n_clusters_k = len(np.unique(train_labels))
-            n_classes_k = len(np.unique(true_labels))
-            cost_matrix = np.zeros((n_clusters_k, n_classes_k))
-            unique_clusters_k = np.unique(train_labels)
-            unique_classes_k = np.unique(true_labels)
-            for li, ci in enumerate(unique_clusters_k):
-                for lj, cj in enumerate(unique_classes_k):
-                    cost_matrix[li, lj] = -np.sum((train_labels == ci) & (true_labels == cj))
-            row_ind, col_ind = linear_sum_assignment(cost_matrix)
-            cluster_to_class = np.full(self._n_clusters, -1)
-            for li, lj in zip(row_ind, col_ind):
-                cluster_to_class[unique_clusters_k[li]] = unique_classes_k[lj]
-
-            accuracy = float(np.mean(cluster_to_class[train_labels] == true_labels))
-
-            logger.log_metrics(
-                {"K-means/Train NMI": (INFO_LEVEL, jnp.array(nmi))}, jnp.array(0)
+            metrics: MetricDict = {}
+            add_clustering_metrics(
+                metrics,
+                n_clusters=self._n_clusters,
+                n_classes=dataset.n_classes,
+                train_labels=dataset.train_labels,
+                test_labels=dataset.test_labels,
+                train_clusters=train_clusters,
+                test_clusters=test_clusters,
             )
-            logger.log_metrics(
-                {"K-means/Train ARI": (INFO_LEVEL, jnp.array(ari))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"K-means/Train Accuracy": (INFO_LEVEL, jnp.array(accuracy))}, jnp.array(0)
-            )
-
-            # Test metrics
-            test_data = np.array(dataset.test_data)
-            test_labels = self._kmeans.predict(test_data)
-            test_true_labels = np.array(dataset.test_labels)
-
-            test_nmi = normalized_mutual_info_score(test_true_labels, test_labels)
-            test_ari = adjusted_rand_score(test_true_labels, test_labels)
-            test_accuracy = float(np.mean(cluster_to_class[test_labels] == test_true_labels))
-
-            logger.log_metrics(
-                {"K-means/Test NMI": (INFO_LEVEL, jnp.array(test_nmi))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"K-means/Test ARI": (INFO_LEVEL, jnp.array(test_ari))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"K-means/Test Accuracy": (INFO_LEVEL, jnp.array(test_accuracy))}, jnp.array(0)
-            )
-
-            log.info(
-                f"K-means Train NMI: {nmi:.3f}, ARI: {ari:.3f}, Accuracy: {accuracy:.3f}"
-            )
-            log.info(
-                f"K-means Test NMI: {test_nmi:.3f}, ARI: {test_ari:.3f}, Accuracy: {test_accuracy:.3f}"
-            )
+            logger.log_metrics(metrics, jnp.array(0))
 
         # Save dummy parameters (K-means stores state internally)
         handler.save_params(jnp.array([0.0]), 0)
@@ -440,7 +395,12 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
                 f"PCA explains {explained_var:.3f} of variance with {self._pca.n_components_} components"
             )
             logger.log_metrics(
-                {"PCA/Explained_Variance_Ratio": (INFO_LEVEL, jnp.array(explained_var))},
+                {
+                    "PCA/Explained_Variance_Ratio": (
+                        INFO_LEVEL,
+                        jnp.array(explained_var),
+                    )
+                },
                 jnp.array(0),
             )
             logger.log_metrics(
@@ -449,65 +409,23 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
             )
 
         # Get cluster assignments
-        train_labels = self._pipeline.predict(train_data)
+        train_clusters = jnp.array(self._pipeline.predict(train_data))
 
         if dataset.has_labels:
-            true_labels = np.array(dataset.train_labels)
-            nmi = normalized_mutual_info_score(true_labels, train_labels)
-            ari = adjusted_rand_score(true_labels, train_labels)
+            test_data_np = np.array(dataset.test_data)
+            test_clusters = jnp.array(self._pipeline.predict(test_data_np))
 
-            # Compute optimal cluster-to-class mapping via Hungarian algorithm on TRAIN data
-            n_clusters_k = len(np.unique(train_labels))
-            n_classes_k = len(np.unique(true_labels))
-            cost_matrix = np.zeros((n_clusters_k, n_classes_k))
-            unique_clusters_k = np.unique(train_labels)
-            unique_classes_k = np.unique(true_labels)
-            for li, ci in enumerate(unique_clusters_k):
-                for lj, cj in enumerate(unique_classes_k):
-                    cost_matrix[li, lj] = -np.sum((train_labels == ci) & (true_labels == cj))
-            row_ind, col_ind = linear_sum_assignment(cost_matrix)
-            cluster_to_class = np.full(self._n_clusters, -1)
-            for li, lj in zip(row_ind, col_ind):
-                cluster_to_class[unique_clusters_k[li]] = unique_classes_k[lj]
-
-            accuracy = float(np.mean(cluster_to_class[train_labels] == true_labels))
-
-            logger.log_metrics(
-                {"PCA+K-means/Train NMI": (INFO_LEVEL, jnp.array(nmi))}, jnp.array(0)
+            metrics: MetricDict = {}
+            add_clustering_metrics(
+                metrics,
+                n_clusters=self._n_clusters,
+                n_classes=dataset.n_classes,
+                train_labels=dataset.train_labels,
+                test_labels=dataset.test_labels,
+                train_clusters=train_clusters,
+                test_clusters=test_clusters,
             )
-            logger.log_metrics(
-                {"PCA+K-means/Train ARI": (INFO_LEVEL, jnp.array(ari))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"PCA+K-means/Train Accuracy": (INFO_LEVEL, jnp.array(accuracy))}, jnp.array(0)
-            )
-
-            # Test metrics
-            test_data = np.array(dataset.test_data)
-            test_labels = self._pipeline.predict(test_data)
-            test_true_labels = np.array(dataset.test_labels)
-
-            test_nmi = normalized_mutual_info_score(test_true_labels, test_labels)
-            test_ari = adjusted_rand_score(test_true_labels, test_labels)
-            test_accuracy = float(np.mean(cluster_to_class[test_labels] == test_true_labels))
-
-            logger.log_metrics(
-                {"PCA+K-means/Test NMI": (INFO_LEVEL, jnp.array(test_nmi))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"PCA+K-means/Test ARI": (INFO_LEVEL, jnp.array(test_ari))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"PCA+K-means/Test Accuracy": (INFO_LEVEL, jnp.array(test_accuracy))},
-                jnp.array(0),
-            )
-
-            log.info(
-                f"PCA+K-means Train NMI: {nmi:.3f}, ARI: {ari:.3f}, Accuracy: {accuracy:.3f}"
-            )
-            log.info(
-                f"PCA+K-means Test NMI: {test_nmi:.3f}, ARI: {test_ari:.3f}, Accuracy: {test_accuracy:.3f}"
-            )
+            logger.log_metrics(metrics, jnp.array(0))
 
         # Save dummy parameters
         handler.save_params(jnp.array([0.0]), 0)

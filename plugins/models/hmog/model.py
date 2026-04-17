@@ -8,14 +8,13 @@ from typing import Any, override
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from goal.geometry import Diagonal, PositiveDefinite
 from goal.models import differentiable_hmog
 from jax import Array
 
 from apps.interface import Analysis, ClusteringDataset, ClusteringModel
 from apps.interface.analyses import GenerativeSamplesAnalysis
-from apps.interface.clustering import CLUSTERING_METRIC_KEYS
+from apps.interface.clustering import cycle_lr_schedule, run_cyclic_training
 from apps.interface.clustering.analyses import (
     ClusterStatistics,
     ClusterStatisticsAnalysis,
@@ -30,7 +29,7 @@ from apps.interface.clustering.protocols import (
     HasSoftAssignments,
 )
 from apps.interface.protocols import HasLogLikelihood, IsGenerative
-from apps.runtime import L1_L2_METRIC_KEYS, LL_METRIC_KEYS, Logger, RunHandler
+from apps.runtime import L1_L2_METRIC_KEYS, Logger, RunHandler
 
 from .analyses.base import get_component_prototypes
 from .analyses.hierarchy import KLHierarchyAnalysis
@@ -47,28 +46,6 @@ from .types import AnyHMoG
 
 # Start logger
 log = logging.getLogger(__name__)
-
-# Helpers
-
-
-def cycle_lr_schedule(keypoints: list[float], num_cycles: int) -> list[float]:
-    """Return a list of `num_cycles` learning rate multipliers by interpolating keypoints."""
-    n = len(keypoints)
-
-    if n == 0:
-        return [1.0] * num_cycles
-    if n == 1:
-        return [keypoints[0]] * num_cycles
-
-    if num_cycles < n:
-        log.warning(f"Too many keypoints ({n}) for {num_cycles} cycles. Subsampling.")
-        indices = np.linspace(0, n - 1, num=num_cycles).round().astype(int)
-        return [keypoints[i] for i in indices]
-
-    x_keypoints = np.linspace(0, num_cycles - 1, num=n)
-    x_full = np.arange(num_cycles)
-    schedule = np.interp(x_full, x_keypoints, keypoints)
-    return schedule.tolist()
 
 
 ### HMog Experiment ###
@@ -223,12 +200,22 @@ class HMoGModel(
             analyses.append(ClusterStatisticsAnalysis())
 
         if cfg.co_assignment_hierarchy.enabled:
-            analyses.append(CoAssignmentHierarchyAnalysis())
+            analyses.append(
+                CoAssignmentHierarchyAnalysis(
+                    filter_empty_clusters=cfg.co_assignment_hierarchy.filter_empty_clusters,
+                    min_cluster_size=cfg.co_assignment_hierarchy.min_cluster_size,
+                )
+            )
 
         analyses.append(LoadingMatrixAnalysis())
 
         if cfg.kl_hierarchy.enabled:
-            analyses.append(KLHierarchyAnalysis())
+            analyses.append(
+                KLHierarchyAnalysis(
+                    filter_empty_clusters=cfg.kl_hierarchy.filter_empty_clusters,
+                    min_cluster_size=cfg.kl_hierarchy.min_cluster_size,
+                )
+            )
 
         # Merge analyses require ground truth labels
         if dataset.has_labels:
@@ -241,24 +228,15 @@ class HMoGModel(
                 )
 
             if cfg.co_assignment_merge.enabled:
-                analyses.append(
-                    CoAssignmentMergeAnalysis(
-                        filter_empty_clusters=cfg.co_assignment_merge.filter_empty_clusters,
-                        min_cluster_size=cfg.co_assignment_merge.min_cluster_size,
-                    )
-                )
+                analyses.append(CoAssignmentMergeAnalysis())
 
             if cfg.kl_merge.enabled:
-                analyses.append(
-                    KLMergeAnalysis(
-                        filter_empty_clusters=cfg.kl_merge.filter_empty_clusters,
-                        min_cluster_size=cfg.kl_merge.min_cluster_size,
-                    )
-                )
+                analyses.append(KLMergeAnalysis())
 
         return analyses + list(dataset.get_dataset_analyses().values())
 
     @property
+    @override
     def training_metric_keys(self) -> frozenset[str]:
         from .metrics import HMOG_PRE_TRAINING_METRIC_KEYS, HMOG_TRAINING_METRIC_KEYS
         from .trainers import ENTROPY_REG_METRIC_KEYS, PRECISION_REG_METRIC_KEYS
@@ -270,15 +248,6 @@ class HMoGModel(
             | PRECISION_REG_METRIC_KEYS
             | ENTROPY_REG_METRIC_KEYS
         )
-
-    @override
-    def metric_names(self, dataset: ClusteringDataset) -> frozenset[str]:
-        keys = LL_METRIC_KEYS | self.training_metric_keys
-        if dataset.has_labels:
-            keys = keys | CLUSTERING_METRIC_KEYS
-        for analysis in self.get_analyses(dataset):
-            keys = keys | analysis.metric_names
-        return keys
 
     @override
     def generate(self, params: Array, key: Array, n_samples: int) -> Array:
@@ -327,11 +296,29 @@ class HMoGModel(
         logger: Logger,
         dataset: ClusteringDataset,
     ) -> None:
-        """Train HMoG model using alternating optimization."""
+        """Train the HMoG model.
+
+        Phase layout:
+          1. Optional LGM pretraining (``pre.n_epochs`` epochs) — a single
+             pass that seeds the latent space before cycling begins.
+          2. ``num_cycles`` training cycles, each running three gradient
+             sub-phases in order:
+               - ``lgm`` — optimize LGM params with mixture frozen
+               - ``mix`` — optimize mixture params with LGM fixed
+               - ``full`` — end-to-end gradient descent
+             Each cycle applies a scalar from ``lr_schedule`` (built from
+             ``lr_scales``) to the base learning rates. A checkpoint is
+             written at the end of every cycle so Optuna can prune between
+             them.
+
+        Resume semantics: on re-entry, the current epoch is mapped back to
+        either a point inside pretraining (continue pretraining from there)
+        or to a cycle index (resume cycling at the start of that cycle).
+        The cycle orchestration is shared with ``MFAModel.train`` via
+        ``run_cyclic_training`` in ``apps.interface.clustering.model``.
+        """
         # Split PRNG key for different training phases
-        init_key, pre_key, mix_reinit_key, *cycle_keys = jax.random.split(
-            key, self.num_cycles + 3
-        )
+        init_key, pre_key, mix_reinit_key, cycle_key = jax.random.split(key, 4)
 
         params = self.prepare_model(init_key, handler, dataset.train_data)
 
@@ -342,13 +329,9 @@ class HMoGModel(
         epochs_per_cycle = self.lgm.n_epochs + self.mix.n_epochs + self.full.n_epochs
         training_start_epoch = self.pre.n_epochs
 
-        # Determine current cycle and remaining work
         if epoch == 0:
             log.info("Starting training from scratch.")
-            current_cycle = 0
-
         elif epoch < training_start_epoch:
-            current_cycle = 0
             log.info("Continuing pretraining phase.")
         else:
             current_cycle = (epoch - training_start_epoch) // epochs_per_cycle
@@ -361,7 +344,6 @@ class HMoGModel(
             lat_obs_params, _, _ = self.manifold.pst_man.split_coords(lat_params)
             lgm = self.manifold.lwr_hrm
             lgm_params = lgm.join_coords(obs_params, int_params, lat_obs_params)
-            # Construct path to the pretrained file
 
             log.info("Pretraining LGM parameters")
             log.info(f"Learning rate: {self.pre.lr:.2e}")
@@ -391,63 +373,76 @@ class HMoGModel(
             self.process_checkpoint(key, handler, logger, dataset, self, epoch, params)
             log.info("Pretraining complete.")
 
-        # Cycle between Mixture and LGM training
-        for cycle in range(current_cycle, self.num_cycles):
-            current_lr_scale = self.lr_schedule[cycle]
-            key_lgm, key_mix, key_full = jax.random.split(cycle_keys[cycle], 3)
-            log.info("Starting training cycle %d", cycle + 1)
-            log.info(f"Learning rate scale: {current_lr_scale:.3f}")
-
-            # Train LGM (mixture params fixed)
+        def run_cycle(
+            cycle_k: Array,
+            cycle_params: Array,
+            cycle_idx: int,
+            lr_scale: float,
+            epoch_offset: int,
+        ) -> tuple[Array, int]:
+            key_lgm, key_mix, key_full = jax.random.split(cycle_k, 3)
+            cur_epoch = epoch_offset
             if self.lgm.n_epochs > 0:
                 log.info(
-                    f"Cycle {cycle + 1}/{self.num_cycles}: Training LGM parameters"
+                    f"Cycle {cycle_idx + 1}/{self.num_cycles}: Training LGM parameters"
                 )
-                params = self.lgm.train(
+                cycle_params = self.lgm.train(
                     key_lgm,
                     handler,
                     dataset,
                     self.manifold,
                     logger,
-                    current_lr_scale,
-                    epoch,
-                    params,
+                    lr_scale,
+                    cur_epoch,
+                    cycle_params,
                 )
-                epoch += self.lgm.n_epochs
-
+                cur_epoch += self.lgm.n_epochs
             if self.mix.n_epochs > 0:
                 log.info(
-                    f"Cycle {cycle + 1}/{self.num_cycles}: Training MoG parameters"
+                    f"Cycle {cycle_idx + 1}/{self.num_cycles}: Training MoG parameters"
                 )
-                params = self.mix.train(
+                cycle_params = self.mix.train(
                     key_mix,
                     handler,
                     dataset,
                     self.manifold,
                     logger,
-                    current_lr_scale,
-                    epoch,
-                    params,
+                    lr_scale,
+                    cur_epoch,
+                    cycle_params,
                 )
-                epoch += self.mix.n_epochs
-
+                cur_epoch += self.mix.n_epochs
             if self.full.n_epochs > 0:
-                log.info(f"Cycle {cycle + 1}/{self.num_cycles}: Training full model")
-                params = self.full.train(
+                log.info(
+                    f"Cycle {cycle_idx + 1}/{self.num_cycles}: Training full model"
+                )
+                cycle_params = self.full.train(
                     key_full,
                     handler,
                     dataset,
                     self.manifold,
                     logger,
-                    current_lr_scale,
-                    epoch,
-                    params,
+                    lr_scale,
+                    cur_epoch,
+                    cycle_params,
                 )
-                epoch += self.full.n_epochs
+                cur_epoch += self.full.n_epochs
+            return cycle_params, cur_epoch
 
-            self.process_checkpoint(key, handler, logger, dataset, self, epoch, params)
-
-            log.info(f"Completed cycle {cycle + 1}/{self.num_cycles}")
+        run_cyclic_training(
+            self,
+            cycle_key,
+            handler,
+            logger,
+            dataset,
+            params,
+            num_cycles=self.num_cycles,
+            lr_scales=self.lr_schedule,
+            epochs_per_cycle=epochs_per_cycle,
+            cycle_start_epoch=training_start_epoch,
+            current_epoch=epoch,
+            run_cycle=run_cycle,
+        )
 
     def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get cluster prototypes by loading from ClusterStatistics artifact."""

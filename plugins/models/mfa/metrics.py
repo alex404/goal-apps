@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from jax import Array
 
 from apps.interface import ClusteringDataset
-from apps.interface.clustering import add_clustering_metrics, clustering_nmi
+from apps.interface.clustering import add_clustering_metrics
 from apps.runtime import (
     INFO_LEVEL,
     Logger,
@@ -21,11 +21,20 @@ from apps.runtime import (
 from .types import MFA
 
 MFA_TRAINING_METRIC_KEYS: frozenset[str] = (
-    frozenset({"Mixture/Entropy", "Mixture/Effective Components", "Timing/Wall Clock (s)"})
-    | stats_keys("Params", "Obs Location", "Obs Precision", "Interaction",
-                 "Lat Components", "Categorical")
-    | stats_keys("Means", "Obs Mean", "Obs Cov", "Interaction",
-                 "Lat Components", "Categorical")
+    frozenset(
+        {"Mixture/Entropy", "Mixture/Effective Components", "Timing/Wall Clock (s)"}
+    )
+    | stats_keys(
+        "Params",
+        "Obs Location",
+        "Obs Precision",
+        "Interaction",
+        "Lat Components",
+        "Categorical",
+    )
+    | stats_keys(
+        "Means", "Obs Mean", "Obs Cov", "Interaction", "Lat Components", "Categorical"
+    )
     | stats_keys("Grad Norms", "Obs Location", "Obs Precision", "Interaction", "Latent")
 )
 
@@ -67,11 +76,13 @@ def log_epoch_metrics(
         if dataset.has_labels:
             train_clusters = jax.lax.map(
                 lambda x: mfa.posterior_hard_assignment(params, x),
-                train_data, batch_size=2048,
+                train_data,
+                batch_size=2048,
             )
             test_clusters = jax.lax.map(
                 lambda x: mfa.posterior_hard_assignment(params, x),
-                test_data, batch_size=2048,
+                test_data,
+                batch_size=2048,
             )
 
             metrics = add_clustering_metrics(
@@ -82,7 +93,6 @@ def log_epoch_metrics(
                 test_labels=dataset.test_labels,
                 train_clusters=train_clusters,
                 test_clusters=test_clusters,
-                clustering_nmi_fn=clustering_nmi,
             )
 
         # Parameter decomposition
@@ -122,7 +132,9 @@ def log_epoch_metrics(
         # batch_grads has shape (n_steps, 4) — pre-computed per-component norms
         if batch_grads is not None:
             norms = batch_grads.T  # shape (4, n_steps)
-            for i, name in enumerate(["Obs Location", "Obs Precision", "Interaction", "Latent"]):
+            for i, name in enumerate(
+                ["Obs Location", "Obs Precision", "Interaction", "Latent"]
+            ):
                 metrics = update_stats("Grad Norms", name, norms[i], metrics)
 
         return metrics

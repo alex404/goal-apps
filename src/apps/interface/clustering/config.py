@@ -37,9 +37,17 @@ class ClusterStatisticsConfig(AnalysisConfig):
 
 @dataclass
 class CoAssignmentHierarchyConfig(AnalysisConfig):
-    """Configuration for co-assignment based hierarchy analysis."""
+    """Configuration for co-assignment based hierarchy analysis.
 
-    pass
+    Dead clusters (total responsibility below ``min_cluster_size`` of
+    training data) are pruned before the co-assignment matrix is built,
+    preventing sqrt-of-zero normalization blow-ups. ``valid_clusters`` is
+    persisted in the resulting artifact so the downstream co-assignment
+    merge analysis uses the same filter set.
+    """
+
+    filter_empty_clusters: bool = True
+    min_cluster_size: float = 0.0005
 
 
 @dataclass
@@ -53,25 +61,35 @@ class OptimalMergeConfig(AnalysisConfig):
 
 @dataclass
 class CoAssignmentMergeConfig(AnalysisConfig):
-    """Configuration for co-assignment based merge analysis."""
+    """Configuration for co-assignment based merge analysis.
 
-    filter_empty_clusters: bool = True
-    min_cluster_size: float = 0.0005
+    Filter parameters live on ``CoAssignmentHierarchyConfig`` — the merge
+    inherits whatever the hierarchy decided. There is nothing to configure
+    here beyond enabling/disabling.
+    """
 
 
 @dataclass
 class KLHierarchyConfig(AnalysisConfig):
-    """Configuration for KL divergence based hierarchy analysis."""
+    """Configuration for KL divergence based hierarchy analysis.
 
-    pass
+    Dead clusters (those with insufficient hard-assignment mass on the
+    training data) are pruned before the KL distance matrix is
+    clustered. ``valid_clusters`` is persisted in the resulting artifact
+    so the downstream KL merge analysis uses the same filter set.
+    """
+
+    filter_empty_clusters: bool = True
+    min_cluster_size: float = 0.0005
 
 
 @dataclass
 class KLMergeConfig(AnalysisConfig):
-    """Configuration for KL divergence based merge analysis."""
+    """Configuration for KL divergence based merge analysis.
 
-    filter_empty_clusters: bool = True
-    min_cluster_size: float = 0.0005
+    Filter parameters live on ``KLHierarchyConfig`` — the merge inherits
+    whatever the hierarchy decided.
+    """
 
 
 @dataclass
@@ -100,6 +118,7 @@ class ClusteringAnalysesConfig:
 
 
 # Run Configs
+
 
 @dataclass
 class ClusteringRunConfig(RunConfig):

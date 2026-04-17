@@ -36,17 +36,21 @@ log = logging.getLogger(__name__)
 
 ### Metric Key Constants ###
 
-PRECISION_REG_METRIC_KEYS: frozenset[str] = frozenset({
-    "Regularization/Precision Trace Sum",
-    "Regularization/Precision LogDet Sum",
-    "Regularization/Trace Penalty",
-    "Regularization/LogDet Penalty",
-})
+PRECISION_REG_METRIC_KEYS: frozenset[str] = frozenset(
+    {
+        "Regularization/Precision Trace Sum",
+        "Regularization/Precision LogDet Sum",
+        "Regularization/Trace Penalty",
+        "Regularization/LogDet Penalty",
+    }
+)
 
-ENTROPY_REG_METRIC_KEYS: frozenset[str] = frozenset({
-    "Regularization/Mixture Entropy",
-    "Regularization/Entropy Penalty",
-})
+ENTROPY_REG_METRIC_KEYS: frozenset[str] = frozenset(
+    {
+        "Regularization/Mixture Entropy",
+        "Regularization/Entropy Penalty",
+    }
+)
 
 
 ### Helpers ###
@@ -402,7 +406,10 @@ class FullGradientTrainer:
 
         # Create optimizer
         base_optimizer = (
-            optax.adamw(learning_rate=self.lr * learning_rate_scale, weight_decay=self.weight_decay)
+            optax.adamw(
+                learning_rate=self.lr * learning_rate_scale,
+                weight_decay=self.weight_decay,
+            )
             if self.weight_decay > 0
             else optax.adam(self.lr * learning_rate_scale)
         )
@@ -849,7 +856,10 @@ class MixtureGradientTrainer:
 
         # Setup optimizer for mixture parameters
         base_optimizer = (
-            optax.adamw(learning_rate=self.lr * learning_rate_scale, weight_decay=self.weight_decay)
+            optax.adamw(
+                learning_rate=self.lr * learning_rate_scale,
+                weight_decay=self.weight_decay,
+            )
             if self.weight_decay > 0
             else optax.adam(self.lr * learning_rate_scale)
         )

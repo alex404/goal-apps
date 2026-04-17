@@ -86,7 +86,10 @@ class ClusterStatisticsAnalysis(Analysis[ClusteringDataset, Any, ClusterStatisti
         scl = 5
 
         fig = plt.figure(
-            figsize=(scl * grid_shape * cluster_cols_norm, scl * grid_shape * cluster_rows_norm)
+            figsize=(
+                scl * grid_shape * cluster_cols_norm,
+                scl * grid_shape * cluster_rows_norm,
+            )
         )
         gs = GridSpec(grid_shape, grid_shape, figure=fig)
 
