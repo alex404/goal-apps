@@ -1,0 +1,69 @@
+# MNIST HMoG — defaults derived from the mnist-hmog-coa-nmi Optuna study
+# (434 completed trials, objective: Merging/CoAssignment Test NMI).
+#
+# Values are the median of the top-10% trials (n=43, objective >= 0.7896).
+# Best single trial (t814) reached 0.8175.
+#
+# Key findings vs older per-ld presets:
+#   - batch_steps: 1000 (top-10% is 42/43 at 1000 — batch_steps 100-500 never reached top-10%)
+#   - latent_dim: 50 (all 43 top-10% trials at ld=50; ld>=100 never reached top-10%)
+#   - n_clusters: 400 (30/43 top-10% at K=400, 13/43 at K=200 — heavy overclustering helps the merge metric)
+#   - lr: 1e-5 (10x smaller than the old 1e-4 default)
+#   - Regularizers are MUCH smaller than old defaults — study prefers very light regularization
+#     with bounds-only regularization (min_prob, lat_min_var) doing the heavy lifting
+defaults:
+  - hmog
+  - _self_
+
+latent_dim: 50
+n_clusters: 400
+
+num_cycles: 5
+lr_scales: []
+
+lgm_noise_scale: 5e-3
+mix_init_scale: 7e-3
+
+pre:
+  n_epochs: 0
+
+lgm:
+  n_epochs: 0
+
+mix:
+  n_epochs: 0
+
+full:
+  lr: 1e-5
+  n_epochs: 200
+  batch_steps: 1000
+  grad_clip: 30
+  min_prob: 5e-3
+  obs_min_var: 1e-6
+  lat_min_var: 2e-3
+  l1_reg: 4e-6
+  l2_reg: 5e-4
+  weight_decay: 7e-3
+  upr_prs_reg: 2e-5
+  lwr_prs_reg: 2e-6
+  ent_reg: 2e-6
+  epoch_reset: true
+
+analyses:
+  generative_samples:
+    enabled: true
+    n_samples: 100
+  cluster_statistics:
+    enabled: true
+  co_assignment_hierarchy:
+    enabled: true
+  optimal_merge:
+    enabled: false
+    filter_empty_clusters: true
+    min_cluster_size: 0.0005
+  co_assignment_merge:
+    enabled: true
+  kl_hierarchy:
+    enabled: true
+  kl_merge:
+    enabled: true

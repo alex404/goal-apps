@@ -1,0 +1,83 @@
+# 20 Newsgroups HMoG — structure from mnist-hmog.yaml, NG20-specific overrides
+# below. NG20 is TF-IDF (high-dim, sparse) rather than pixel data, so several
+# regularizers diverge from the MNIST study's top-10% medians.
+#
+# NG20-specific findings (from earlier sweeps, documented in project memory):
+#   - Symmetric precision regularization (1e-2) is essential for stability at
+#     K>=60. Without it, K>=60 produces cuSolver/NaN errors. The MNIST study's
+#     tiny prs values (2e-5 / 2e-6) would collapse NG20 covariances.
+#   - ent_reg=1e-1 is optimal for NG20 (vs MNIST's 2e-6) — text benefits from
+#     much stronger entropy regularization than pixel data.
+#   - latent_dim=400 for NG20 (vs MNIST's 50) — matches the intrinsic dim of
+#     TF-IDF with 39k features.
+#   - n_clusters=80 gives best raw NMI (0.589) and KL-merge NMI (0.529);
+#     K=60 gives best CoA-merge NMI (0.515). K=80 is 4x overclustering vs
+#     20 true classes — less aggressive than MNIST's 40x.
+#   - Full-batch EM is essential; SGD eliminates the merge signal.
+#
+# Structural choices inherited from mnist-hmog.yaml:
+#   - batch_steps=1000 (top-10% dominant in the MNIST study; likely transfers)
+#   - grad_clip=30 (nudged up from the old 10 based on MNIST findings)
+#   - lr=1e-5 (MNIST study preferred 10x smaller than the classic 1e-4)
+#   - num_cycles=5 with lr_scales=[] (equal LR per cycle)
+defaults:
+  - hmog
+  - _self_
+
+# NG20-specific architecture
+latent_dim: 400
+n_clusters: 80
+
+num_cycles: 5
+lr_scales: []
+
+lgm_noise_scale: 5e-3
+mix_init_scale: 7e-3
+
+# Pre/lgm/mix phases disabled (direct full-gradient only, as with MNIST)
+pre:
+  n_epochs: 0
+
+lgm:
+  n_epochs: 0
+
+mix:
+  n_epochs: 0
+
+full:
+  lr: 1e-5
+  n_epochs: 200
+  batch_steps: 1000
+  grad_clip: 30
+  min_prob: 5e-3
+  obs_min_var: 1e-6
+  lat_min_var: 2e-3
+  l1_reg: 4e-6
+  l2_reg: 5e-4
+  weight_decay: 7e-3
+
+  # NG20 overrides — do NOT shrink to MNIST-study values without a new NG20 sweep:
+  upr_prs_reg: 1e-2   # symmetric prs essential for K>=60 stability on NG20
+  lwr_prs_reg: 1e-2   # symmetric prs essential for K>=60 stability on NG20
+  ent_reg: 1e-1       # NG20-optimal; MNIST's 2e-6 would underfit text clustering
+
+  epoch_reset: true
+
+analyses:
+  generative_samples:
+    enabled: true
+    n_samples: 100
+  cluster_statistics:
+    enabled: true
+  co_assignment_hierarchy:
+    enabled: true
+  optimal_merge:
+    enabled: false
+    filter_empty_clusters: true
+    min_cluster_size: 0.0005
+  co_assignment_merge:
+    enabled: true
+  kl_hierarchy:
+    enabled: true
+  kl_merge:
+    enabled: true
