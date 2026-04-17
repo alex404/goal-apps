@@ -368,17 +368,42 @@ class FullGradientTrainer:
                     context=f"{self.mask_type}",
                 )
 
-                return (new_opt_state, new_params), masked_grad
+                # Per-group gradient norms (7 scalars) instead of the full
+                # gradient vector. Avoids accumulating a (batch_steps,
+                # param_dim) buffer across the scan, which OOMs at large
+                # latent_dim * data_dim * batch_steps. Downstream consumers
+                # only ever took L2 norms of these groups anyway.
+                obs_g, lwr_int_g, upr_g = model.split_coords(masked_grad)
+                obs_loc_g, obs_prs_g = model.obs_man.split_coords(obs_g)
+                lat_g, upr_int_g, cat_g = model.pst_man.split_coords(upr_g)
+                lat_loc_g, lat_prs_g = model.pst_man.obs_man.split_coords(lat_g)
+                grad_norms = jnp.asarray(
+                    [
+                        jnp.linalg.norm(g)
+                        for g in [
+                            obs_loc_g,
+                            obs_prs_g,
+                            lwr_int_g,
+                            lat_loc_g,
+                            lat_prs_g,
+                            upr_int_g,
+                            cat_g,
+                        ]
+                    ]
+                )
 
-            # Run inner steps using jax.lax.scan
-            (final_opt_state, final_params), all_grads = jax.lax.scan(
+                return (new_opt_state, new_params), grad_norms
+
+            # Run inner steps using jax.lax.scan. Output is (batch_steps, 7):
+            # per-step, per-group gradient norms.
+            (final_opt_state, final_params), all_grad_norms = jax.lax.scan(
                 inner_step,
                 (opt_state, params),
                 None,  # No inputs needed
                 length=self.batch_steps,
             )
 
-            return (final_opt_state, final_params), all_grads
+            return (final_opt_state, final_params), all_grad_norms
 
         return batch_step
 
@@ -454,8 +479,8 @@ class FullGradientTrainer:
             (opt_state, new_params), gradss_array = jax.lax.scan(
                 batch_step, (opt_state, params), batched_data
             )
-            # gradss_array shape: (n_batches, n_steps, param_dim)
-            batch_grads = gradss_array.reshape(-1, *gradss_array.shape[2:])
+            # gradss_array shape: (n_batches, batch_steps, 7) — per-group norms
+            batch_grad_norms = gradss_array.reshape(-1, gradss_array.shape[-1])
 
             reg_fn = self.make_regularizer(model)
             metrics = reg_fn(new_params)[1]
@@ -468,7 +493,7 @@ class FullGradientTrainer:
                 new_params,
                 epoch + epoch_offset,
                 metrics,
-                batch_grads,
+                batch_grad_norms,
                 log_freq=self.log_freq,
             )
 
@@ -582,17 +607,37 @@ class LGMPreTrainer:
                     context="PRE",
                 )
 
-                return (new_opt_state, new_params), grad
+                # Per-group gradient norms (5 scalars for LGM: no upr_int/cat).
+                # See FullGradientTrainer for the rationale — avoids OOM on
+                # high-dim models by not accumulating the full gradient across
+                # batch_steps inside jax.lax.scan.
+                obs_g, int_g, lat_g = model.split_coords(grad)
+                obs_loc_g, obs_prs_g = model.obs_man.split_coords(obs_g)
+                lat_loc_g, lat_prs_g = model.pst_man.split_coords(lat_g)
+                grad_norms = jnp.asarray(
+                    [
+                        jnp.linalg.norm(g)
+                        for g in [
+                            obs_loc_g,
+                            obs_prs_g,
+                            int_g,
+                            lat_loc_g,
+                            lat_prs_g,
+                        ]
+                    ]
+                )
 
-            # Run inner steps using jax.lax.scan
-            (final_opt_state, final_params), all_grads = jax.lax.scan(
+                return (new_opt_state, new_params), grad_norms
+
+            # Run inner steps using jax.lax.scan. Output is (batch_steps, 5).
+            (final_opt_state, final_params), all_grad_norms = jax.lax.scan(
                 inner_step,
                 (opt_state, params),
                 None,  # No inputs needed
                 length=self.batch_steps,
             )
 
-            return (final_opt_state, final_params), all_grads
+            return (final_opt_state, final_params), all_grad_norms
 
         return batch_step
 
@@ -664,8 +709,8 @@ class LGMPreTrainer:
             (opt_state, new_params), gradss_array = jax.lax.scan(
                 batch_step, (opt_state, params), batched_data
             )
-            # gradss_array shape: (n_batches, n_steps, param_dim)
-            batch_grads = gradss_array.reshape(-1, *gradss_array.shape[2:])
+            # gradss_array shape: (n_batches, batch_steps, 5) — per-group norms
+            batch_grad_norms = gradss_array.reshape(-1, gradss_array.shape[-1])
 
             reg_fn = self.make_regularizer(model)
             metrics = reg_fn(new_params)[1]
@@ -678,7 +723,7 @@ class LGMPreTrainer:
                 new_params,
                 epoch + epoch_offset,
                 metrics,
-                batch_grads,
+                batch_grad_norms,
                 log_freq=self.log_freq,
             )
 
@@ -949,17 +994,37 @@ class MixtureGradientTrainer:
                     context="FIXED_OBSERVABLE",
                 )
 
-                return (new_opt_state, new_params), full_grad
+                # Per-group gradient norms (7 scalars). Observable and
+                # lower-interaction gradients are zero here because this
+                # trainer only updates mixture params; we emit zeros for
+                # those slots to keep the shape consistent with
+                # FullGradientTrainer so log_epoch_metrics can handle both
+                # uniformly.
+                lat_obs_g, upr_int_g, cat_g = model.pst_man.split_coords(grad)
+                lat_loc_g, lat_prs_g = model.pst_man.obs_man.split_coords(lat_obs_g)
+                grad_norms = jnp.asarray(
+                    [
+                        0.0,  # obs_loc — not updated
+                        0.0,  # obs_prs — not updated
+                        0.0,  # lwr_int — not updated
+                        jnp.linalg.norm(lat_loc_g),
+                        jnp.linalg.norm(lat_prs_g),
+                        jnp.linalg.norm(upr_int_g),
+                        jnp.linalg.norm(cat_g),
+                    ]
+                )
 
-            # Run inner steps
-            (final_opt_state, final_params), all_grads = jax.lax.scan(
+                return (new_opt_state, new_params), grad_norms
+
+            # Run inner steps. Output: (batch_steps, 7) per-group norms.
+            (final_opt_state, final_params), all_grad_norms = jax.lax.scan(
                 inner_step,
                 (opt_state, params),
                 None,
                 length=self.batch_steps,
             )
 
-            return (final_opt_state, final_params), all_grads
+            return (final_opt_state, final_params), all_grad_norms
 
         # Create epoch step function
         def epoch_step(
@@ -987,8 +1052,8 @@ class MixtureGradientTrainer:
             (opt_state, new_mix_params), gradss_array = jax.lax.scan(
                 batch_step, (opt_state, mix_params), batched_locations
             )
-            # gradss_array shape: (n_batches, n_steps, param_dim)
-            batch_grads = gradss_array.reshape(-1, *gradss_array.shape[2:])
+            # gradss_array shape: (n_batches, batch_steps, 7) — per-group norms
+            batch_grad_norms = gradss_array.reshape(-1, gradss_array.shape[-1])
 
             # Reconstruct full model parameters for evaluation
             full_params = model.join_coords(obs_params0, int_params0, new_mix_params)
@@ -1004,7 +1069,7 @@ class MixtureGradientTrainer:
                 full_params,
                 epoch + epoch_offset,
                 metrics,
-                batch_grads,
+                batch_grad_norms,
                 log_freq=self.log_freq,
             )
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import jax.numpy as jnp
-from goal.geometry import Replicated
 from goal.models import FullNormal
 from jax import Array
 
@@ -193,22 +192,11 @@ def pre_log_epoch_metrics(
         rho = model.conjugation_parameters(lkl_params)
         metrics = add_conjugation_metrics(metrics, model.prr_man, rho)
 
-        # Gradient norms
+        # Gradient norms — batch_grads is already (n_steps, 5) per-group
+        # norms computed inside the trainer's scan (to avoid OOM from
+        # materializing full gradients across batch_steps).
         if batch_grads is not None:
-
-            def norm_grads(grad: Array) -> Array:
-                obs_g, int_g, lat_g = model.split_coords(grad)
-                obs_loc_g, obs_prs_g = model.obs_man.split_coords(obs_g)
-                lat_loc_g, lat_prs_g = model.pst_man.split_coords(lat_g)
-                return jnp.asarray(
-                    [
-                        jnp.linalg.norm(g)
-                        for g in [obs_loc_g, obs_prs_g, int_g, lat_loc_g, lat_prs_g]
-                    ]
-                )
-
-            batch_man = Replicated(model, batch_grads.shape[0])
-            norms = batch_man.map(norm_grads, batch_grads).T
+            norms = batch_grads.T  # shape (5, n_steps)
             for i, name in enumerate(
                 [
                     "Obs Location",
@@ -335,31 +323,11 @@ def log_epoch_metrics(
         ):
             metrics = update_stats("Components", name, cmp_stats[i], metrics)
 
-        # Gradient norms
+        # Gradient norms — batch_grads is already (n_steps, 7) per-group
+        # norms computed inside the trainer's scan (to avoid OOM from
+        # materializing full gradients across batch_steps).
         if batch_grads is not None:
-
-            def norm_grads(grad: Array) -> Array:
-                obs_g, lwr_int_g, upr_g = model.split_coords(grad)
-                obs_loc_g, obs_prs_g = model.obs_man.split_coords(obs_g)
-                lat_g, upr_int_g, cat_g = model.pst_man.split_coords(upr_g)
-                lat_loc_g, lat_prs_g = model.pst_man.obs_man.split_coords(lat_g)
-                return jnp.asarray(
-                    [
-                        jnp.linalg.norm(g)
-                        for g in [
-                            obs_loc_g,
-                            obs_prs_g,
-                            lwr_int_g,
-                            lat_loc_g,
-                            lat_prs_g,
-                            upr_int_g,
-                            cat_g,
-                        ]
-                    ]
-                )
-
-            batch_man = Replicated(model, batch_grads.shape[0])
-            norms = batch_man.map(norm_grads, batch_grads).T
+            norms = batch_grads.T  # shape (7, n_steps)
             for i, name in enumerate(
                 [
                     "Obs Location",

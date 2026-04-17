@@ -9,6 +9,7 @@ from typing import Any, override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+from goal.geometry import Diagonal
 from jax import Array
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
@@ -50,13 +51,20 @@ def generate_loading_matrices(
     # Get natural loadings (directly from the parameters)
     natural_loadings = model.int_man.to_matrix(int_params)
 
-    # Convert to mean parameterization for interpretability
+    # Convert to mean parameterization for interpretability.
+    # In mean coordinates the loading matrix is Sigma_x * Lambda.
     _, obs_prs = model.obs_man.split_coords(obs_params)
-    obs_prs_dense = model.obs_man.cov_man.to_matrix(obs_prs)
-
-    # In mean coordinates, the loading matrix is Σ_x * Λ
-    obs_cov_dense = jnp.linalg.inv(obs_prs_dense)
-    mean_loadings = jnp.matmul(obs_cov_dense, natural_loadings)
+    cov_man = model.obs_man.cov_man
+    if isinstance(cov_man.rep, Diagonal):
+        # Diagonal precision: covariance is element-wise reciprocal of the
+        # precision diagonal. Avoid densifying to DxD (6 GB at D=39k) --
+        # extract the diagonal and broadcast-multiply instead.
+        obs_cov_diag = 1.0 / cov_man.get_diagonal(obs_prs)
+        mean_loadings = obs_cov_diag[:, None] * natural_loadings
+    else:
+        obs_prs_dense = cov_man.to_matrix(obs_prs)
+        obs_cov_dense = jnp.linalg.inv(obs_prs_dense)
+        mean_loadings = jnp.matmul(obs_cov_dense, natural_loadings)
 
     return LoadingMatrixArtifact(
         natural_loadings=natural_loadings, mean_loadings=mean_loadings
