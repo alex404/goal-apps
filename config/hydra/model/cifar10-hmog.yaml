@@ -31,10 +31,8 @@ mix:
   batch_steps: 1000
   grad_clip: 10
   min_prob: 1e-4
-  lat_min_var: 1e-4
   upr_prs_reg: 1e-3
   lwr_prs_reg: 1e-3
-  l1_reg: ${model.pre.l1_reg}
   l2_reg: ${model.pre.weight_decay}
   weight_decay: ${model.pre.weight_decay}
 
@@ -45,7 +43,7 @@ full:
   grad_clip: 10
   min_prob: ${model.mix.min_prob}
   obs_min_var: ${model.pre.min_var}
-  lat_min_var: ${model.mix.lat_min_var}
+  lat_min_var: 1e-4
   upr_prs_reg: ${model.mix.upr_prs_reg}
   lwr_prs_reg: ${model.mix.lwr_prs_reg}
   l1_reg: ${model.pre.l1_reg}
