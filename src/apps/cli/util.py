@@ -416,24 +416,93 @@ def _hist_bar(
     )
 
 
-def _cat_bar(values: list[Any], choices: list[Any], n_bins: int = 20) -> str:
-    """Render a categorical bar proportional to counts, truncated to n_bins chars."""
-    if not values:
-        return "[dim](none)[/dim]"
-    counts = {str(c): 0 for c in choices}
-    for v in values:
-        counts[str(v)] = counts.get(str(v), 0) + 1
-    max_count = max(counts.values()) or 1
-    bar = ""
-    for c in choices:
-        level = int(counts[str(c)] / max_count * (len(_SPARK_CHARS) - 1))
-        bar += _SPARK_CHARS[level]
-    # Truncate or pad to n_bins
-    return bar[:n_bins].ljust(n_bins)
-
-
 def _strip_model_prefix(name: str) -> str:
     return name[len("model.") :] if name.startswith("model.") else name
+
+
+def _human_round(value: float) -> str:
+    """Round to 1 significant digit; use scientific notation for |exponent| > 2."""
+    if value == 0:
+        return "0"
+    exp = math.floor(math.log10(abs(value)))
+    coeff = round(value / 10**exp)
+    rounded = coeff * 10**exp
+    if abs(exp) > 2:
+        return f"{coeff}e{exp}"
+    if exp >= 0:
+        return str(int(rounded))
+    return f"{rounded:.{-exp}f}"
+
+
+def print_trial_summary(
+    completed: list[Any],
+    direction: str,
+    pct: float = 10.0,
+    top_n: int = 10,
+) -> None:
+    """Print best trial params, human-rounded params, and top N in a compact layout."""
+    import statistics
+
+    import optuna.distributions as od
+    from rich.columns import Columns
+
+    maximize = direction == "MAXIMIZE"
+    best = (
+        max(completed, key=lambda t: t.value or 0)
+        if maximize
+        else min(completed, key=lambda t: t.value or 0)
+    )
+    ranked = sorted(completed, key=lambda t: t.value or 0, reverse=maximize)
+
+    good_nums = _good_set(completed, direction, pct)
+    good_trials = [t for t in completed if t.number in good_nums]
+    dists = _param_dists(completed)
+    label_dir = "top" if maximize else "bottom"
+
+    # --- Left: param table (best + human best) ---
+    param_table = Table(
+        title=f"Best trial: t{best.number} ({best.value:.6f})",
+        show_header=True,
+        header_style="bold",
+        title_style="bold",
+    )
+    param_table.add_column("Parameter", style="cyan", no_wrap=True)
+    param_table.add_column(f"t{best.number}", no_wrap=True)
+    param_table.add_column(
+        f"Human ({label_dir} {pct:.4g}%, n={len(good_trials)})",
+        style="green",
+        no_wrap=True,
+    )
+
+    for param in sorted(dists.keys()):
+        display = _strip_model_prefix(param)
+        best_val = best.params.get(param)
+        # Human-rounded value
+        good_values = [t.params[param] for t in good_trials if param in t.params]
+        if isinstance(dists.get(param), od.CategoricalDistribution):
+            human_val = (
+                str(max(set(good_values), key=good_values.count)) if good_values else ""
+            )
+        elif good_values:
+            human_val = _human_round(statistics.median(good_values))
+        else:
+            human_val = ""
+        param_table.add_row(display, str(best_val), human_val)
+
+    # --- Right: top N list ---
+    top_table = Table(
+        title=f"Top {min(top_n, len(ranked))} trials",
+        show_header=True,
+        header_style="bold",
+        title_style="bold",
+    )
+    top_table.add_column("Trial", style="cyan", no_wrap=True)
+    top_table.add_column("Value", no_wrap=True)
+    for t in ranked[:top_n]:
+        top_table.add_row(f"t{t.number}", f"{t.value:.6f}")
+
+    rprint()
+    rprint(Columns([param_table, top_table], padding=(0, 2)))
 
 
 def print_param_distributions_split(
@@ -637,10 +706,10 @@ def _render_grid(
             frac = (v - lo) / (hi - lo) if hi > lo else 0.5
         return min(n - 1, max(0, int(frac * n)))
 
-    sampled_grid   = [[0] * grid_w for _ in range(grid_h)]
+    sampled_grid = [[0] * grid_w for _ in range(grid_h)]
     converged_grid = [[0] * grid_w for _ in range(grid_h)]
     completed_grid = [[0] * grid_w for _ in range(grid_h)]
-    good_grid      = [[0] * grid_w for _ in range(grid_h)]
+    good_grid = [[0] * grid_w for _ in range(grid_h)]
 
     for t in coverage_trials:
         if px not in t.params or py not in t.params:
@@ -686,10 +755,10 @@ def _render_grid(
     for row in range(grid_h - 1, -1, -1):
         line = ""
         for col in range(grid_w):
-            n_sampled   = sampled_grid[row][col]
+            n_sampled = sampled_grid[row][col]
             n_converged = converged_grid[row][col]
             n_completed = completed_grid[row][col]
-            n_good      = good_grid[row][col]
+            n_good = good_grid[row][col]
             if n_sampled == 0:
                 line += " "
             elif n_converged == 0:
@@ -797,10 +866,10 @@ def print_param_pair_coverage(
     rprint(
         f"\n[bold]Pairwise coverage[/bold] — top {len(top_params)} params by objective variance across completed trials"
     )
-    rprint(
-        f"  [dim]space=unsampled  ·=all diverged  ░▒▓█=stable fraction  [/dim]"
-        f"[yellow]█[/yellow][dim]=completed  [/dim]"
-        f"[red]█[/red][dim]={label_dir} {pct:.4g}%[/dim]"
+    print(
+        f"  {_ANSI_DIM}space=unsampled  ·=all diverged  ░▒▓█=stable fraction  "
+        + f"{_ANSI_RESET}{_ANSI_YELLOW}█{_ANSI_RESET}{_ANSI_DIM}=completed  "
+        + f"{_ANSI_RESET}{_ANSI_RED}█{_ANSI_RESET}{_ANSI_DIM}={label_dir} {pct:.4g}%{_ANSI_RESET}"
     )
 
     pairs = [(px, py) for i, px in enumerate(top_params) for py in top_params[i + 1 :]]
@@ -809,7 +878,14 @@ def print_param_pair_coverage(
         row_pairs = pairs[i : i + 3]
         rendered = [
             _render_grid(
-                px, py, dists, coverage_trials, completed, good, grid_w, grid_h,
+                px,
+                py,
+                dists,
+                coverage_trials,
+                completed,
+                good,
+                grid_w,
+                grid_h,
                 converged_trials=converged_trials,
             )
             for px, py in row_pairs

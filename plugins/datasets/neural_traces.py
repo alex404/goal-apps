@@ -35,7 +35,9 @@ class NeuralTracesConfig(ClusteringDatasetConfig):
         bar_len: Length of bar response trace
         feature_len: Number of additional features
         train_split: Fraction of data to use for training
-        random_seed: Seed for train/test split
+
+    Note: the random seed used for the train/test split is the CLI-driven
+    ``cfg.seed``, threaded through ``initialize_run``.
     """
 
     _target_: str = field(
@@ -47,7 +49,6 @@ class NeuralTracesConfig(ClusteringDatasetConfig):
     bar_len: int
     feature_len: int
     train_split: float
-    random_seed: int
 
 
 # Register config
@@ -71,13 +72,13 @@ class NeuralTracesDataset(ClusteringDataset):
     def load(
         cls,
         cache_dir: Path,
+        seed: int,
         dataset_name: str,
         use_8hz_chirp: bool,
         chirp_len: int,
         bar_len: int,
         feature_len: int,
         train_split: float,
-        random_seed: int,
     ) -> NeuralTracesDataset:
         """Load neural traces dataset.
 
@@ -89,7 +90,7 @@ class NeuralTracesDataset(ClusteringDataset):
             bar_len: Length of bar response trace
             feature_len: Number of additional features
             train_split: Fraction of data to use for training
-            random_seed: Seed for train/test split
+            seed: Seed for train/test split
 
         Returns:
             Loaded neural traces dataset
@@ -135,7 +136,7 @@ class NeuralTracesDataset(ClusteringDataset):
             raw_data = np.hstack([chirp_matrix, bar_matrix, feature_matrix])
 
             # Randomly split data
-            rng = np.random.default_rng(random_seed)
+            rng = np.random.default_rng(seed)
             n_samples = len(raw_data)
             indices = rng.permutation(n_samples)
             split_idx = int(n_samples * train_split)
@@ -464,12 +465,12 @@ class BadenBerens(Artifact):
     def load_from_hdf5(cls, file: File) -> BadenBerens:
         """Load Baden-Berens analysis from HDF5."""
         # Load arrays
-        cluster_assignments = jnp.array(file["cluster_assignments"][()])  # pyright: ignore[reportIndexIssue]
-        celltype_labels = jnp.array(file["celltype_labels"][()])  # pyright: ignore[reportIndexIssue]
+        cluster_assignments = jnp.array(file["cluster_assignments"][()])
+        celltype_labels = jnp.array(file["celltype_labels"][()])
 
-        cluster_chirp_traces = jnp.array(file["cluster_chirp_traces"][()])  # pyright: ignore[reportIndexIssue]
-        cluster_bar_traces = jnp.array(file["cluster_bar_traces"][()])  # pyright: ignore[reportIndexIssue]
-        cluster_noise_traces = jnp.array(file["cluster_noise_traces"][()])  # pyright: ignore[reportIndexIssue]
+        cluster_chirp_traces = jnp.array(file["cluster_chirp_traces"][()])
+        cluster_bar_traces = jnp.array(file["cluster_bar_traces"][()])
+        cluster_noise_traces = jnp.array(file["cluster_noise_traces"][()])
 
         # Load metric value lists
         n_clusters = int(file.attrs.get("n_clusters", 0))
@@ -492,14 +493,16 @@ class BadenBerens(Artifact):
             jnp.array(os_group[f"cluster_{i}"]) for i in range(n_clusters)
         ]
 
-        cluster_soma_x = jnp.array(file["cluster_soma_x"][()])  # pyright: ignore[reportIndexIssue]
-        cluster_soma_y = jnp.array(file["cluster_soma_y"][()])  # pyright: ignore[reportIndexIssue]
+        cluster_soma_x = jnp.array(file["cluster_soma_x"][()])
+        cluster_soma_y = jnp.array(file["cluster_soma_y"][()])
 
-        cluster_sizes = jnp.array(file["cluster_sizes"][()])  # pyright: ignore[reportIndexIssue]
-        linkage_matrix = jnp.array(file["linkage_matrix"][()])  # pyright: ignore[reportIndexIssue]
+        cluster_sizes = jnp.array(file["cluster_sizes"][()])
+        linkage_matrix = jnp.array(file["linkage_matrix"][()])
 
         # Load cluster names
-        cluster_names = [str(file.attrs[f"cluster_name_{i}"]) for i in range(n_clusters)]
+        cluster_names = [
+            str(file.attrs[f"cluster_name_{i}"]) for i in range(n_clusters)
+        ]
 
         ari_score = float(file.attrs.get("ari_score", 0.0))
         nmi_score = float(file.attrs.get("nmi_score", 0.0))

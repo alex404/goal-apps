@@ -32,6 +32,13 @@ def symmetric_kl_matrix(
     model: AnyHMoG,
     params: Array,
 ) -> Array:
+    """Symmetric KL divergence between every pair of latent mixture components.
+
+    Returns ½·(KL(p_i‖p_j) + KL(p_j‖p_i)) for all pairs i,j of components in
+    the latent (``prr_man``) space. The result is a dense (K, K) matrix
+    suitable as a distance-like input to hierarchical clustering — diagonal
+    entries are zero by construction, off-diagonals are non-negative.
+    """
     mix_params = model.prior(params)
     ch = model.prr_man
     comp_lats, _ = ch.split_natural_mixture(mix_params)
@@ -57,6 +64,13 @@ def get_component_prototypes(
     model: AnyHMoG,
     params: Array,
 ) -> list[Array]:
+    """Compute observable-space prototype for each latent mixture component.
+
+    Constructs an analytic LGM with latent/observable roles swapped, joins
+    each latent component with the model's likelihood parameters, and reads
+    off the observable mean. Returns a length-``n_categories`` list of
+    (data_dim,) arrays indexed by component id.
+    """
     # Split into likelihood and mixture parameters
     lkl_params, mix_params = model.split_conjugated(params)
 
@@ -85,9 +99,7 @@ def get_component_prototypes(
     return prototypes
 
 
-def cluster_probabilities(
-    model: AnyHMoG, params: Array, data: Array
-) -> Array:
+def cluster_probabilities(model: AnyHMoG, params: Array, data: Array) -> Array:
     """Get cluster probability distributions for each data point.
 
     Args:

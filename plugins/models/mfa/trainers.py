@@ -13,14 +13,19 @@ from goal.models import MixtureOfFactorAnalyzers
 from jax import Array
 
 from apps.interface import ClusteringDataset
-from apps.runtime import STATS_NUM, Logger, MetricDict
+from apps.runtime import STATS_LEVEL, Logger, MetricDict, l1_l2_regularizer
 
 from .metrics import log_epoch_metrics
 from .types import MFA
 
 log = logging.getLogger(__name__)
 
-STATS_LEVEL = jnp.array(STATS_NUM)
+ENTROPY_REG_METRIC_KEYS: frozenset[str] = frozenset(
+    {
+        "Regularization/Mixture Entropy",
+        "Regularization/Entropy Penalty",
+    }
+)
 
 
 def entropy_regularizer(
@@ -50,7 +55,6 @@ def entropy_regularizer(
         "Regularization/Entropy Penalty": (STATS_LEVEL, entropy_loss),
     }
     return entropy_loss, metrics
-
 
 
 @dataclass(frozen=True)
@@ -159,30 +163,15 @@ class GradientTrainer:
 
         return bounded_means
 
-    def make_regularizer(
-        self, mfa: MFA
-    ) -> Callable[[Array], tuple[Array, MetricDict]]:
+    def make_regularizer(self, mfa: MFA) -> Callable[[Array], tuple[Array, MetricDict]]:
         """Create a unified regularizer that returns loss, metrics, and gradient."""
 
         def loss_with_metrics(params: Array) -> tuple[Array, MetricDict]:
-            # Extract components for regularization
             obs_params, int_params, lat_params = mfa.split_coords(params)
 
-            # L1 regularization on interactions
-            l1_norm = jnp.sum(jnp.abs(int_params))
-            l1_loss = self.l1_reg * l1_norm
-
-            # L2 gradient penalty on all parameters
-            l2_norm = jnp.sum(jnp.square(params))
-            l2_loss = self.l2_reg * l2_norm
-
-            total_loss = l1_loss + l2_loss
-            metrics: MetricDict = {
-                "Regularization/L1 Norm": (STATS_LEVEL, l1_norm),
-                "Regularization/L1 Penalty": (STATS_LEVEL, l1_loss),
-                "Regularization/L2 Norm": (STATS_LEVEL, l2_norm),
-                "Regularization/L2 Penalty": (STATS_LEVEL, l2_loss),
-            }
+            total_loss, metrics = l1_l2_regularizer(
+                params, int_params, self.l1_reg, self.l2_reg
+            )
 
             # Gating on Python-level constants (frozen dataclass fields) so JAX eliminates
             # dead code at trace time.
@@ -208,6 +197,7 @@ class GradientTrainer:
         epoch_offset: int,
         params0: Array,
         key: Array | None = None,
+        learning_rate_scale: float = 1.0,
     ) -> Array:
         """Execute training loop with HMOG-style gradient computation.
 
@@ -215,6 +205,11 @@ class GradientTrainer:
             grad = prior_stats - bounded_posterior_stats + reg_grad
 
         where statistics are in mean coordinates, allowing stable bounding.
+
+        Args:
+            learning_rate_scale: Scalar multiplier on ``self.lr``. Used by
+                cyclic drivers to apply per-cycle LR decay without
+                rebuilding the trainer.
         """
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -230,11 +225,13 @@ class GradientTrainer:
             batch_size = self.batch_size
             n_batches = n_samples // batch_size
 
+        scaled_lr = self.lr * learning_rate_scale
+
         # Create optimizer
         base_optimizer = (
-            optax.adamw(learning_rate=self.lr, weight_decay=self.weight_decay)
+            optax.adamw(learning_rate=scaled_lr, weight_decay=self.weight_decay)
             if self.weight_decay > 0
-            else optax.adam(self.lr)
+            else optax.adam(scaled_lr)
         )
         if self.grad_clip > 0.0:
             optimizer = optax.chain(
@@ -248,7 +245,7 @@ class GradientTrainer:
         # Create regularizer
         reg_fn = self.make_regularizer(mfa)
 
-        log.info(f"Training MFA for {self.n_epochs} epochs (lr={self.lr})")
+        log.info(f"Training MFA for {self.n_epochs} epochs (lr={scaled_lr})")
 
         def batch_step(
             carry: tuple[optax.OptState, Array],
@@ -288,12 +285,14 @@ class GradientTrainer:
                 # to avoid accumulating (batch_steps, param_dim) arrays in scan.
                 obs_g, int_g, lat_g = mfa.split_coords(grad)
                 obs_loc_g, obs_prs_g = mfa.bas_hrm.obs_man.split_coords(obs_g)
-                grad_norms = jnp.array([
-                    jnp.linalg.norm(obs_loc_g),
-                    jnp.linalg.norm(obs_prs_g),
-                    jnp.linalg.norm(int_g),
-                    jnp.linalg.norm(lat_g),
-                ])
+                grad_norms = jnp.array(
+                    [
+                        jnp.linalg.norm(obs_loc_g),
+                        jnp.linalg.norm(obs_prs_g),
+                        jnp.linalg.norm(int_g),
+                        jnp.linalg.norm(lat_g),
+                    ]
+                )
 
                 return (new_opt_state, new_params), grad_norms
 
@@ -321,7 +320,9 @@ class GradientTrainer:
                 shuffle_key, next_key = jax.random.split(epoch_key)
                 shuffled_indices = jax.random.permutation(shuffle_key, n_samples)
                 batched_indices = shuffled_indices[: n_batches * batch_size]
-                batched_data = data[batched_indices].reshape((n_batches, batch_size, -1))
+                batched_data = data[batched_indices].reshape(
+                    (n_batches, batch_size, -1)
+                )
             else:
                 next_key = epoch_key
                 batched_data = data[None]  # shape (1, n_samples, data_dim)

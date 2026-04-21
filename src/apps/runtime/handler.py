@@ -1,9 +1,11 @@
 """Manages file IO and organization for a single run in a machine learning experiment."""
 
 import logging
+import os
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
+from typing import Any
 
 import joblib
 import numpy as np
@@ -15,6 +17,19 @@ from .util import Artifact, MetricHistory, to_snake_case
 ### Logging ###
 
 log = logging.getLogger(__name__)
+
+
+def _atomic_dump(obj: Any, path: Path, compress: int = 0) -> None:
+    """joblib.dump to a sibling .tmp file then os.replace onto ``path``.
+
+    os.replace is atomic within a filesystem, so a crash mid-write leaves
+    either the previous version intact or the new version in place — never
+    a truncated file. Important for checkpoints that resume relies on.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    joblib.dump(obj, tmp, compress=compress)
+    os.replace(tmp, path)
+
 
 ### Run Handler ###
 
@@ -94,8 +109,7 @@ class RunHandler:
 
     def save_params(self, params: Array, epoch: int) -> None:
         """Save parameters at a given epoch."""
-        path = self._get_params_path(epoch)
-        joblib.dump(params, path)
+        _atomic_dump(params, self._get_params_path(epoch))
 
     def load_params(self) -> Array:
         """Load parameters from the resolved epoch.
@@ -111,8 +125,7 @@ class RunHandler:
 
     def save_metrics(self, metrics: MetricHistory) -> None:
         """Save training metrics."""
-        path = self.run_dir / "metrics.joblib"
-        joblib.dump(metrics, path)
+        _atomic_dump(metrics, self.metrics_path)
 
     def load_metrics(self) -> MetricHistory:
         """Load training metrics from the run directory, up to the resolved epoch."""
@@ -141,8 +154,9 @@ class RunHandler:
     ## Artifact Management
     def save_artifact(self, epoch: int, artifact: Artifact) -> None:
         """Save an artifact at a given epoch."""
-        path = self._get_artifact_path(epoch, type(artifact))
-        joblib.dump(artifact, path, compress=3)
+        _atomic_dump(
+            artifact, self._get_artifact_path(epoch, type(artifact)), compress=3
+        )
 
     def save_artifact_figure(
         self, epoch: int, artifact_class: type[Artifact], fig: Figure

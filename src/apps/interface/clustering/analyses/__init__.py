@@ -7,6 +7,7 @@ from .hierarchy import (
     CoAssignmentHierarchyAnalysis,
     build_hierarchy_from_distance,
     compute_co_assignment_matrix,
+    get_valid_clusters,
     plot_hierarchy_dendrogram,
 )
 from .merge import (
@@ -18,7 +19,6 @@ from .merge import (
     OptimalMergeResults,
     compute_merge_metrics,
     compute_optimal_mapping,
-    get_valid_clusters,
     hierarchy_to_mapping,
     plot_merge_results,
 )

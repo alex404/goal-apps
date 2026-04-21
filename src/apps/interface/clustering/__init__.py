@@ -17,12 +17,18 @@ from .config import (
 )
 from .dataset import ClusteringDataset, ClusteringDatasetConfig
 from .metrics import (
+    CLUSTERING_METRIC_KEYS,
     add_clustering_metrics,
     cluster_accuracy,
     clustering_nmi,
     fit_cluster_mapping,
 )
-from .model import ClusteringModel, ClusteringModelConfig
+from .model import (
+    ClusteringModel,
+    ClusteringModelConfig,
+    cycle_lr_schedule,
+    run_cyclic_training,
+)
 from .protocols import (
     CanComputePrototypes,
     HasClusterHierarchy,
@@ -31,6 +37,7 @@ from .protocols import (
 )
 
 __all__ = [
+    "CLUSTERING_METRIC_KEYS",
     "AnalysisConfig",
     "CanComputePrototypes",
     "ClusterStatisticsConfig",
@@ -50,5 +57,7 @@ __all__ = [
     "add_clustering_metrics",
     "cluster_accuracy",
     "clustering_nmi",
+    "cycle_lr_schedule",
     "fit_cluster_mapping",
+    "run_cyclic_training",
 ]

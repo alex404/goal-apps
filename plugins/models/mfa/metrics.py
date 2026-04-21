@@ -2,38 +2,41 @@
 
 from __future__ import annotations
 
-import logging
-
 import jax
 import jax.numpy as jnp
 from jax import Array
 
 from apps.interface import ClusteringDataset
-from apps.interface.clustering import add_clustering_metrics, clustering_nmi
+from apps.interface.clustering import add_clustering_metrics
 from apps.runtime import (
-    STATS_NUM,
+    INFO_LEVEL,
     Logger,
     MetricDict,
     add_ll_metrics,
     log_with_frequency,
+    stats_keys,
     update_stats,
 )
 
 from .types import MFA
 
-log = logging.getLogger(__name__)
-
-STATS_LEVEL = jnp.array(STATS_NUM)
-INFO_LEVEL = jnp.array(logging.INFO)
-
-
-def cluster_assignments(mfa: MFA, params: Array, data: Array) -> Array:
-    """Compute hard cluster assignments for data points."""
-    return jax.lax.map(
-        lambda x: mfa.posterior_hard_assignment(params, x),
-        data,
-        batch_size=2048,
+MFA_TRAINING_METRIC_KEYS: frozenset[str] = (
+    frozenset(
+        {"Mixture/Entropy", "Mixture/Effective Components", "Timing/Wall Clock (s)"}
     )
+    | stats_keys(
+        "Params",
+        "Obs Location",
+        "Obs Precision",
+        "Interaction",
+        "Lat Components",
+        "Categorical",
+    )
+    | stats_keys(
+        "Means", "Obs Mean", "Obs Cov", "Interaction", "Lat Components", "Categorical"
+    )
+    | stats_keys("Grad Norms", "Obs Location", "Obs Precision", "Interaction", "Latent")
+)
 
 
 def log_epoch_metrics(
@@ -42,7 +45,7 @@ def log_epoch_metrics(
     logger: Logger,
     params: Array,
     epoch: Array,
-    initial_metrics: MetricDict,
+    reg_metrics: MetricDict,
     batch_grads: Array | None = None,
     log_freq: int = 1,
 ) -> None:
@@ -54,7 +57,7 @@ def log_epoch_metrics(
         logger: Logger for metric output
         params: Current model parameters
         epoch: Current epoch number (0-indexed)
-        initial_metrics: Metrics from regularization (passed from trainer)
+        reg_metrics: Metrics from regularization (passed from trainer)
         batch_grads: Optional gradient arrays for gradient norm logging
         log_freq: Log every log_freq epochs
     """
@@ -62,7 +65,7 @@ def log_epoch_metrics(
     test_data = dataset.test_data
 
     def compute_metrics() -> MetricDict:
-        metrics: MetricDict = dict(initial_metrics)
+        metrics: MetricDict = dict(reg_metrics)
 
         # Log-likelihood metrics
         train_ll = mfa.average_log_observable_density(params, train_data)
@@ -71,8 +74,16 @@ def log_epoch_metrics(
 
         # Clustering metrics (if labels available)
         if dataset.has_labels:
-            train_clusters = cluster_assignments(mfa, params, train_data)
-            test_clusters = cluster_assignments(mfa, params, test_data)
+            train_clusters = jax.lax.map(
+                lambda x: mfa.posterior_hard_assignment(params, x),
+                train_data,
+                batch_size=2048,
+            )
+            test_clusters = jax.lax.map(
+                lambda x: mfa.posterior_hard_assignment(params, x),
+                test_data,
+                batch_size=2048,
+            )
 
             metrics = add_clustering_metrics(
                 metrics,
@@ -82,7 +93,6 @@ def log_epoch_metrics(
                 test_labels=dataset.test_labels,
                 train_clusters=train_clusters,
                 test_clusters=test_clusters,
-                clustering_nmi_fn=clustering_nmi,
             )
 
         # Parameter decomposition
@@ -122,7 +132,9 @@ def log_epoch_metrics(
         # batch_grads has shape (n_steps, 4) — pre-computed per-component norms
         if batch_grads is not None:
             norms = batch_grads.T  # shape (4, n_steps)
-            for i, name in enumerate(["Obs Location", "Obs Precision", "Interaction", "Latent"]):
+            for i, name in enumerate(
+                ["Obs Location", "Obs Precision", "Interaction", "Latent"]
+            ):
                 metrics = update_stats("Grad Norms", name, norms[i], metrics)
 
         return metrics

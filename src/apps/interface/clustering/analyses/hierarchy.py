@@ -6,6 +6,7 @@ plus the co-assignment based analysis that works with any HasSoftAssignments mod
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, override
 
@@ -23,6 +24,48 @@ from ....runtime import Artifact, DivergentTrainingError, RunHandler
 from ...analysis import Analysis
 from ..dataset import ClusteringDataset
 
+log = logging.getLogger(__name__)
+
+
+def get_valid_clusters(
+    train_assignments: Array,
+    n_clusters: int,
+    n_classes: int,
+    filter_empty_clusters: bool,
+    min_cluster_size: float,
+    n_train_samples: int,
+) -> Array:
+    """Get valid cluster indices, filtering empty/small clusters if requested.
+
+    If the threshold-pass leaves fewer than ``min(n_clusters, n_classes)``
+    clusters, falls back to the top-N by assignment count and logs a
+    warning. The fallback keeps downstream merge/linkage runnable but is a
+    strong signal that the model has collapsed — inspect before trusting.
+    """
+    valid_clusters = jnp.arange(n_clusters)
+
+    if filter_empty_clusters:
+        cluster_counts = jnp.zeros(n_clusters).at[train_assignments].add(1)
+
+        min_count = max(1, int(min_cluster_size * n_train_samples))
+        valid_clusters = jnp.where(cluster_counts >= min_count)[0]
+
+        # Ensure we have at least min(n_clusters, n_classes) valid clusters
+        min_required = min(n_clusters, n_classes)
+        if len(valid_clusters) < min_required:
+            log.warning(
+                "Only %d/%d clusters passed min_cluster_size=%.6g (>= %d samples); falling back to top-%d by assignment count. Model may be collapsing — review cluster occupancy.",
+                len(valid_clusters),
+                n_clusters,
+                min_cluster_size,
+                min_count,
+                min_required,
+            )
+            valid_clusters = jnp.argsort(-cluster_counts)[:min_required]
+
+    return valid_clusters
+
+
 # Base artifact
 
 
@@ -30,13 +73,24 @@ from ..dataset import ClusteringDataset
 class ClusterHierarchy(Artifact):
     """Base artifact for cluster hierarchy analysis.
 
-    Contains the hierarchical clustering results that can be used
-    for visualization and downstream analyses (like merge).
+    ``linkage_matrix`` and ``distance_matrix`` are computed on the filtered
+    subset of clusters identified by ``valid_clusters``, so they have shape
+    ``(len(valid_clusters) - 1, 4)`` and ``(len(valid_clusters),
+    len(valid_clusters))`` respectively — NOT ``n_clusters``. Leaf index ``i``
+    in the dendrogram corresponds to the original cluster
+    ``valid_clusters[i]``. ``prototypes`` still lists all ``n_clusters``
+    prototypes (unfiltered) for reference visualisation.
+
+    Downstream merge analyses read ``valid_clusters`` from this artifact
+    rather than re-deriving it, so hierarchy and merge filter on the same
+    set.
     """
 
     prototypes: list[Array]
     linkage_matrix: NDArray[np.float64]
     distance_matrix: NDArray[np.float64]
+    valid_clusters: Array
+    """Indices (into ``prototypes``) of clusters included in the hierarchy."""
 
 
 @dataclass(frozen=True)
@@ -94,13 +148,19 @@ def plot_hierarchy_dendrogram(
 ) -> Figure:
     """Plot dendrogram with corresponding prototype visualizations.
 
+    The hierarchy's ``linkage_matrix`` is defined over ``valid_clusters``
+    (indices 0..len(valid_clusters)-1). To label leaves and fetch
+    prototypes correctly, leaf index ``i`` must be translated to the
+    original cluster ``valid_clusters[i]``.
+
     Args:
         hierarchy: Cluster hierarchy artifact
         dataset: Dataset for prototype visualization
         metric_label: Label for the x-axis (e.g., "KL Divergence", "1 - Co-assignment")
         title: Figure title
     """
-    n_clusters = len(hierarchy.prototypes)
+    valid_clusters = np.asarray(hierarchy.valid_clusters)
+    n_valid = len(valid_clusters)
     prototype_shape = dataset.observable_shape
 
     # Compute figure dimensions
@@ -112,14 +172,14 @@ def plot_hierarchy_dendrogram(
 
     fig_width = dendrogram_width + spacing + prototype_width
     cluster_height = 1.0
-    fig_height = min(n_clusters * cluster_height, 60)
+    fig_height = min(n_valid * cluster_height, 60)
 
     fig = plt.figure(figsize=(fig_width, fig_height))
     fig.suptitle(title, fontsize=12)
 
     # Create grid with two columns
     gs = GridSpec(
-        n_clusters,
+        n_valid,
         2,
         width_ratios=[dendrogram_width, prototype_width],
         wspace=spacing / fig_width,
@@ -133,7 +193,7 @@ def plot_hierarchy_dendrogram(
         orientation="left",
         ax=dendrogram_ax,
         leaf_font_size=10,
-        leaf_label_func=lambda x: f"Cluster {x}",
+        leaf_label_func=lambda x: f"Cluster {int(valid_clusters[x])}",
     )
     dendrogram_ax.set_xlabel(metric_label)
 
@@ -142,10 +202,12 @@ def plot_hierarchy_dendrogram(
         raise ValueError("Failed to get leaf order from dendrogram.")
     leaf_order = leaf_order[::-1]
 
-    # Plot prototypes aligned with dendrogram leaves
+    # Plot prototypes aligned with dendrogram leaves, mapping filtered
+    # leaf indices back to original cluster ids via valid_clusters.
     for i, leaf_idx in enumerate(leaf_order):
+        original_cluster = int(valid_clusters[leaf_idx])
         prototype_ax = fig.add_subplot(gs[i, 1])
-        dataset.paint_observable(hierarchy.prototypes[leaf_idx], prototype_ax)
+        dataset.paint_observable(hierarchy.prototypes[original_cluster], prototype_ax)
 
     return fig
 
@@ -186,7 +248,16 @@ class CoAssignmentHierarchyAnalysis(
     Works with any model implementing:
     - HasSoftAssignments (posterior_soft_assignments)
     - CanComputePrototypes (compute_cluster_prototypes)
+    - ClusteringModel (n_clusters)
+
+    Dead clusters (with total responsibility below ``min_cluster_size``
+    of training data) are pruned before the co-assignment matrix is
+    built. This avoids the sqrt-of-zero normalization blowing up into
+    NaN when a cluster receives no probability mass.
     """
+
+    filter_empty_clusters: bool = True
+    min_cluster_size: float = 0.0005
 
     @property
     @override
@@ -203,28 +274,36 @@ class CoAssignmentHierarchyAnalysis(
         epoch: int,
         params: Array,
     ) -> CoAssignmentHierarchy:
-        """Generate hierarchy from posterior co-assignments."""
-        # Get responsibilities from model
+        """Generate hierarchy from posterior co-assignments over valid clusters."""
         responsibilities = model.posterior_soft_assignments(params, dataset.train_data)
+        assignments = jnp.argmax(responsibilities, axis=1)
 
-        # Compute co-assignment similarity matrix
-        similarity_matrix = compute_co_assignment_matrix(responsibilities)
+        valid_clusters = get_valid_clusters(
+            assignments,
+            model.n_clusters,
+            dataset.n_classes if dataset.has_labels else model.n_clusters,
+            self.filter_empty_clusters,
+            self.min_cluster_size,
+            len(dataset.train_data),
+        )
 
-        # Convert similarity to distance
+        # Restrict to valid clusters before normalization — prevents
+        # sqrt(0) / 0 division on dead clusters.
+        sub_resp = responsibilities[:, valid_clusters]
+        similarity_matrix = compute_co_assignment_matrix(sub_resp)
         distance_matrix = 1.0 - similarity_matrix
 
-        # Build hierarchy
         linkage_matrix, cleaned_distance = build_hierarchy_from_distance(
             distance_matrix
         )
 
-        # Get prototypes for visualization
         prototypes = model.compute_cluster_prototypes(params)
 
         return CoAssignmentHierarchy(
             prototypes=prototypes,
             linkage_matrix=linkage_matrix,
             distance_matrix=cleaned_distance,
+            valid_clusters=valid_clusters,
         )
 
     @override
@@ -245,6 +324,7 @@ class CoAssignmentHierarchyAnalysis(
             prototypes=artifact.prototypes,
             linkage_matrix=linkage_copy,
             distance_matrix=artifact.distance_matrix,
+            valid_clusters=artifact.valid_clusters,
         )
 
         return plot_hierarchy_dendrogram(

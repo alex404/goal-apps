@@ -52,9 +52,32 @@ THEME = Theme(
 ### Initialization Helpers ###
 
 
-def filter_group_defaults(config_dir: str, overrides: list[str]):
+def filter_group_defaults(config_dir: str, overrides: list[str]) -> list[str]:
+    """Strip Hydra group selectors (e.g. ``dataset=mnist``, ``model=hmog``) from overrides.
+
+    Used only on the resume path. The saved ``run-config.yaml`` already contains
+    the fully-composed dataset/model subtrees, so re-applying a group selector
+    would either (a) be redundant if the group matches, or (b) clobber the
+    saved subtree with the group default. Worse: we apply these via
+    ``OmegaConf.from_dotlist``, which would misparse ``dataset=mnist`` as the
+    scalar assignment ``cfg.dataset = "mnist"``, blowing up the structure.
+
+    Subkey overrides like ``dataset.n_samples=1000`` are preserved.
+    """
     groups = {d.name for d in Path(config_dir).iterdir() if d.is_dir()}
-    return [o for o in overrides if "=" not in o or o.split("=", 1)[0] not in groups]
+    kept: list[str] = []
+    dropped: list[str] = []
+    for o in overrides:
+        if "=" in o and o.split("=", 1)[0] in groups:
+            dropped.append(o)
+        else:
+            kept.append(o)
+    if dropped:
+        log.warning(
+            "Ignoring group selector overrides on resume (saved subtree wins): %s",
+            ", ".join(dropped),
+        )
+    return kept
 
 
 def setup_matplotlib_style() -> None:
@@ -174,7 +197,31 @@ def initialize_run(
     overrides: list[str],
     trial: Any = None,
 ) -> tuple[RunHandler, Logger, Dataset, Model[Dataset], int]:
-    """Initialize a new run with hydra config and wandb logging."""
+    """Compose config, set up runtime, and instantiate dataset + model.
+
+    Composition order (later wins): base defaults -> saved ``run-config.yaml``
+    (if resuming) -> CLI ``overrides``. Group selectors (e.g. ``dataset=X``)
+    in ``overrides`` are dropped on resume — see ``filter_group_defaults``.
+
+    Side effects: creates the run directory, writes the resolved config
+    back to ``run-config.yaml``, configures root logging + matplotlib
+    style, registers SIGTERM/SIGINT handlers, and (if enabled) initializes
+    W&B.
+
+    Args:
+        run_type: Config dataclass registered as the Hydra schema (e.g.
+            ``ClusteringRunConfig``).
+        overrides: Hydra-style override strings. May include ``suggest_*``
+            directives when ``trial`` is supplied — those are resolved
+            upstream in ``sweep.resolve_optuna_overrides``.
+        trial: Active Optuna trial, if running inside a study. Threaded
+            into the Logger so that ``log_metrics`` → ``check_pruning``
+            can report to Optuna.
+
+    Returns:
+        (handler, logger, dataset, model, seed). The seed is taken from
+        ``cfg.seed`` and is the caller's starting PRNGKey.
+    """
     cs = ConfigStore.instance()
     cs.store(name="config_schema", node=run_type)
     proot = Path(__file__).parents[3]
@@ -236,7 +283,9 @@ def initialize_run(
     log.info(f"with JIT: {cfg.jit}")
 
     log.info("Loading dataset...")
-    dataset: Dataset = instantiate(cfg.dataset, cache_dir=handler.cache_dir)
+    dataset: Dataset = instantiate(
+        cfg.dataset, cache_dir=handler.cache_dir, seed=int(cfg.seed)
+    )
     log.info(
         f"Loaded dataset with {len(dataset.train_data)} training data points of dimension {dataset.data_dim}."
     )

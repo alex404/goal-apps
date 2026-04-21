@@ -3,7 +3,7 @@
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import override
+from typing import Any, override
 from urllib.request import urlretrieve
 from zipfile import ZipFile
 
@@ -33,9 +33,12 @@ class TasicConfig(ClusteringDatasetConfig):
         log_transform: Whether to apply log(counts + 1) transformation
         standardize: Whether to center and scale features
         test_fraction: Fraction of data to use for test set
-        random_seed: Random seed for train/test split
         n_global_genes: Number of genes to show in global profile plot
         n_marker_genes: Number of cluster-specific marker genes to show
+
+    Note: the random seed used for the train/test split is the CLI-driven
+    ``cfg.seed``, threaded through ``initialize_run`` — not a dataset-local
+    field.
     """
 
     _target_: str = "plugins.datasets.tasic.TasicDataset.load"
@@ -51,7 +54,6 @@ class TasicConfig(ClusteringDatasetConfig):
 
     # Data splits
     test_fraction: float = 0.2
-    random_seed: int = 42
 
     # Visualization
     n_global_genes: int = 100  # Genes to show in global profile
@@ -93,13 +95,13 @@ class TasicDataset(ClusteringDataset):
     def load(
         cls,
         cache_dir: Path,
+        seed: int,
         n_genes: int = 2000,
         use_fano_selection: bool = True,
         min_expression_threshold: float = 0.1,
         log_transform: bool = True,
         standardize: bool = True,
         test_fraction: float = 0.2,
-        random_seed: int = 42,
         n_global_genes: int = 100,
         n_marker_genes: int = 8,
     ) -> "TasicDataset":
@@ -107,13 +109,13 @@ class TasicDataset(ClusteringDataset):
 
         Args:
             cache_dir: Directory for caching downloaded data
+            seed: CLI-driven root seed used for the train/test split
             n_genes: Target number of genes to keep
             use_fano_selection: Use Fano factor for gene selection
             min_expression_threshold: Minimum expression threshold
             log_transform: Apply log transformation
             standardize: Standardize features
             test_fraction: Fraction for test set
-            random_seed: Random seed
             n_global_genes: Number of genes for global profile
             n_marker_genes: Number of marker genes per cluster
 
@@ -129,7 +131,8 @@ class TasicDataset(ClusteringDataset):
             print(f"Using cached Tasic dataset: {data_file}")
 
         # Load data from HDF5 file
-        with h5py.File(data_file, "r") as f:
+        with h5py.File(data_file, "r") as hf:
+            f: Any = hf  # h5py stubs don't support dataset subscript
             expression_data = f["expression"][:]  # cells x genes
             gene_names = [
                 g.decode() if isinstance(g, bytes) else g for g in f["gene_names"][:]
@@ -184,38 +187,50 @@ class TasicDataset(ClusteringDataset):
         # Keep a copy for visualization stats before standardization
         visu_matrix = expression_data.copy()
 
-        # Standardization
-        if standardize:
-            scaler = StandardScaler()
-            expression_data = scaler.fit_transform(expression_data)
-            print("Applied standardization")
-
-        # Convert to JAX arrays
-        expression_data = jnp.array(expression_data)
-        cell_labels = jnp.array(cell_labels)
-
-        # Create train/test split - try stratified first, fallback to random
+        # Create train/test split BEFORE standardization to prevent test
+        # statistics leaking into the scaler fit.
         n_cells = expression_data.shape[0]
 
         try:
             # Try stratified split first
-            sss = StratifiedShuffleSplit(n_splits=1, test_size=test_fraction, random_state=random_seed)
-            (train_indices, test_indices), = sss.split(np.zeros(len(cell_labels)), cell_labels)
+            sss = StratifiedShuffleSplit(
+                n_splits=1, test_size=test_fraction, random_state=seed
+            )
+            ((train_indices, test_indices),) = sss.split(
+                np.zeros(len(cell_labels)), cell_labels
+            )
             train_indices = np.asarray(train_indices)
             test_indices = np.asarray(test_indices)
-            print(f"Stratified split: {len(train_indices)} train, {len(test_indices)} test cells")
+            print(
+                f"Stratified split: {len(train_indices)} train, {len(test_indices)} test cells"
+            )
         except ValueError as e:
             # Fallback to random split if stratified fails (some classes have <2 samples)
             print(f"Stratified split failed ({e}), using random split instead")
-            rng = np.random.RandomState(random_seed)
+            rng = np.random.RandomState(seed)
             test_indices = rng.choice(
                 n_cells, size=int(n_cells * test_fraction), replace=False
             )
             train_indices = np.setdiff1d(np.arange(n_cells), test_indices)
-            print(f"Random split: {len(train_indices)} train, {len(test_indices)} test cells")
+            print(
+                f"Random split: {len(train_indices)} train, {len(test_indices)} test cells"
+            )
 
-        train_data = expression_data[train_indices]
-        test_data = expression_data[test_indices]
+        train_expr = expression_data[train_indices]
+        test_expr = expression_data[test_indices]
+
+        # Standardize using train-only statistics
+        if standardize:
+            scaler = StandardScaler()
+            train_expr = scaler.fit_transform(train_expr)
+            test_expr = scaler.transform(test_expr)
+            print("Applied standardization (fit on train only)")
+
+        # Convert to JAX arrays
+        train_data = jnp.array(train_expr)
+        test_data = jnp.array(test_expr)
+        cell_labels = jnp.array(cell_labels)
+
         train_labels = cell_labels[train_indices]
         test_labels = cell_labels[test_indices]
 
@@ -464,7 +479,6 @@ def _download_tasic_data(output_path: Path) -> None:
     ]
 
     cell_labels_str = None
-    selected_column = None
 
     for col in label_columns:
         if col in samples_df.columns:
@@ -473,7 +487,6 @@ def _download_tasic_data(output_path: Path) -> None:
                 unique_count > 1 and unique_count < len(samples_df) * 0.8
             ):  # Not too few, not too many
                 cell_labels_str = samples_df[col].values
-                selected_column = col
                 print(f"Using {col} as cell type labels ({unique_count} unique types)")
                 break
 
@@ -484,7 +497,6 @@ def _download_tasic_data(output_path: Path) -> None:
             unique_count = len(samples_df[col].unique())
             if 2 <= unique_count <= 200:  # Reasonable range for cell types
                 cell_labels_str = samples_df[col].values
-                selected_column = col
                 print(f"Using {col} as cell type labels ({unique_count} unique types)")
                 break
 

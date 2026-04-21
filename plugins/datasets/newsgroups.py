@@ -3,7 +3,7 @@
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import override
+from typing import Any, override
 
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
@@ -33,7 +33,7 @@ class NewsgroupsConfig(ClusteringDatasetConfig):
         max_features: Maximum number of features for TF-IDF (None for all)
         min_df: Minimum document frequency for TF-IDF (sklearn standard: 2)
         max_df: Maximum document frequency for TF-IDF (sklearn standard: 0.95)
-        random_seed: Random seed for reproducibility
+        seed: Random seed for reproducibility
         use_count_vectorizer: Use count vectorization instead of TF-IDF
         n_top_words: Number of top words to show in visualization
     """
@@ -50,9 +50,6 @@ class NewsgroupsConfig(ClusteringDatasetConfig):
     max_features: int | None = None  # None for all features
     min_df: int = 2  # Standard sklearn default
     max_df: float = 0.95  # Standard sklearn default
-
-    # Reproducibility
-    random_seed: int = 42
 
     # Vectorization method
     use_count_vectorizer: bool = False  # False for TF-IDF, True for count
@@ -90,12 +87,12 @@ class NewsgroupsDataset(ClusteringDataset):
     def load(
         cls,
         cache_dir: Path,
+        seed: int,
         categories: list[str] | None,
         remove: list[str],
         max_features: int | None,
         min_df: int,
         max_df: float,
-        random_seed: int,
         use_count_vectorizer: bool,
         n_top_words: int,
     ) -> "NewsgroupsDataset":
@@ -108,7 +105,7 @@ class NewsgroupsDataset(ClusteringDataset):
             max_features: Maximum TF-IDF features (None for all features)
             min_df: Minimum document frequency
             max_df: Maximum document frequency
-            random_seed: Random seed
+            seed: Random seed
             n_top_words: Top words for visualization
 
         Returns:
@@ -118,8 +115,12 @@ class NewsgroupsDataset(ClusteringDataset):
 
         log.info("Loading 20 Newsgroups dataset...")
 
-        # Check for cached processed data
-        cache_file = cache_dir / "newsgroups_raw.npz"
+        # Include the parameters that actually affect the cached raw texts
+        # (categories and remove) in the cache filename so changing them
+        # invalidates stale caches rather than silently returning the old ones.
+        cat_tag = "all" if categories is None else "-".join(sorted(categories))
+        remove_tag = "-".join(sorted(remove)) if remove else "none"
+        cache_file = cache_dir / f"newsgroups_raw_cat-{cat_tag}_rm-{remove_tag}.npz"
 
         if cache_file.exists():
             log.info("Loading cached newsgroups data...")
@@ -132,17 +133,17 @@ class NewsgroupsDataset(ClusteringDataset):
         else:
             log.info("Downloading and caching raw newsgroups data...")
             # Load both train and test sets
-            train_newsgroups = fetch_20newsgroups(
+            train_newsgroups: Any = fetch_20newsgroups(
                 subset="train",
                 categories=categories,
                 remove=tuple(remove),
                 shuffle=True,
-                random_state=random_seed,
+                random_state=seed,
                 download_if_missing=True,
                 data_home=str(cache_dir),
             )
 
-            test_newsgroups = fetch_20newsgroups(
+            test_newsgroups: Any = fetch_20newsgroups(
                 subset="test",
                 categories=categories,
                 remove=tuple(remove),
@@ -190,8 +191,8 @@ class NewsgroupsDataset(ClusteringDataset):
             )
 
         # Fit on training data, transform both sets
-        train_features = vectorizer.fit_transform(train_texts)
-        test_features = vectorizer.transform(test_texts)
+        train_features: Any = vectorizer.fit_transform(train_texts)
+        test_features: Any = vectorizer.transform(test_texts)
         feature_names = vectorizer.get_feature_names_out().tolist()
 
         # Convert to dense JAX arrays
@@ -200,7 +201,6 @@ class NewsgroupsDataset(ClusteringDataset):
         train_labels = train_labels.astype(np.int32)
         test_labels = test_labels.astype(np.int32)
 
-        feature_type = "count" if use_count_vectorizer else "TF-IDF"
         # Use official train/test split
         train_data = jnp.array(train_dense)
         test_data = jnp.array(test_dense)
@@ -282,7 +282,7 @@ class NewsgroupsDataset(ClusteringDataset):
         width = bins[1] - bins[0]
 
         # Simple gray bars for clean look
-        bars = axes.bar(
+        axes.bar(
             bin_centers,
             hist,
             width=width * 0.8,
@@ -337,9 +337,7 @@ class NewsgroupsDataset(ClusteringDataset):
 
         # Create horizontal bar plot
         y_pos = np.arange(len(top_words))
-        bars = words_ax.barh(
-            y_pos, top_scores, color="darkgreen", alpha=0.8, height=0.7
-        )
+        words_ax.barh(y_pos, top_scores, color="darkgreen", alpha=0.8, height=0.7)
         words_ax.set_yticks(y_pos)
         words_ax.set_yticklabels(top_words, fontsize=11, fontweight="bold")
         words_ax.set_xlabel("TF-IDF Score", fontsize=11)
@@ -503,17 +501,9 @@ class NewsgroupsDataset(ClusteringDataset):
             # Get top words for this cluster
             top_indices = jnp.argsort(prototypes[i])[-words_per_cluster:]
             top_words = [self._feature_names[int(idx)] for idx in top_indices]
-            top_scores = prototypes[i, top_indices]
 
-            # Create text display
-            text_lines = []
-            for word, score in zip(top_words, top_scores):
-                text_lines.append(f"{word}")
-
-            # Display words
-            text_content = "\n".join(
-                reversed(text_lines)
-            )  # Reverse for better visual order
+            # Display words (reversed for better visual order)
+            text_content = "\n".join(reversed(top_words))
             ax.text(
                 0.05,
                 0.95,
@@ -607,7 +597,7 @@ class NewsgroupsDataset(ClusteringDataset):
         global_top_words = [self._feature_names[int(i)] for i in global_top_indices]
         heatmap_data = prototypes[:, global_top_indices]
 
-        im = ax_heatmap.imshow(
+        ax_heatmap.imshow(
             heatmap_data, aspect="auto", cmap="YlOrRd", interpolation="nearest"
         )
         ax_heatmap.set_xticks(range(len(global_top_words)))
@@ -647,7 +637,7 @@ class NewsgroupsDataset(ClusteringDataset):
             cluster_max_scores.append(float(jnp.max(prototypes[i])))
 
         # Scatter plot: entropy vs max score, size = cluster size
-        scatter = ax_diversity.scatter(
+        ax_diversity.scatter(
             cluster_entropies,
             cluster_max_scores,
             s=member_counts / 10,
@@ -672,7 +662,7 @@ class NewsgroupsDataset(ClusteringDataset):
         normalized = subset_prototypes / (norms + 1e-8)
         similarity = jnp.dot(normalized, normalized.T)
 
-        im_sim = ax_similarity.imshow(similarity, cmap="RdYlBu_r", vmin=0, vmax=1)
+        ax_similarity.imshow(similarity, cmap="RdYlBu_r", vmin=0, vmax=1)
         ax_similarity.set_title(f"Cluster Similarity (first {n_show} clusters)")
         ax_similarity.set_xlabel("Clusters")
         ax_similarity.set_ylabel("Clusters")
@@ -722,7 +712,7 @@ class NewsgroupsDataset(ClusteringDataset):
         max_cluster_size = jnp.max(member_counts)
 
         avg_sparsity = jnp.mean(
-            [jnp.mean(prototypes[i] == 0) for i in range(n_clusters)]
+            jnp.array([jnp.mean(prototypes[i] == 0) for i in range(n_clusters)])
         )
 
         summary_text = f"""

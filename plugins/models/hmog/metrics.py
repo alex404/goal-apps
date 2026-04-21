@@ -2,31 +2,116 @@
 
 from __future__ import annotations
 
-import logging
-
 import jax.numpy as jnp
-from goal.geometry import Replicated
-from goal.models import FactorAnalysis, FullNormal
+from goal.models import FullNormal
 from jax import Array
 
 from apps.interface import ClusteringDataset
-from apps.interface.clustering import add_clustering_metrics, clustering_nmi
+from apps.interface.clustering import add_clustering_metrics
 from apps.runtime import (
-    STATS_NUM,
+    INFO_LEVEL,
+    STATS_LEVEL,
     Logger,
     MetricDict,
     add_ll_metrics,
     log_with_frequency,
+    stats_keys,
     update_stats,
 )
 
 from .analyses.base import analyze_component, cluster_assignments
 from .types import AnyHMoG, AnyLGM
 
-log = logging.getLogger(__name__)
+_CONJUGATION_KEYS = frozenset(
+    {
+        "Conjugation/Location Norm",
+        "Conjugation/Mean Norm",
+        "Conjugation/Precision Cond",
+        "Conjugation/Covariance Cond",
+        "Conjugation/Precision LogDet",
+        "Conjugation/Covariance LogDet",
+    }
+)
 
-STATS_LEVEL = jnp.array(STATS_NUM)
-INFO_LEVEL = jnp.array(logging.INFO)
+_MIXTURE_KEYS = frozenset(
+    {
+        "Mixture/Entropy",
+        "Mixture/Effective Components",
+        "Mixture/Dead Components",
+        "Mixture/Dying Components",
+    }
+)
+
+# Keys produced by pre_log_epoch_metrics (LGM pretraining phase)
+HMOG_PRE_TRAINING_METRIC_KEYS: frozenset[str] = (
+    frozenset({"Regularization/Loading Sparsity", "Timing/Wall Clock (s)"})
+    | _CONJUGATION_KEYS
+    | stats_keys(
+        "Params",
+        "Obs Location",
+        "Obs Precision",
+        "Obs Interaction",
+        "Lat Location",
+        "Lat Precision",
+    )
+    | stats_keys(
+        "Means", "Obs Mean", "Obs Cov", "Obs Interaction", "Lat Mean", "Lat Cov"
+    )
+    | stats_keys(
+        "Grad Norms",
+        "Obs Location",
+        "Obs Precision",
+        "Obs Interaction",
+        "Lat Location",
+        "Lat Precision",
+    )
+)
+
+# Keys produced by log_epoch_metrics (full HMoG training phase)
+HMOG_TRAINING_METRIC_KEYS: frozenset[str] = (
+    frozenset({"Regularization/Loading Sparsity", "Timing/Wall Clock (s)"})
+    | _CONJUGATION_KEYS
+    | _MIXTURE_KEYS
+    | stats_keys(
+        "Params",
+        "Obs Location",
+        "Obs Precision",
+        "Obs Interaction",
+        "Lat Location",
+        "Lat Precision",
+        "Lat Interaction",
+        "Categorical",
+    )
+    | stats_keys(
+        "Means",
+        "Obs Mean",
+        "Obs Cov",
+        "Obs Interaction",
+        "Lat Mean",
+        "Lat Cov",
+        "Lat Interaction",
+        "Categorical",
+    )
+    | stats_keys(
+        "Grad Norms",
+        "Obs Location",
+        "Obs Precision",
+        "Obs Interaction",
+        "Lat Location",
+        "Lat Precision",
+        "Lat Interaction",
+        "Categorical",
+    )
+    | stats_keys(
+        "Components",
+        "Location Norm",
+        "Mean Norm",
+        "Precision Cond",
+        "Covariance Cond",
+        "Precision LogDet",
+        "Covariance LogDet",
+    )
+)
 
 
 def add_conjugation_metrics(
@@ -34,14 +119,16 @@ def add_conjugation_metrics(
 ) -> MetricDict:
     """Add conjugation parameter statistics."""
     rho_stats = analyze_component(normal_man, rho)
-    metrics.update({
-        "Conjugation/Location Norm": (STATS_LEVEL, rho_stats[0]),
-        "Conjugation/Mean Norm": (STATS_LEVEL, rho_stats[1]),
-        "Conjugation/Precision Cond": (STATS_LEVEL, rho_stats[2]),
-        "Conjugation/Covariance Cond": (STATS_LEVEL, rho_stats[3]),
-        "Conjugation/Precision LogDet": (STATS_LEVEL, rho_stats[4]),
-        "Conjugation/Covariance LogDet": (STATS_LEVEL, rho_stats[5]),
-    })
+    metrics.update(
+        {
+            "Conjugation/Location Norm": (STATS_LEVEL, rho_stats[0]),
+            "Conjugation/Mean Norm": (STATS_LEVEL, rho_stats[1]),
+            "Conjugation/Precision Cond": (STATS_LEVEL, rho_stats[2]),
+            "Conjugation/Covariance Cond": (STATS_LEVEL, rho_stats[3]),
+            "Conjugation/Precision LogDet": (STATS_LEVEL, rho_stats[4]),
+            "Conjugation/Covariance LogDet": (STATS_LEVEL, rho_stats[5]),
+        }
+    )
     return metrics
 
 
@@ -50,11 +137,11 @@ def add_conjugation_metrics(
 
 def pre_log_epoch_metrics(
     dataset: ClusteringDataset,
-    model: AnyLGM | FactorAnalysis,
+    model: AnyLGM,
     logger: Logger,
     params: Array,
     epoch: Array,
-    initial_metrics: MetricDict,
+    reg_metrics: MetricDict,
     batch_grads: Array | None = None,
     log_freq: int = 1,
 ) -> None:
@@ -63,7 +150,7 @@ def pre_log_epoch_metrics(
     test_data = dataset.test_data
 
     def compute_metrics() -> MetricDict:
-        metrics: MetricDict = dict(initial_metrics)
+        metrics: MetricDict = dict(reg_metrics)
 
         # Log-likelihood metrics
         train_ll = model.average_log_observable_density(params, train_data)
@@ -105,20 +192,20 @@ def pre_log_epoch_metrics(
         rho = model.conjugation_parameters(lkl_params)
         metrics = add_conjugation_metrics(metrics, model.prr_man, rho)
 
-        # Gradient norms
+        # Gradient norms — batch_grads is already (n_steps, 5) per-group
+        # norms computed inside the trainer's scan (to avoid OOM from
+        # materializing full gradients across batch_steps).
         if batch_grads is not None:
-            def norm_grads(grad: Array) -> Array:
-                obs_g, int_g, lat_g = model.split_coords(grad)
-                obs_loc_g, obs_prs_g = model.obs_man.split_coords(obs_g)
-                lat_loc_g, lat_prs_g = model.pst_man.split_coords(lat_g)
-                return jnp.asarray([jnp.linalg.norm(g) for g in [
-                    obs_loc_g, obs_prs_g, int_g, lat_loc_g, lat_prs_g
-                ]])
-
-            batch_man = Replicated(model, batch_grads.shape[0])
-            norms = batch_man.map(norm_grads, batch_grads).T
-            for i, name in enumerate(["Obs Location", "Obs Precision", "Obs Interaction",
-                                       "Lat Location", "Lat Precision"]):
+            norms = batch_grads.T  # shape (5, n_steps)
+            for i, name in enumerate(
+                [
+                    "Obs Location",
+                    "Obs Precision",
+                    "Obs Interaction",
+                    "Lat Location",
+                    "Lat Precision",
+                ]
+            ):
                 metrics = update_stats("Grad Norms", name, norms[i], metrics)
 
         return metrics
@@ -135,7 +222,7 @@ def log_epoch_metrics(
     logger: Logger,
     params: Array,
     epoch: Array,
-    initial_metrics: MetricDict,
+    reg_metrics: MetricDict,
     batch_grads: Array | None = None,
     log_freq: int = 1,
 ) -> None:
@@ -144,7 +231,7 @@ def log_epoch_metrics(
     test_data = dataset.test_data
 
     def compute_metrics() -> MetricDict:
-        metrics: MetricDict = dict(initial_metrics)
+        metrics: MetricDict = dict(reg_metrics)
 
         # Log-likelihood metrics
         train_ll = model.average_log_observable_density(params, train_data)
@@ -164,7 +251,6 @@ def log_epoch_metrics(
                 test_labels=dataset.test_labels,
                 train_clusters=train_clusters,
                 test_clusters=test_clusters,
-                clustering_nmi_fn=clustering_nmi,
             )
 
         # Parameter decomposition (HMoG has more components than LGM)
@@ -225,25 +311,34 @@ def log_epoch_metrics(
         cmp_stats = model.prr_man.cmp_man.map(
             lambda cmp: analyze_component(model.prr_man.obs_man, cmp), cmp_params
         ).T
-        for i, name in enumerate(["Location Norm", "Mean Norm", "Precision Cond",
-                                   "Covariance Cond", "Precision LogDet", "Covariance LogDet"]):
+        for i, name in enumerate(
+            [
+                "Location Norm",
+                "Mean Norm",
+                "Precision Cond",
+                "Covariance Cond",
+                "Precision LogDet",
+                "Covariance LogDet",
+            ]
+        ):
             metrics = update_stats("Components", name, cmp_stats[i], metrics)
 
-        # Gradient norms
+        # Gradient norms — batch_grads is already (n_steps, 7) per-group
+        # norms computed inside the trainer's scan (to avoid OOM from
+        # materializing full gradients across batch_steps).
         if batch_grads is not None:
-            def norm_grads(grad: Array) -> Array:
-                obs_g, lwr_int_g, upr_g = model.split_coords(grad)
-                obs_loc_g, obs_prs_g = model.obs_man.split_coords(obs_g)
-                lat_g, upr_int_g, cat_g = model.pst_man.split_coords(upr_g)
-                lat_loc_g, lat_prs_g = model.pst_man.obs_man.split_coords(lat_g)
-                return jnp.asarray([jnp.linalg.norm(g) for g in [
-                    obs_loc_g, obs_prs_g, lwr_int_g, lat_loc_g, lat_prs_g, upr_int_g, cat_g
-                ]])
-
-            batch_man = Replicated(model, batch_grads.shape[0])
-            norms = batch_man.map(norm_grads, batch_grads).T
-            for i, name in enumerate(["Obs Location", "Obs Precision", "Obs Interaction",
-                                       "Lat Location", "Lat Precision", "Lat Interaction", "Categorical"]):
+            norms = batch_grads.T  # shape (7, n_steps)
+            for i, name in enumerate(
+                [
+                    "Obs Location",
+                    "Obs Precision",
+                    "Obs Interaction",
+                    "Lat Location",
+                    "Lat Precision",
+                    "Lat Interaction",
+                    "Categorical",
+                ]
+            ):
                 metrics = update_stats("Grad Norms", name, norms[i], metrics)
 
         return metrics

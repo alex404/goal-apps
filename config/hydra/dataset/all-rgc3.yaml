@@ -9,4 +9,3 @@ chirp_len: 259       # Updated chirp length based on our findings
 bar_len: 32
 feature_len: 3
 train_split: 0.8
-random_seed: 42

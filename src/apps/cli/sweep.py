@@ -17,6 +17,7 @@ TUNE_DIR = Path("runs/tune")
 class OptunaValidationError(Exception):
     """Raised when validation of a proposed Optuna study configuration fails."""
 
+
 ### Sweep Management ###
 
 
@@ -113,7 +114,7 @@ def _parse_categorical_choices(choices_str: str) -> list[Any]:
     return choices
 
 
-def _resolve_directive(value: str, sampler: Any) -> Any:
+def _resolve_directive(name: str, value: str, sampler: Any) -> Any:
     """Resolve a single suggest_* directive via ``sampler`` (an object with
     ``suggest_float``, ``suggest_int``, ``suggest_categorical`` methods — e.g.
     an ``optuna.trial.Trial``). Returns the sampled value, or ``None`` if
@@ -123,14 +124,16 @@ def _resolve_directive(value: str, sampler: Any) -> Any:
         parts = value.split(":")[1:]
         low, high = float(parts[0]), float(parts[1])
         use_log = len(parts) > 2 and parts[2] == "log"
-        return sampler.suggest_float("_", low, high, log=use_log)
+        return sampler.suggest_float(name, low, high, log=use_log)
     if value.startswith("suggest_int:"):
         parts = value.split(":")[1:]
         low, high = int(parts[0]), int(parts[1])
-        return sampler.suggest_int("_", low, high)
+        return sampler.suggest_int(name, low, high)
     if value.startswith("suggest_categorical:"):
         choices_str = value.split(":", 1)[1]
-        return sampler.suggest_categorical("_", _parse_categorical_choices(choices_str))
+        return sampler.suggest_categorical(
+            name, _parse_categorical_choices(choices_str)
+        )
     return None
 
 
@@ -142,7 +145,9 @@ class _FirstValueSampler:
     instantiated without invoking optuna.
     """
 
-    def suggest_float(self, _param: str, low: float, _high: float, log: bool = False) -> float:
+    def suggest_float(
+        self, _param: str, low: float, _high: float, log: bool = False
+    ) -> float:
         del log
         return low
 
@@ -151,6 +156,27 @@ class _FirstValueSampler:
 
     def suggest_categorical(self, _param: str, choices: list[Any]) -> Any:
         return choices[0]
+
+
+def _resolve_overrides(sampler: Any, overrides: list[str]) -> list[str]:
+    """Resolve suggest_* directives in overrides via ``sampler``.
+
+    ``sampler`` must expose ``suggest_float``, ``suggest_int``, and
+    ``suggest_categorical`` methods (e.g. an ``optuna.trial.Trial`` or
+    ``_FirstValueSampler``).
+    """
+    resolved = []
+    for override in overrides:
+        if "=" not in override:
+            resolved.append(override)
+            continue
+        param, value = override.split("=", 1)
+        sampled = _resolve_directive(param, value, sampler)
+        if sampled is None:
+            resolved.append(override)
+        else:
+            resolved.append(f"{param}={sampled}")
+    return resolved
 
 
 def resolve_optuna_overrides(trial: Any, overrides: list[str]) -> list[str]:
@@ -166,36 +192,7 @@ def resolve_optuna_overrides(trial: Any, overrides: list[str]) -> list[str]:
     Returns:
         List of resolved override strings.
     """
-    resolved = []
-    for override in overrides:
-        if "=" not in override:
-            resolved.append(override)
-            continue
-
-        param, value = override.split("=", 1)
-
-        if value.startswith("suggest_float:"):
-            parts = value.split(":")[1:]
-            low, high = float(parts[0]), float(parts[1])
-            use_log = len(parts) > 2 and parts[2] == "log"
-            sampled = trial.suggest_float(param, low, high, log=use_log)
-            resolved.append(f"{param}={sampled}")
-
-        elif value.startswith("suggest_int:"):
-            parts = value.split(":")[1:]
-            low, high = int(parts[0]), int(parts[1])
-            sampled = trial.suggest_int(param, low, high)
-            resolved.append(f"{param}={sampled}")
-
-        elif value.startswith("suggest_categorical:"):
-            choices_str = value.split(":", 1)[1]
-            sampled = trial.suggest_categorical(param, _parse_categorical_choices(choices_str))
-            resolved.append(f"{param}={sampled}")
-
-        else:
-            resolved.append(override)
-
-    return resolved
+    return _resolve_overrides(trial, overrides)
 
 
 def sample_optuna_overrides(overrides: list[str]) -> list[str]:
@@ -203,19 +200,7 @@ def sample_optuna_overrides(overrides: list[str]) -> list[str]:
 
     Used for validation — no ``optuna.Trial`` required.
     """
-    sampler = _FirstValueSampler()
-    resolved = []
-    for override in overrides:
-        if "=" not in override:
-            resolved.append(override)
-            continue
-        param, value = override.split("=", 1)
-        sampled = _resolve_directive(value, sampler)
-        if sampled is None:
-            resolved.append(override)
-        else:
-            resolved.append(f"{param}={sampled}")
-    return resolved
+    return _resolve_overrides(_FirstValueSampler(), overrides)
 
 
 def validate_wandb_config(sweep_config: dict[str, Any]) -> None:
@@ -280,9 +265,7 @@ def validate_optuna_config(overrides: list[str], metric: str, study_name: str) -
     probe_run_dir = Path("runs") / "single" / probe_run_name
 
     try:
-        _, _, dataset, model, _ = initialize_run(
-            ClusteringRunConfig, probe_overrides
-        )
+        _, _, dataset, model, _ = initialize_run(ClusteringRunConfig, probe_overrides)
 
         declared = model.metric_names(dataset)
         if metric not in declared:
@@ -304,9 +287,9 @@ def validate_optuna_config(overrides: list[str], metric: str, study_name: str) -
             shutil.rmtree(probe_run_dir, ignore_errors=True)
 
 
-def _merge_from_template(template_name: str, new_overrides: list[str]) -> list[str]:
+def merge_from_template(template_name: str, new_overrides: list[str]) -> list[str]:
     """Merge new overrides on top of an existing study's overrides."""
-    config_path = _study_config_path(template_name)
+    config_path = study_config_path(template_name)
     if not config_path.exists():
         raise FileNotFoundError(f"Template study not found: {config_path}")
     template_config = OmegaConf.load(config_path)
@@ -324,11 +307,11 @@ def _study_dir(study_name: str) -> Path:
     return TUNE_DIR / study_name
 
 
-def _study_config_path(study_name: str) -> Path:
+def study_config_path(study_name: str) -> Path:
     return _study_dir(study_name) / "study-config.yaml"
 
 
-def _default_storage(study_name: str) -> str:
+def default_storage(study_name: str) -> str:
     return f"sqlite:///{_study_dir(study_name).resolve()}/study.db"
 
 
@@ -364,18 +347,20 @@ def create_optuna_study(
     study_dir.mkdir(parents=True, exist_ok=True)
 
     # Save study config so workers can join with just the study name
-    config = OmegaConf.create({
-        "overrides": overrides,
-        "metric": metric,
-        "direction": direction,
-        "pruner": pruner_name,
-        "storage": storage,
-    })
-    config_path = _study_config_path(study_name)
+    config = OmegaConf.create(
+        {
+            "overrides": overrides,
+            "metric": metric,
+            "direction": direction,
+            "pruner": pruner_name,
+            "storage": storage,
+        }
+    )
+    config_path = study_config_path(study_name)
     OmegaConf.save(config, config_path)
     log.info(f"Study config saved to {config_path}")
 
-    resolved_storage = storage or _default_storage(study_name)
+    resolved_storage = storage or default_storage(study_name)
     return optuna.create_study(
         study_name=study_name,
         storage=resolved_storage,
@@ -399,13 +384,13 @@ def run_optuna_trial(
     """
     import optuna
 
-    from apps.runtime import DivergentTrainingError
+    from apps.runtime import DivergentTrainingError, Logger
 
     from .configs import ClusteringRunConfig
     from .initialize import initialize_run
 
     # Load study config
-    config_path = _study_config_path(study_name)
+    config_path = study_config_path(study_name)
     if not config_path.exists():
         msg = f"Study config not found at {config_path}. Run 'goal tune optuna create' first."
         raise FileNotFoundError(msg)
@@ -414,7 +399,7 @@ def run_optuna_trial(
     overrides: list[str] = list(config.overrides)
     metric: str = config.metric
     pruner_name: str = config.pruner
-    storage: str = config.storage or _default_storage(study_name)
+    storage: str = config.storage or default_storage(study_name)
 
     study = optuna.load_study(
         study_name=study_name,
@@ -424,13 +409,15 @@ def run_optuna_trial(
 
     def objective(trial: optuna.trial.Trial) -> float:
         trial_overrides = resolve_optuna_overrides(trial, overrides)
-        trial_overrides.extend([
-            "use_optuna=true",
-            f"optuna_metric={metric}",
-            f"experiment={study_name}",
-            f"run_name=t{trial.number}",
-            f"sweep_id={study_name}",
-        ])
+        trial_overrides.extend(
+            [
+                "use_optuna=true",
+                f"optuna_metric={metric}",
+                f"experiment={study_name}",
+                f"run_name=t{trial.number}",
+                f"sweep_id={study_name}",
+            ]
+        )
 
         handler, logger, dataset, model, seed = initialize_run(
             ClusteringRunConfig, trial_overrides, trial=trial
@@ -449,9 +436,10 @@ def run_optuna_trial(
             logger.finalize(handler)
             raise optuna.TrialPruned() from e
         except Exception as e:
-            # DivergentTrainingError from JAX callbacks gets wrapped in
-            # XlaRuntimeError, losing the original type.
-            if "DivergentTrainingError" in str(e):
+            # DivergentTrainingError raised from an io_callback inside JIT is
+            # wrapped in XlaRuntimeError with no __cause__. Logger.monitor_params
+            # sets a module-level flag before raising, which survives the wrap.
+            if Logger.divergence_raised():
                 log.warning(f"Trial {trial.number} diverged: {e}")
                 logger.finalize(handler)
                 raise optuna.TrialPruned() from e
@@ -474,7 +462,7 @@ def reset_optuna_study(study_name: str) -> None:
     import optuna
 
     study_dir = _study_dir(study_name)
-    config_path = _study_config_path(study_name)
+    config_path = study_config_path(study_name)
 
     # Delete everything except the config
     if study_dir.exists():
@@ -490,7 +478,7 @@ def reset_optuna_study(study_name: str) -> None:
     # Recreate study from saved config
     if config_path.exists():
         config = OmegaConf.load(config_path)
-        storage = _default_storage(study_name)
+        storage = default_storage(study_name)
         optuna.create_study(
             study_name=study_name,
             storage=storage,

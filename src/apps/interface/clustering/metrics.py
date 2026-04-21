@@ -6,30 +6,22 @@ These can be used within jax.jit-compiled training loops.
 
 from __future__ import annotations
 
-import logging
-from collections.abc import Callable
-from typing import TypedDict
-
 import jax
 import jax.numpy as jnp
+from goal.models import Categorical
 from jax import Array
 
-from apps.runtime.metrics import as_metric_dict
-from apps.runtime.util import MetricDict
+from apps.runtime import INFO_LEVEL, MetricDict
 
-INFO_LEVEL = jnp.array(logging.INFO)
-
-
-ClusteringMetrics = TypedDict(
-    "ClusteringMetrics",
+CLUSTERING_METRIC_KEYS: frozenset[str] = frozenset(
     {
-        "Clustering/Train Accuracy": tuple[Array, Array],
-        "Clustering/Test Accuracy": tuple[Array, Array],
-        "Clustering/Train NMI": tuple[Array, Array],
-        "Clustering/Test NMI": tuple[Array, Array],
-        "Clustering/Train ARI": tuple[Array, Array],
-        "Clustering/Test ARI": tuple[Array, Array],
-    },
+        "Clustering/Train Accuracy",
+        "Clustering/Test Accuracy",
+        "Clustering/Train NMI",
+        "Clustering/Test NMI",
+        "Clustering/Train ARI",
+        "Clustering/Test ARI",
+    }
 )
 
 
@@ -51,7 +43,7 @@ def _build_contingency(
 def fit_cluster_mapping(
     true_labels: Array, pred_clusters: Array, n_clusters: int, n_classes: int
 ) -> Array:
-    """Derive greedy cluster→class mapping from labeled data.
+    """Derive greedy cluster->class mapping from labeled data.
 
     Builds a contingency matrix and assigns each cluster to its most frequent
     class. Returns the mapping array so it can be applied to a held-out split.
@@ -63,7 +55,7 @@ def fit_cluster_mapping(
         n_classes: Number of ground-truth classes
 
     Returns:
-        cluster_to_label: Array of shape (n_clusters,) mapping cluster index → class label
+        cluster_to_label: Array of shape (n_clusters,) mapping cluster index -> class label
     """
     contingency = _build_contingency(n_clusters, n_classes, pred_clusters, true_labels)
     return jnp.argmax(contingency, axis=1)
@@ -74,7 +66,7 @@ def cluster_accuracy(
 ) -> Array:
     """Compute clustering accuracy with greedy label assignment.
 
-    Fits the cluster→class mapping from the same data it evaluates on.
+    Fits the cluster->class mapping from the same data it evaluates on.
     Use fit_cluster_mapping + direct evaluation when you need to apply a
     mapping derived from a separate (training) split.
 
@@ -123,7 +115,10 @@ def clustering_ari(
 
     expected_index = sum_comb_a * sum_comb_b / comb_n
     max_index = 0.5 * (sum_comb_a + sum_comb_b)
-    return (sum_comb_c - expected_index) / (max_index - expected_index + 1e-10)
+    # Fail-fast: no epsilon guard. A zero denominator means one split is
+    # perfectly uniform (single cluster or single class) — ARI is genuinely
+    # undefined. Let it return NaN so the degenerate run surfaces.
+    return (sum_comb_c - expected_index) / (max_index - expected_index)
 
 
 def clustering_nmi(
@@ -146,31 +141,26 @@ def clustering_nmi(
 
     contingency = _build_contingency(n_clusters, n_classes, assignments, true_labels)
 
-    # Compute cluster and class counts
-    cluster_counts = contingency.sum(axis=1)
-    class_counts = contingency.sum(axis=0)
+    cluster_probs = contingency.sum(axis=1) / n_samples
+    class_probs = contingency.sum(axis=0) / n_samples
+    joint_probs = (contingency / n_samples).ravel()
 
-    # Compute entropy for clusters
-    cluster_probs = cluster_counts / n_samples
-    cluster_entropy = -jnp.sum(
-        jnp.where(cluster_probs > 0, cluster_probs * jnp.log(cluster_probs), 0.0)
-    )
+    # Compute entropies via goal-jax's Categorical negative_entropy, which
+    # consumes MEAN coordinates (K - 1 dims; the 0th probability is dropped
+    # and reconstructed as 1 - sum(means) internally). ``from_probs`` converts
+    # our full-length probability vector into mean coords. Natural coords
+    # (log-odds via ``to_natural``) would give identical entropy but requires
+    # extra softmax conversion — mean coords are what we already have.
+    cat_k = Categorical(n_categories=n_clusters)
+    cat_c = Categorical(n_categories=n_classes)
+    cat_kc = Categorical(n_categories=n_clusters * n_classes)
+    cluster_entropy = -cat_k.negative_entropy(cat_k.from_probs(cluster_probs))
+    class_entropy = -cat_c.negative_entropy(cat_c.from_probs(class_probs))
+    joint_entropy = -cat_kc.negative_entropy(cat_kc.from_probs(joint_probs))
+    mutual_info = cluster_entropy + class_entropy - joint_entropy
 
-    # Compute entropy for classes
-    class_probs = class_counts / n_samples
-    class_entropy = -jnp.sum(
-        jnp.where(class_probs > 0, class_probs * jnp.log(class_probs), 0.0)
-    )
-
-    # Compute mutual information
-    joint_probs = contingency / n_samples
-    outer_probs = jnp.outer(cluster_probs, class_probs)
-
-    # Avoid log(0) by masking
-    log_ratio = jnp.where(joint_probs > 0, jnp.log(joint_probs / outer_probs), 0.0)
-
-    mutual_info = jnp.sum(joint_probs * log_ratio)
-
+    # Fail-fast: no guard on the denominator. If both splits are degenerate
+    # (single cluster AND single class), NMI is undefined — let NaN surface.
     return 2.0 * mutual_info / (cluster_entropy + class_entropy)
 
 
@@ -182,11 +172,10 @@ def add_clustering_metrics(
     test_labels: Array,
     train_clusters: Array,
     test_clusters: Array,
-    clustering_nmi_fn: Callable[[int, int, Array, Array], Array],
 ) -> MetricDict:
     """Add clustering evaluation metrics.
 
-    The cluster→class mapping is derived from the training split and applied
+    The cluster->class mapping is derived from the training split and applied
     to both splits, so test accuracy is a proper held-out evaluation.
 
     Args:
@@ -197,16 +186,9 @@ def add_clustering_metrics(
         test_labels: Ground-truth labels for test data
         train_clusters: Predicted cluster assignments for training data
         test_clusters: Predicted cluster assignments for test data
-        clustering_nmi_fn: Function to compute normalized mutual information
 
     Returns:
-        Updated metrics dict with:
-        - Clustering/Train Accuracy
-        - Clustering/Test Accuracy
-        - Clustering/Train NMI
-        - Clustering/Test NMI
-        - Clustering/Train ARI
-        - Clustering/Test ARI
+        Updated metrics dict with clustering accuracy, NMI, and ARI.
     """
     train_mapping = fit_cluster_mapping(
         train_labels, train_clusters, n_clusters, n_classes
@@ -214,19 +196,20 @@ def add_clustering_metrics(
     train_acc = jnp.mean(train_mapping[train_clusters] == train_labels)
     test_acc = jnp.mean(train_mapping[test_clusters] == test_labels)
 
-    train_nmi = clustering_nmi_fn(n_clusters, n_classes, train_clusters, train_labels)
-    test_nmi = clustering_nmi_fn(n_clusters, n_classes, test_clusters, test_labels)
+    train_nmi = clustering_nmi(n_clusters, n_classes, train_clusters, train_labels)
+    test_nmi = clustering_nmi(n_clusters, n_classes, test_clusters, test_labels)
 
     train_ari = clustering_ari(n_clusters, n_classes, train_clusters, train_labels)
     test_ari = clustering_ari(n_clusters, n_classes, test_clusters, test_labels)
 
-    cm: ClusteringMetrics = {
-        "Clustering/Train Accuracy": (INFO_LEVEL, train_acc),
-        "Clustering/Test Accuracy": (INFO_LEVEL, test_acc),
-        "Clustering/Train NMI": (INFO_LEVEL, train_nmi),
-        "Clustering/Test NMI": (INFO_LEVEL, test_nmi),
-        "Clustering/Train ARI": (INFO_LEVEL, train_ari),
-        "Clustering/Test ARI": (INFO_LEVEL, test_ari),
-    }
-    metrics.update(as_metric_dict(cm))
+    metrics.update(
+        {
+            "Clustering/Train Accuracy": (INFO_LEVEL, train_acc),
+            "Clustering/Test Accuracy": (INFO_LEVEL, test_acc),
+            "Clustering/Train NMI": (INFO_LEVEL, train_nmi),
+            "Clustering/Test NMI": (INFO_LEVEL, test_nmi),
+            "Clustering/Train ARI": (INFO_LEVEL, train_ari),
+            "Clustering/Test ARI": (INFO_LEVEL, test_ari),
+        }
+    )
     return metrics

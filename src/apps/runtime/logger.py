@@ -41,6 +41,11 @@ _metric_buffer: MetricHistory = {}
 _wall_clock_start: float = 0.0
 # Accumulated duration spent in analyses/checkpointing (excluded from training time)
 _paused_duration: float = 0.0
+# Set by monitor_params' io_callback when NaNs are detected. JAX wraps the
+# raised DivergentTrainingError in an XlaRuntimeError with no exception
+# chaining, so callers can't reliably catch the original type — they read
+# this flag via Logger.divergence_raised() instead. Reset in __post_init__.
+_divergence_raised: bool = False
 
 
 @dataclass(frozen=True)
@@ -90,17 +95,13 @@ class Logger:
 
     def __post_init__(self) -> None:
         """Initialize logger with desired logging destinations."""
-        global _metric_buffer, _wall_clock_start, _paused_duration
+        global _wall_clock_start, _paused_duration, _divergence_raised
 
         # Start wall clock timer for tracking training duration
         _wall_clock_start = time.perf_counter()
         _paused_duration = 0.0
-
-        # Clear or load metric buffer based on whether we're resuming
-        if self.use_local:
-            # Since Logger doesn't have direct access to handler.from_epoch,
-            # we'll let the handler load metrics and call set_metric_buffer
-            _metric_buffer.clear()
+        # Reset divergence flag so a prior trial's NaN doesn't poison this one.
+        _divergence_raised = False
 
         # Initialize wandb
         if self.use_wandb:
@@ -131,6 +132,15 @@ class Logger:
     def get_metric_buffer() -> MetricHistory:
         """Get a copy of the current metric buffer."""
         return _metric_buffer.copy()
+
+    @staticmethod
+    def divergence_raised() -> bool:
+        """True if monitor_params flipped the divergence flag this run.
+
+        Used by the Optuna trial wrapper to recover the divergence signal
+        after JAX wraps our DivergentTrainingError inside XlaRuntimeError.
+        """
+        return _divergence_raised
 
     def log_config(self) -> None:
         """Log the configuration dictionary to wandb."""
@@ -235,6 +245,8 @@ class Logger:
 
         # Define the IO callback function
         def save_debug(params: dict[str, Array]) -> None:
+            global _divergence_raised
+            _divergence_raised = True
             handler.save_debug_state(params, context)
             log.error(f"NaNs detected in {context}")
 
@@ -276,7 +288,11 @@ class Logger:
         No-op when Optuna is off. Must be called outside JIT, after analyses
         have populated the metric buffer.
         """
-        if not self.use_optuna or self.optuna_trial is None or self.optuna_metric is None:
+        if (
+            not self.use_optuna
+            or self.optuna_trial is None
+            or self.optuna_metric is None
+        ):
             return
 
         buffer = self.get_metric_buffer()

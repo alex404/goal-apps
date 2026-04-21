@@ -10,13 +10,8 @@ import jax.numpy as jnp
 import numpy as np
 from hydra.core.config_store import ConfigStore
 from jax import Array
-from scipy.optimize import linear_sum_assignment
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.metrics import (
-    adjusted_rand_score,
-    normalized_mutual_info_score,
-)
 from sklearn.pipeline import Pipeline
 
 from apps.interface import (
@@ -25,9 +20,10 @@ from apps.interface import (
     ClusteringModel,
     ClusteringModelConfig,
 )
+from apps.interface.clustering import add_clustering_metrics
 from apps.interface.clustering.analyses import ClusterStatisticsAnalysis
 from apps.interface.clustering.protocols import CanComputePrototypes
-from apps.runtime import Logger, RunHandler
+from apps.runtime import INFO_LEVEL, Logger, MetricDict, RunHandler
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +52,17 @@ cs.store(group="model", name="kmeans", node=KMeansConfig)
 
 class KMeansModel(ClusteringModel, CanComputePrototypes):
     """K-means clustering benchmark model."""
+
+    _n_clusters: int
+    _data_dim: int
+    random_state: int
+    max_iter: int
+    n_init: int
+    tol: float
+    algorithm: str
+    _kmeans: KMeans | None
+    _cluster_centers: np.ndarray[Any, Any] | None
+    _train_data: np.ndarray[Any, Any] | None
 
     def __init__(
         self,
@@ -121,7 +128,7 @@ class KMeansModel(ClusteringModel, CanComputePrototypes):
             n_clusters=self._n_clusters,
             random_state=self.random_state,
             max_iter=self.max_iter,
-            n_init=self.n_init,
+            n_init=self.n_init,  # pyright: ignore[reportArgumentType]
             tol=self.tol,
             algorithm=self.algorithm,
         )
@@ -133,64 +140,23 @@ class KMeansModel(ClusteringModel, CanComputePrototypes):
         self._cluster_centers = self._kmeans.cluster_centers_
 
         # Compute and log basic metrics
-        train_labels = self._kmeans.predict(train_data)
+        train_clusters = jnp.array(self._kmeans.predict(train_data))
 
         if dataset.has_labels:
-            true_labels = np.array(dataset.train_labels)
-            nmi = normalized_mutual_info_score(true_labels, train_labels)
-            ari = adjusted_rand_score(true_labels, train_labels)
+            test_data_np = np.array(dataset.test_data)
+            test_clusters = jnp.array(self._kmeans.predict(test_data_np))
 
-            # Compute optimal cluster-to-class mapping via Hungarian algorithm on TRAIN data
-            n_clusters_k = len(np.unique(train_labels))
-            n_classes_k = len(np.unique(true_labels))
-            cost_matrix = np.zeros((n_clusters_k, n_classes_k))
-            unique_clusters_k = np.unique(train_labels)
-            unique_classes_k = np.unique(true_labels)
-            for li, ci in enumerate(unique_clusters_k):
-                for lj, cj in enumerate(unique_classes_k):
-                    cost_matrix[li, lj] = -np.sum((train_labels == ci) & (true_labels == cj))
-            row_ind, col_ind = linear_sum_assignment(cost_matrix)
-            cluster_to_class = np.full(self._n_clusters, -1)
-            for li, lj in zip(row_ind, col_ind):
-                cluster_to_class[unique_clusters_k[li]] = unique_classes_k[lj]
-
-            accuracy = float(np.mean(cluster_to_class[train_labels] == true_labels))
-
-            logger.log_metrics(
-                {"K-means/Train NMI": (20, jnp.array(nmi))}, jnp.array(0)
+            metrics: MetricDict = {}
+            add_clustering_metrics(
+                metrics,
+                n_clusters=self._n_clusters,
+                n_classes=dataset.n_classes,
+                train_labels=dataset.train_labels,
+                test_labels=dataset.test_labels,
+                train_clusters=train_clusters,
+                test_clusters=test_clusters,
             )
-            logger.log_metrics(
-                {"K-means/Train ARI": (20, jnp.array(ari))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"K-means/Train Accuracy": (20, jnp.array(accuracy))}, jnp.array(0)
-            )
-
-            # Test metrics
-            test_data = np.array(dataset.test_data)
-            test_labels = self._kmeans.predict(test_data)
-            test_true_labels = np.array(dataset.test_labels)
-
-            test_nmi = normalized_mutual_info_score(test_true_labels, test_labels)
-            test_ari = adjusted_rand_score(test_true_labels, test_labels)
-            test_accuracy = float(np.mean(cluster_to_class[test_labels] == test_true_labels))
-
-            logger.log_metrics(
-                {"K-means/Test NMI": (20, jnp.array(test_nmi))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"K-means/Test ARI": (20, jnp.array(test_ari))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"K-means/Test Accuracy": (20, jnp.array(test_accuracy))}, jnp.array(0)
-            )
-
-            log.info(
-                f"K-means Train NMI: {nmi:.3f}, ARI: {ari:.3f}, Accuracy: {accuracy:.3f}"
-            )
-            log.info(
-                f"K-means Test NMI: {test_nmi:.3f}, ARI: {test_ari:.3f}, Accuracy: {test_accuracy:.3f}"
-            )
+            logger.log_metrics(metrics, jnp.array(0))
 
         # Save dummy parameters (K-means stores state internally)
         handler.save_params(jnp.array([0.0]), 0)
@@ -316,6 +282,20 @@ cs.store(group="model", name="pca_kmeans", node=PCAKMeansConfig)
 class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
     """PCA + K-means clustering benchmark model."""
 
+    _n_clusters: int
+    _data_dim: int
+    n_components: int | float
+    pca_random_state: int
+    random_state: int
+    max_iter: int
+    n_init: int
+    tol: float
+    algorithm: str
+    _pipeline: Pipeline | None
+    _pca: PCA | None
+    _kmeans: KMeans | None
+    _train_data: np.ndarray[Any, Any] | None
+
     def __init__(
         self,
         n_clusters: int,
@@ -396,7 +376,7 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
             n_clusters=self._n_clusters,
             random_state=self.random_state,
             max_iter=self.max_iter,
-            n_init=self.n_init,
+            n_init=self.n_init,  # pyright: ignore[reportArgumentType]
             tol=self.tol,
             algorithm=self.algorithm,
         )
@@ -415,74 +395,37 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
                 f"PCA explains {explained_var:.3f} of variance with {self._pca.n_components_} components"
             )
             logger.log_metrics(
-                {"PCA/Explained_Variance_Ratio": (20, jnp.array(explained_var))},
+                {
+                    "PCA/Explained_Variance_Ratio": (
+                        INFO_LEVEL,
+                        jnp.array(explained_var),
+                    )
+                },
                 jnp.array(0),
             )
             logger.log_metrics(
-                {"PCA/N_Components": (20, jnp.array(self._pca.n_components_))},
+                {"PCA/N_Components": (INFO_LEVEL, jnp.array(self._pca.n_components_))},
                 jnp.array(0),
             )
 
         # Get cluster assignments
-        train_labels = self._pipeline.predict(train_data)
+        train_clusters = jnp.array(self._pipeline.predict(train_data))
 
         if dataset.has_labels:
-            true_labels = np.array(dataset.train_labels)
-            nmi = normalized_mutual_info_score(true_labels, train_labels)
-            ari = adjusted_rand_score(true_labels, train_labels)
+            test_data_np = np.array(dataset.test_data)
+            test_clusters = jnp.array(self._pipeline.predict(test_data_np))
 
-            # Compute optimal cluster-to-class mapping via Hungarian algorithm on TRAIN data
-            n_clusters_k = len(np.unique(train_labels))
-            n_classes_k = len(np.unique(true_labels))
-            cost_matrix = np.zeros((n_clusters_k, n_classes_k))
-            unique_clusters_k = np.unique(train_labels)
-            unique_classes_k = np.unique(true_labels)
-            for li, ci in enumerate(unique_clusters_k):
-                for lj, cj in enumerate(unique_classes_k):
-                    cost_matrix[li, lj] = -np.sum((train_labels == ci) & (true_labels == cj))
-            row_ind, col_ind = linear_sum_assignment(cost_matrix)
-            cluster_to_class = np.full(self._n_clusters, -1)
-            for li, lj in zip(row_ind, col_ind):
-                cluster_to_class[unique_clusters_k[li]] = unique_classes_k[lj]
-
-            accuracy = float(np.mean(cluster_to_class[train_labels] == true_labels))
-
-            logger.log_metrics(
-                {"PCA+K-means/Train NMI": (20, jnp.array(nmi))}, jnp.array(0)
+            metrics: MetricDict = {}
+            add_clustering_metrics(
+                metrics,
+                n_clusters=self._n_clusters,
+                n_classes=dataset.n_classes,
+                train_labels=dataset.train_labels,
+                test_labels=dataset.test_labels,
+                train_clusters=train_clusters,
+                test_clusters=test_clusters,
             )
-            logger.log_metrics(
-                {"PCA+K-means/Train ARI": (20, jnp.array(ari))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"PCA+K-means/Train Accuracy": (20, jnp.array(accuracy))}, jnp.array(0)
-            )
-
-            # Test metrics
-            test_data = np.array(dataset.test_data)
-            test_labels = self._pipeline.predict(test_data)
-            test_true_labels = np.array(dataset.test_labels)
-
-            test_nmi = normalized_mutual_info_score(test_true_labels, test_labels)
-            test_ari = adjusted_rand_score(test_true_labels, test_labels)
-            test_accuracy = float(np.mean(cluster_to_class[test_labels] == test_true_labels))
-
-            logger.log_metrics(
-                {"PCA+K-means/Test NMI": (20, jnp.array(test_nmi))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"PCA+K-means/Test ARI": (20, jnp.array(test_ari))}, jnp.array(0)
-            )
-            logger.log_metrics(
-                {"PCA+K-means/Test Accuracy": (20, jnp.array(test_accuracy))},
-                jnp.array(0),
-            )
-
-            log.info(
-                f"PCA+K-means Train NMI: {nmi:.3f}, ARI: {ari:.3f}, Accuracy: {accuracy:.3f}"
-            )
-            log.info(
-                f"PCA+K-means Test NMI: {test_nmi:.3f}, ARI: {test_ari:.3f}, Accuracy: {test_accuracy:.3f}"
-            )
+            logger.log_metrics(metrics, jnp.array(0))
 
         # Save dummy parameters
         handler.save_params(jnp.array([0.0]), 0)
@@ -496,7 +439,7 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
 
     def generate(self, params: Array, key: Array, n_samples: int) -> Array:
         """Generate samples by sampling from clusters and inverse PCA transform."""
-        if self._pipeline is None:
+        if self._pipeline is None or self._kmeans is None or self._pca is None:
             raise ValueError("Model must be trained before generating samples")
 
         rng = np.random.RandomState(int(key[0]) if len(key) > 0 else 42)
@@ -530,7 +473,7 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
 
     def get_cluster_prototypes(self, handler: RunHandler, epoch: int) -> list[Array]:
         """Get cluster prototypes in original space (inverse transform of PCA centers)."""
-        if self._pipeline is None:
+        if self._kmeans is None or self._pca is None:
             raise ValueError("Model must be trained before getting prototypes")
 
         cluster_centers_pca = self._kmeans.cluster_centers_
@@ -540,7 +483,7 @@ class PCAKMeansModel(ClusteringModel, CanComputePrototypes):
     @override
     def compute_cluster_prototypes(self, params: Array) -> list[Array]:
         """Compute cluster prototypes in original space (inverse transform of PCA centers)."""
-        if self._pipeline is None:
+        if self._kmeans is None or self._pca is None:
             raise ValueError("Model must be trained before computing prototypes")
 
         cluster_centers_pca = self._kmeans.cluster_centers_

@@ -13,7 +13,7 @@ import logging
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import override
+from typing import Any, override
 
 import h5py
 import jax.numpy as jnp
@@ -36,8 +36,7 @@ log = logging.getLogger(__name__)
 
 _TARBALL_NAME = "fresh_68k_pbmc_donor_a_filtered_gene_bc_matrices.tar.gz"
 _DOWNLOAD_URL = (
-    "https://www.10xgenomics.com/datasets/"
-    "fresh-68-k-pbm-cs-donor-a-1-standard-1-1-0"
+    "https://www.10xgenomics.com/datasets/fresh-68-k-pbm-cs-donor-a-1-standard-1-1-0"
 )
 
 # Canonical PBMC marker genes for cell type annotation
@@ -68,11 +67,14 @@ class PBMC68kConfig(ClusteringDatasetConfig):
         log_transform: Apply log1p transformation after CP10k normalization
         standardize: Center and scale features
         test_fraction: Fraction of data for test set
-        random_seed: Random seed for reproducibility
         min_marker_score: Minimum mean marker expression for cell type annotation
         max_cells: Optional cap on number of cells (None for all ~68k)
         n_global_genes: Number of genes in global profile visualization
         n_marker_genes: Number of cluster-specific marker genes to show
+
+    Note: the random seed used for split / sub-sampling is the CLI-driven
+    ``cfg.seed``, threaded through ``initialize_run`` — not a dataset-local
+    field.
     """
 
     _target_: str = "plugins.datasets.pbmc68k.PBMC68kDataset.load"
@@ -92,7 +94,6 @@ class PBMC68kConfig(ClusteringDatasetConfig):
 
     # Data splits
     test_fraction: float = 0.2
-    random_seed: int = 42
 
     # Cell type annotation
     min_marker_score: float = 0.5
@@ -137,6 +138,7 @@ class PBMC68kDataset(ClusteringDataset):
     def load(
         cls,
         cache_dir: Path,
+        seed: int,
         min_genes_per_cell: int = 200,
         max_genes_per_cell: int = 5000,
         min_cells_per_gene: int = 10,
@@ -145,7 +147,6 @@ class PBMC68kDataset(ClusteringDataset):
         log_transform: bool = True,
         standardize: bool = True,
         test_fraction: float = 0.2,
-        random_seed: int = 42,
         min_marker_score: float = 0.5,
         max_cells: int | None = None,
         n_global_genes: int = 100,
@@ -163,7 +164,8 @@ class PBMC68kDataset(ClusteringDataset):
 
         if processed_path.exists():
             log.info("Loading cached PBMC 68k processed data: %s", processed_path)
-            with h5py.File(processed_path, "r") as f:
+            with h5py.File(processed_path, "r") as hf:
+                f: Any = hf  # h5py stubs don't support dataset subscript
                 expression_data = np.array(f["expression"][:], dtype=np.float32)
                 gene_names = [
                     g.decode() if isinstance(g, bytes) else g
@@ -185,7 +187,7 @@ class PBMC68kDataset(ClusteringDataset):
                     use_fano_selection=use_fano_selection,
                     log_transform=log_transform,
                     max_cells=max_cells,
-                    random_seed=random_seed,
+                    seed=seed,
                     min_marker_score=min_marker_score,
                 )
             )
@@ -194,9 +196,7 @@ class PBMC68kDataset(ClusteringDataset):
             cache_dir.mkdir(parents=True, exist_ok=True)
             with h5py.File(processed_path, "w") as f:
                 f.create_dataset("expression", data=expression_data)
-                f.create_dataset(
-                    "gene_names", data=[g.encode() for g in gene_names]
-                )
+                f.create_dataset("gene_names", data=[g.encode() for g in gene_names])
                 f.create_dataset("cell_labels", data=cell_labels)
                 f.create_dataset(
                     "cell_type_names",
@@ -214,30 +214,20 @@ class PBMC68kDataset(ClusteringDataset):
         # Keep pre-standardization copy for visualization stats
         visu_matrix = expression_data.copy()
 
-        if standardize:
-            scaler = StandardScaler()
-            expression_data = scaler.fit_transform(expression_data).astype(np.float32)
-            log.info("Applied standardization")
-
-        # Convert to JAX arrays
-        expression_jax = jnp.array(expression_data)
-        cell_labels_jax = jnp.array(cell_labels)
-
-        # Stratified train/test split
-        n_cells = expression_jax.shape[0]
+        # Split BEFORE standardization to prevent test statistics from
+        # leaking into the scaler fit.
+        n_cells = expression_data.shape[0]
         try:
             sss = StratifiedShuffleSplit(
-                n_splits=1, test_size=test_fraction, random_state=random_seed
+                n_splits=1, test_size=test_fraction, random_state=seed
             )
-            ((train_idx, test_idx),) = sss.split(
-                np.zeros(n_cells), cell_labels
-            )
+            ((train_idx, test_idx),) = sss.split(np.zeros(n_cells), cell_labels)
             log.info(
                 "Stratified split: %d train, %d test", len(train_idx), len(test_idx)
             )
         except ValueError as e:
             log.warning("Stratified split failed (%s), using random split", e)
-            rng = np.random.RandomState(random_seed)
+            rng = np.random.RandomState(seed)
             test_idx = rng.choice(
                 n_cells, size=int(n_cells * test_fraction), replace=False
             )
@@ -246,8 +236,19 @@ class PBMC68kDataset(ClusteringDataset):
         train_idx = np.asarray(train_idx)
         test_idx = np.asarray(test_idx)
 
-        train_data = expression_jax[train_idx]
-        test_data = expression_jax[test_idx]
+        train_expr = expression_data[train_idx]
+        test_expr = expression_data[test_idx]
+
+        if standardize:
+            scaler = StandardScaler()
+            train_expr = np.asarray(scaler.fit_transform(train_expr), dtype=np.float32)
+            test_expr = np.asarray(scaler.transform(test_expr), dtype=np.float32)
+            log.info("Applied standardization (fit on train only)")
+
+        train_data = jnp.array(train_expr)
+        test_data = jnp.array(test_expr)
+        cell_labels_jax = jnp.array(cell_labels)
+
         train_labels = cell_labels_jax[train_idx]
         test_labels = cell_labels_jax[test_idx]
 
@@ -308,12 +309,16 @@ class PBMC68kDataset(ClusteringDataset):
     @property
     @override
     def observable_shape(self) -> tuple[int, int]:
-        return (self.n_marker_genes, self.n_marker_genes)
+        # Marker genes are displayed as a horizontal bar chart — height is the
+        # number of bars, width is 1 (the bar axis). Downstream sizing
+        # heuristics read this to pick figure aspect ratios.
+        return (self.n_marker_genes, 1)
 
     @property
     @override
     def cluster_shape(self) -> tuple[int, int]:
-        return (1, 1)
+        # Cluster view shows n_marker_genes + 4 bars.
+        return (self.n_marker_genes + 4, 1)
 
     @property
     @override
@@ -375,8 +380,8 @@ def _extract_mex(cache_dir: Path) -> Path:
     if not tarball.exists():
         raise FileNotFoundError(
             f"PBMC 68k tarball not found at:\n  {tarball}\n\n"
-            f"Download '{_TARBALL_NAME}' from:\n  {_DOWNLOAD_URL}\n"
-            f"and place it in:\n  {cache_dir}/"
+            + f"Download '{_TARBALL_NAME}' from:\n  {_DOWNLOAD_URL}\n"
+            + f"and place it in:\n  {cache_dir}/"
         )
 
     log.info("Extracting PBMC 68k tarball...")
@@ -470,7 +475,7 @@ def _preprocess_pbmc68k(
     use_fano_selection: bool,
     log_transform: bool,
     max_cells: int | None,
-    random_seed: int,
+    seed: int,
     min_marker_score: float,
 ) -> tuple[np.ndarray, list[str], np.ndarray, list[str]]:
     """Download and preprocess PBMC 68k from scratch.
@@ -494,7 +499,7 @@ def _preprocess_pbmc68k(
 
     # Optional subsampling
     if max_cells is not None and matrix.shape[0] > max_cells:
-        rng = np.random.RandomState(random_seed)
+        rng = np.random.RandomState(seed)
         idx = np.sort(rng.choice(matrix.shape[0], max_cells, replace=False))
         matrix = matrix[idx]
         log.info("Subsampled to %d cells", max_cells)
@@ -546,8 +551,6 @@ def _preprocess_pbmc68k(
 
     # Convert to dense
     expression = matrix.toarray().astype(np.float32)
-    log.info(
-        "Dense matrix: %s (%.0f MB)", expression.shape, expression.nbytes / 1e6
-    )
+    log.info("Dense matrix: %s (%.0f MB)", expression.shape, expression.nbytes / 1e6)
 
     return expression, gene_names, cell_labels, cell_type_names

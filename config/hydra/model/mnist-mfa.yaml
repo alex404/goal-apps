@@ -48,8 +48,6 @@ analyses:
     enabled: true
   co_assignment_merge:
     enabled: true
-    filter_empty_clusters: true
-    min_cluster_size: 0.0005
   optimal_merge:
     enabled: false
     filter_empty_clusters: true

@@ -63,7 +63,8 @@ reportUnknownLambdaType = "none"
 reportAny = "none"
 reportExplicitAny = "none"
 reportMissingSuperCall = "none"
-reportUnusedCallResult = "none" 
+reportUnusedCallResult = "none"
+reportIndexIssue = "none"  # false positives from h5py/scipy stubs
 
 [tool.ruff]
 src = ["src"]

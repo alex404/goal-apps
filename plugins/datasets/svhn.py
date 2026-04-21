@@ -56,18 +56,25 @@ class SVHNDataset(ClusteringDataset):
 
     @classmethod
     def load(
-        cls, cache_dir: Path, greyscale: bool = False, crop_margin: int = 0
+        cls,
+        cache_dir: Path,
+        seed: int = 0,
+        greyscale: bool = False,
+        crop_margin: int = 0,
     ) -> "SVHNDataset":
         """Load SVHN dataset.
 
         Args:
             cache_dir: Directory for caching downloaded data
+            seed: Unused (SVHN ships with a fixed train/test split); accepted
+                so the CLI-seed can be passed uniformly through ``instantiate``.
             greyscale: Whether to convert RGB images to grayscale
             crop_margin: Pixels to crop from each side to focus on the digit
 
         Returns:
             Loaded SVHN dataset
         """
+        del seed
 
         def transform_tensor(img):
             # Convert PyTorch tensor to numpy
