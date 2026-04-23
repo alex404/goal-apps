@@ -230,6 +230,12 @@ Where common concerns live across the codebase:
   exception chaining, so `sweep.py`'s trial objective reads
   `Logger.divergence_raised()` in its `except Exception` branch and
   converts to `optuna.TrialPruned` — never string-match on the error.
+  Divergence is treated as a pruning signal (not `TrialState.FAIL`)
+  because stability regularizers are themselves tuned hyperparameters:
+  a diverging config means the sampled regularizer regime can't hold
+  this model, i.e. effectively −∞ performance. Pruned trials feed TPE's
+  density model so it learns to avoid that neighborhood; `FAIL` would
+  discard them.
 - **Atomic checkpoints.** `handler._atomic_dump` does dump-to-`.tmp` +
   `os.replace` for params, metrics, and artifacts so a crashed write
   never leaves a truncated resume target. `save_debug_state` is
