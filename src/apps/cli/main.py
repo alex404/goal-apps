@@ -11,6 +11,7 @@ from rich.table import Table
 from .sweep import (
     OptunaImportError,
     OptunaValidationError,
+    _study_dir,
     clear_optuna_study,
     create_optuna_study,
     create_sweep_config,
@@ -25,6 +26,7 @@ from .sweep import (
 from .util import (
     format_config_table,
     get_store_groups,
+    is_imported_trial,
     print_objective_sparkline,
     print_param_distributions_split,
     print_param_pair_coverage,
@@ -372,45 +374,64 @@ def optuna_status(
     # Count by state
     from optuna.trial import TrialState
 
+    study_dir = _study_dir(study_name)
+    imported_nums = {t.number for t in trials if is_imported_trial(t, study_dir)}
+    native_trials = [t for t in trials if t.number not in imported_nums]
+
     completed = [t for t in trials if t.state == TrialState.COMPLETE]
-    pruned = [t for t in trials if t.state == TrialState.PRUNED]
-    failed = [t for t in trials if t.state == TrialState.FAIL]
-    running = [t for t in trials if t.state == TrialState.RUNNING]
+    native_completed = [t for t in native_trials if t.state == TrialState.COMPLETE]
+    native_pruned = [t for t in native_trials if t.state == TrialState.PRUNED]
+    native_failed = [t for t in native_trials if t.state == TrialState.FAIL]
+    native_running = [t for t in native_trials if t.state == TrialState.RUNNING]
     # Early-stopped: pruned by MedianPruner (has performance signal).
     # Diverged: pruned due to instability/missing metric (no intermediate values).
-    early_stopped = [t for t in pruned if t.intermediate_values]
-    diverged = [t for t in pruned if not t.intermediate_values]
-    all_sampled = completed + pruned
-    converged = completed + early_stopped
+    native_early_stopped = [t for t in native_pruned if t.intermediate_values]
+    native_diverged = [t for t in native_pruned if not t.intermediate_values]
+    native_all_sampled = native_completed + native_pruned
+    native_converged = native_completed + native_early_stopped
+    n_imported = len(imported_nums)
 
     direction = study.direction.name
 
     rprint(f"\n[bold]Study: {study_name}[/bold]")
     rprint(f"Metric: {metric}  (direction: {direction.lower()})")
+    completed_str = f"{len(native_completed)} completed"
+    if n_imported:
+        completed_str += f" ([dim]+{n_imported} imported[/dim])"
     rprint(
-        f"Trials: {len(completed)} completed, {len(early_stopped)} early-stopped, {len(diverged)} diverged, {len(failed)} failed, {len(running)} running"
+        f"Trials: {completed_str}, {len(native_early_stopped)} early-stopped, "
+        f"{len(native_diverged)} diverged, {len(native_failed)} failed, "
+        f"{len(native_running)} running"
     )
 
     if not completed:
         rprint("\nNo completed trials yet.")
         return
 
-    # Best trial, human-rounded params, and top N
-    print_trial_summary(completed, direction, pct, top_n)
+    # Best trial + top N panel uses all completed (so imports anchor the
+    # target to beat); Human column inside the panel filters to native.
+    print_trial_summary(
+        completed, direction, pct, top_n, imported_nums=imported_nums
+    )
 
-    # Visualizations
-    print_objective_sparkline(completed, direction)
+    # Visualizations — native-only, so distribution/coverage statistics
+    # reflect the new search space rather than the imported reference set.
+    if not native_completed:
+        rprint("\n[dim]No native completed trials yet — distributions omitted.[/dim]")
+        return
+
+    print_objective_sparkline(native_completed, direction)
     print_param_distributions_split(
-        completed, direction, pct=pct, all_trials=all_sampled
+        native_completed, direction, pct=pct, all_trials=native_all_sampled
     )
     if n_pairs > 0:
         print_param_pair_coverage(
-            completed,
+            native_completed,
             direction,
             pct=pct,
             n_params=n_pairs,
-            all_trials=all_sampled,
-            converged_trials=converged,
+            all_trials=native_all_sampled,
+            converged_trials=native_converged,
         )
 
 

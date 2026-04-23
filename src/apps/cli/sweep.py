@@ -743,7 +743,7 @@ def import_trials(
 
     for t in source_study.trials:
         _import_one_trial(
-            t, source_dir, target_metric, target_study, include_pruned, summary
+            t, source, source_dir, target_metric, target_study, include_pruned, summary
         )
 
     return summary
@@ -751,6 +751,7 @@ def import_trials(
 
 def _import_one_trial(
     trial: Any,
+    source_name: str,
     source_dir: Path,
     target_metric: str,
     target_study: Any,
@@ -762,6 +763,8 @@ def _import_one_trial(
 
     import optuna
     from optuna.trial import TrialState
+
+    user_attrs = {"imported_from": source_name}
 
     if trial.state == TrialState.COMPLETE:
         metrics_path = source_dir / f"t{trial.number}" / "metrics.joblib"
@@ -782,6 +785,7 @@ def _import_one_trial(
             distributions=trial.distributions,
             value=value,
             state=TrialState.COMPLETE,
+            user_attrs=user_attrs,
         )
         target_study.add_trial(frozen)
         summary.imported_complete += 1
@@ -790,6 +794,7 @@ def _import_one_trial(
             params=trial.params,
             distributions=trial.distributions,
             state=TrialState.PRUNED,
+            user_attrs=user_attrs,
         )
         target_study.add_trial(frozen)
         summary.imported_pruned += 1

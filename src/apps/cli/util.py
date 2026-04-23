@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+from pathlib import Path
 from typing import Any
 
 from hydra.core.config_store import ConfigStore
@@ -13,6 +14,18 @@ from rich.table import Table
 from rich.tree import Tree
 
 log = logging.getLogger(__name__)
+
+
+def is_imported_trial(trial: Any, study_dir: Path) -> bool:
+    """Whether ``trial`` was injected via ``goal tune optuna import``.
+
+    Authoritative signal is ``user_attrs['imported_from']`` (set at
+    import time). Falls back to the absence of ``study_dir/t{N}/``
+    for legacy imports that predate the user_attr tag.
+    """
+    if trial.user_attrs.get("imported_from"):
+        return True
+    return not (study_dir / f"t{trial.number}").exists()
 
 ### Pretty Print Configs ###
 
@@ -395,25 +408,43 @@ def _range_str(dist: Any) -> str:
 
 
 def _hist_bar(
-    values: list[float], lo: float, hi: float, use_log: bool, n_bins: int = 20
+    values: list[float],
+    lo: float,
+    hi: float,
+    use_log: bool,
+    n_bins: int = 20,
+    off_count: int = 0,
 ) -> str:
-    """Render a histogram bar using the configured search range as fixed bin boundaries."""
-    if not values or lo == hi:
-        return "[dim](all same)[/dim]" if values else "[dim](none)[/dim]"
+    """Render a histogram bar using the configured search range as fixed bin boundaries.
+
+    ``off_count`` prepends a spacer-separated off-slot for conditional gates
+    (``suggest_optional``). Its character is scaled against ``max(bins)`` so
+    the relative frequency of "off" vs. any in-range bin is preserved.
+    """
+    has_on = bool(values) and lo != hi
+    if not has_on and off_count == 0:
+        return "[dim](none)[/dim]"
     bins = [0] * n_bins
-    for v in values:
-        if use_log and lo > 0:
-            frac = (math.log10(v) - math.log10(lo)) / (math.log10(hi) - math.log10(lo))
-        else:
-            frac = (v - lo) / (hi - lo)
-        idx = min(n_bins - 1, max(0, int(frac * n_bins)))
-        bins[idx] += 1
-    max_count = max(bins)
+    if has_on:
+        for v in values:
+            if use_log and lo > 0:
+                frac = (math.log10(v) - math.log10(lo)) / (
+                    math.log10(hi) - math.log10(lo)
+                )
+            else:
+                frac = (v - lo) / (hi - lo)
+            idx = min(n_bins - 1, max(0, int(frac * n_bins)))
+            bins[idx] += 1
+    max_count = max(max(bins), off_count)
     if max_count == 0:
         return ""
-    return "".join(
+    hist = "".join(
         _SPARK_CHARS[int(c / max_count * (len(_SPARK_CHARS) - 1))] for c in bins
     )
+    if off_count == 0:
+        return hist
+    off_char = _SPARK_CHARS[int(off_count / max_count * (len(_SPARK_CHARS) - 1))]
+    return f"{off_char} {hist}"
 
 
 def _split_section(name: str) -> tuple[str, str]:
@@ -452,29 +483,51 @@ def print_trial_summary(
     direction: str,
     pct: float = 10.0,
     top_n: int = 10,
+    imported_nums: frozenset[int] | set[int] | None = None,
 ) -> None:
-    """Print best trial params, human-rounded params, and top N in a compact layout."""
+    """Print best trial params, human-rounded params, and top N in a compact layout.
+
+    ``imported_nums`` lists trial numbers that were injected via
+    ``goal tune optuna import``. Imports contribute to the best/top-N
+    panels (they are the performance target) but are excluded from the
+    Human (top-pct%) column so the humanized stats reflect only the
+    current search space.
+    """
     import statistics
 
     import optuna.distributions as od
     from rich.columns import Columns
 
+    if imported_nums is None:
+        imported_nums = frozenset()
     maximize = direction == "MAXIMIZE"
+
+    # Best panel pivots to the best *native* trial so its t{N} column
+    # reflects the current search space (imports typically lack the
+    # newer axes and would show None for them). Falls back to overall
+    # best only when no native trial has completed yet.
+    native_completed = [t for t in completed if t.number not in imported_nums]
+    best_pool = native_completed if native_completed else completed
     best = (
-        max(completed, key=lambda t: t.value or 0)
+        max(best_pool, key=lambda t: t.value or 0)
         if maximize
-        else min(completed, key=lambda t: t.value or 0)
+        else min(best_pool, key=lambda t: t.value or 0)
     )
     ranked = sorted(completed, key=lambda t: t.value or 0, reverse=maximize)
 
-    good_nums = _good_set(completed, direction, pct)
-    good_trials = [t for t in completed if t.number in good_nums]
-    dists = _param_dists(completed)
+    # Human column draws from native trials too — imports have
+    # potentially different (older) distributions and would skew the
+    # humanized regime toward the imported search space.
+    good_nums = _good_set(native_completed, direction, pct)
+    good_trials = [t for t in native_completed if t.number in good_nums]
+    dists = _param_dists(native_completed) if native_completed else _param_dists(completed)
     label_dir = "top" if maximize else "bottom"
+
+    best_imp_tag = " [dim](imp)[/dim]" if best.number in imported_nums else ""
 
     # --- Left: param table (best + human best) ---
     param_table = Table(
-        title=f"Best trial: t{best.number} ({best.value:.6f})",
+        title=f"Best trial: t{best.number}{best_imp_tag} ({best.value:.6f})",
         show_header=True,
         header_style="bold",
         title_style="bold",
@@ -489,22 +542,57 @@ def print_trial_summary(
 
     prev_section: str | None = None
     for param in sorted(dists.keys(), key=_section_sort_key):
+        # __enabled gates are folded into their inner param's row.
+        if param.endswith("__enabled"):
+            continue
+
         section, leaf = _split_section(param)
         if prev_section is not None and section != prev_section:
             param_table.add_section()
         prev_section = section
-        best_val = best.params.get(param)
-        # Human-rounded value
-        good_values = [t.params[param] for t in good_trials if param in t.params]
+
+        gate = f"{param}__enabled"
+        is_gated = gate in dists
+
+        # Best column: a gated inner with gate=False renders as "off".
+        best_gate = best.params.get(gate) if is_gated else None
+        if is_gated and best_gate is False:
+            best_str = "[dim]off[/dim]"
+        else:
+            raw = best.params.get(param)
+            best_str = _fmt_val(raw) if raw is not None else "[dim]—[/dim]"
+
+        # Human column.
         if isinstance(dists.get(param), od.CategoricalDistribution):
+            good_values = [t.params[param] for t in good_trials if param in t.params]
             human_val = (
                 str(max(set(good_values), key=good_values.count)) if good_values else ""
             )
-        elif good_values:
-            human_val = _human_round(statistics.median(good_values))
+        elif is_gated:
+            on_vals = [
+                t.params[param] for t in good_trials if t.params.get(gate) is True
+            ]
+            n_on = len(on_vals)
+            n_off = sum(1 for t in good_trials if t.params.get(gate) is False)
+            total = n_on + n_off
+            if total == 0:
+                human_val = ""
+            elif n_off == total:
+                human_val = "off"
+            elif n_on == total:
+                human_val = _human_round(statistics.median(on_vals))
+            else:
+                human_val = (
+                    f"{_human_round(statistics.median(on_vals))} "
+                    f"[dim]({n_on}/{total} on)[/dim]"
+                )
         else:
-            human_val = ""
-        param_table.add_row(leaf, str(best_val), human_val)
+            good_values = [t.params[param] for t in good_trials if param in t.params]
+            human_val = (
+                _human_round(statistics.median(good_values)) if good_values else ""
+            )
+
+        param_table.add_row(leaf, best_str, human_val)
 
     # --- Right: top N list ---
     top_table = Table(
@@ -516,7 +604,10 @@ def print_trial_summary(
     top_table.add_column("Trial", style="cyan", no_wrap=True)
     top_table.add_column("Value", no_wrap=True)
     for t in ranked[:top_n]:
-        top_table.add_row(f"t{t.number}", f"{t.value:.6f}")
+        label = f"t{t.number}"
+        if t.number in imported_nums:
+            label += " [dim](imp)[/dim]"
+        top_table.add_row(label, f"{t.value:.6f}")
 
     rprint()
     rprint(Columns([param_table, top_table], padding=(0, 2)))
@@ -595,6 +686,11 @@ def print_param_distributions_split(
             no_wrap=True,
         )
 
+        # If any continuous row is gated, non-gated rows get a 2-char
+        # left-pad so histogram columns line up at the range start.
+        any_gated = any(f"{p}__enabled" in dists for p in cont_params)
+        pad = "  " if any_gated else ""
+
         prev_cont_section: str | None = None
         for param in cont_params:
             section, leaf = _split_section(param)
@@ -604,18 +700,53 @@ def print_param_distributions_split(
             dist = dists[param]
             lo, hi = float(dist.low), float(dist.high)
             use_log = bool(getattr(dist, "log", False))
-            sampled_bar = _hist_bar(
-                [float(v) for v in param_sampled[param]], lo, hi, use_log, n_bins
+            gate = f"{param}__enabled"
+            is_gated = gate in dists
+            if is_gated:
+                off_sampled = sum(
+                    1 for t in coverage_trials if t.params.get(gate) is False
+                )
+                off_stable = sum(
+                    1 for t in completed if t.params.get(gate) is False
+                )
+                off_good = sum(
+                    1
+                    for t in completed
+                    if t.number in good and t.params.get(gate) is False
+                )
+                range_str = f"0:{_range_str(dist)}"
+                row_pad = ""
+            else:
+                off_sampled = off_stable = off_good = 0
+                range_str = _range_str(dist)
+                row_pad = pad
+            sampled_bar = row_pad + _hist_bar(
+                [float(v) for v in param_sampled[param]],
+                lo,
+                hi,
+                use_log,
+                n_bins,
+                off_count=off_sampled,
             )
-            stable_bar = _hist_bar(
-                [float(v) for v in param_stable.get(param, [])], lo, hi, use_log, n_bins
+            stable_bar = row_pad + _hist_bar(
+                [float(v) for v in param_stable.get(param, [])],
+                lo,
+                hi,
+                use_log,
+                n_bins,
+                off_count=off_stable,
             )
-            good_bar = _hist_bar(
-                [float(v) for v in param_good.get(param, [])], lo, hi, use_log, n_bins
+            good_bar = row_pad + _hist_bar(
+                [float(v) for v in param_good.get(param, [])],
+                lo,
+                hi,
+                use_log,
+                n_bins,
+                off_count=off_good,
             )
             hist_table.add_row(
                 leaf,
-                _range_str(dist),
+                range_str,
                 sampled_bar,
                 stable_bar,
                 good_bar,
@@ -625,10 +756,13 @@ def print_param_distributions_split(
         rprint(hist_table)
 
     # --- Categorical counts table ---
+    # Gates whose inner is continuous are already folded into the
+    # histogram table; skip their standalone rows here.
     cat_params = [
         p
         for p in sorted(param_sampled.keys(), key=_section_sort_key)
-        if dists.get(p) is None or isinstance(dists.get(p), od.CategoricalDistribution)
+        if (dists.get(p) is None or isinstance(dists.get(p), od.CategoricalDistribution))
+        and not (p.endswith("__enabled") and p[: -len("__enabled")] in dists)
     ]
     if cat_params:
         cat_table = Table(
