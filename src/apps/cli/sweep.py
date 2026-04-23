@@ -537,6 +537,7 @@ class ImportSummary:
     imported_complete: int = 0
     imported_pruned: int = 0
     skipped_missing_metric: int = 0
+    skipped_nan_value: int = 0
 
 
 def _collect_source_distributions(source_study: Any) -> dict[str, Any]:
@@ -712,6 +713,8 @@ def _import_one_trial(
     summary: ImportSummary,
 ) -> None:
     """Import a single source trial into the target study, updating ``summary``."""
+    import math
+
     import optuna
     from optuna.trial import TrialState
 
@@ -725,10 +728,14 @@ def _import_one_trial(
             summary.skipped_missing_metric += 1
             return
         _, value = metrics[target_metric][-1]
+        value = float(value)
+        if not math.isfinite(value):
+            summary.skipped_nan_value += 1
+            return
         frozen = optuna.trial.create_trial(
             params=trial.params,
             distributions=trial.distributions,
-            value=float(value),
+            value=value,
             state=TrialState.COMPLETE,
         )
         target_study.add_trial(frozen)

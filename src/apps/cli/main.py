@@ -386,7 +386,7 @@ def optuna_import(
         )
 
     rprint(
-        f"\n[bold]Imported[/bold]: {summary.imported_complete} completed, {summary.imported_pruned} pruned, {summary.skipped_missing_metric} skipped (missing metric)"
+        f"\n[bold]Imported[/bold]: {summary.imported_complete} completed, {summary.imported_pruned} pruned, {summary.skipped_missing_metric} skipped (missing metric), {summary.skipped_nan_value} skipped (non-finite value)"
     )
 
 
