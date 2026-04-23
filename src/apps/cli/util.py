@@ -416,8 +416,21 @@ def _hist_bar(
     )
 
 
-def _strip_model_prefix(name: str) -> str:
-    return name[len("model.") :] if name.startswith("model.") else name
+def _split_section(name: str) -> tuple[str, str]:
+    """Split a dotted parameter name into (section, leaf).
+
+    ``"model.full.ent_reg"`` → ``("model", "full.ent_reg")``
+    ``"dataset.max_features"`` → ``("dataset", "max_features")``
+    ``"bare_name"`` → ``("", "bare_name")``
+
+    Used by ``status`` to group rows by Hydra section with a horizontal rule.
+    """
+    section, sep, leaf = name.partition(".")
+    return (section, leaf) if sep else ("", name)
+
+
+def _section_sort_key(name: str) -> tuple[str, str]:
+    return _split_section(name)
 
 
 def _human_round(value: float) -> str:
@@ -474,8 +487,12 @@ def print_trial_summary(
         no_wrap=True,
     )
 
-    for param in sorted(dists.keys()):
-        display = _strip_model_prefix(param)
+    prev_section: str | None = None
+    for param in sorted(dists.keys(), key=_section_sort_key):
+        section, leaf = _split_section(param)
+        if prev_section is not None and section != prev_section:
+            param_table.add_section()
+        prev_section = section
         best_val = best.params.get(param)
         # Human-rounded value
         good_values = [t.params[param] for t in good_trials if param in t.params]
@@ -487,7 +504,7 @@ def print_trial_summary(
             human_val = _human_round(statistics.median(good_values))
         else:
             human_val = ""
-        param_table.add_row(display, str(best_val), human_val)
+        param_table.add_row(leaf, str(best_val), human_val)
 
     # --- Right: top N list ---
     top_table = Table(
@@ -559,14 +576,14 @@ def print_param_distributions_split(
     # --- Continuous histogram table ---
     cont_params = [
         p
-        for p in sorted(param_sampled.keys())
+        for p in sorted(param_sampled.keys(), key=_section_sort_key)
         if not (
             dists.get(p) is None or isinstance(dists.get(p), od.CategoricalDistribution)
         )
     ]
     if cont_params:
         hist_table = Table(title=title, show_header=True, header_style="bold")
-        hist_table.add_column("Model Parameter", style="cyan", no_wrap=True)
+        hist_table.add_column("Parameter", style="cyan", no_wrap=True)
         hist_table.add_column("Range", style="dim", no_wrap=True)
         hist_table.add_column(f"Sampled (n={len(coverage_trials)})", no_wrap=True)
         hist_table.add_column(
@@ -578,7 +595,12 @@ def print_param_distributions_split(
             no_wrap=True,
         )
 
+        prev_cont_section: str | None = None
         for param in cont_params:
+            section, leaf = _split_section(param)
+            if prev_cont_section is not None and section != prev_cont_section:
+                hist_table.add_section()
+            prev_cont_section = section
             dist = dists[param]
             lo, hi = float(dist.low), float(dist.high)
             use_log = bool(getattr(dist, "log", False))
@@ -592,7 +614,7 @@ def print_param_distributions_split(
                 [float(v) for v in param_good.get(param, [])], lo, hi, use_log, n_bins
             )
             hist_table.add_row(
-                _strip_model_prefix(param),
+                leaf,
                 _range_str(dist),
                 sampled_bar,
                 stable_bar,
@@ -605,14 +627,14 @@ def print_param_distributions_split(
     # --- Categorical counts table ---
     cat_params = [
         p
-        for p in sorted(param_sampled.keys())
+        for p in sorted(param_sampled.keys(), key=_section_sort_key)
         if dists.get(p) is None or isinstance(dists.get(p), od.CategoricalDistribution)
     ]
     if cat_params:
         cat_table = Table(
             title="Categorical Parameters", show_header=True, header_style="bold"
         )
-        cat_table.add_column("Model Parameter", style="cyan", no_wrap=True)
+        cat_table.add_column("Parameter", style="cyan", no_wrap=True)
         cat_table.add_column("Category", no_wrap=True)
         cat_table.add_column(
             f"Sampled (n={len(coverage_trials)})", justify="right", no_wrap=True
@@ -630,7 +652,12 @@ def print_param_distributions_split(
             no_wrap=True,
         )
 
+        prev_cat_section: str | None = None
         for param in cat_params:
+            section, leaf = _split_section(param)
+            if prev_cat_section is not None and section != prev_cat_section:
+                cat_table.add_section()
+            prev_cat_section = section
             dist = dists.get(param)
             choices = (
                 [str(c) for c in dist.choices]
@@ -648,7 +675,7 @@ def print_param_distributions_split(
                 good_counts[str(v)] = good_counts.get(str(v), 0) + 1
 
             for i, choice in enumerate(choices):
-                param_label = _strip_model_prefix(param) if i == 0 else ""
+                param_label = leaf if i == 0 else ""
                 cat_table.add_row(
                     param_label,
                     choice,

@@ -9,11 +9,13 @@ from rich import print as rprint
 from rich.table import Table
 
 from .sweep import (
+    OptunaImportError,
     OptunaValidationError,
     clear_optuna_study,
     create_optuna_study,
     create_sweep_config,
     default_storage,
+    import_trials,
     merge_from_template,
     reset_optuna_study,
     run_optuna_trial,
@@ -334,6 +336,58 @@ def optuna_status(
             all_trials=all_sampled,
             converged_trials=converged,
         )
+
+
+@optuna_app.command(name="import")
+def optuna_import(
+    source: str = typer.Argument(help="Name of the source study to import trials from"),
+    target: str = typer.Argument(help="Name of the target study (must already exist)"),
+    include_pruned: bool = typer.Option(
+        False,
+        "--include-pruned",
+        help="Also import PRUNED trials (param coverage only, no value)",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Allow importing into a target that already has trials",
+    ),
+):
+    """Warm-start a target study from completed trials of a source study.
+
+    Re-extracts the target study's metric from each source trial's
+    ``metrics.joblib`` — useful when switching the optimization objective
+    without re-running the search. Source study is not mutated.
+
+    Example:
+        goal tune optuna import ng20-hmog-coa-nmi ng20-hmog-flat-nmi
+    """
+    try:
+        summary = import_trials(
+            source=source, target=target, include_pruned=include_pruned, force=force
+        )
+    except (FileNotFoundError, OptunaImportError) as e:
+        rprint(f"[red]Import failed:[/red]\n{e}")
+        raise typer.Exit(1) from e
+
+    rprint(f"\n[bold]Search-space diff[/bold] ({source} → {target})")
+    if summary.aligned:
+        aligned_list = ", ".join(summary.aligned)
+        rprint(f"  [green]aligned[/green] ({len(summary.aligned)}): {aligned_list}")
+    if summary.target_only:
+        target_list = ", ".join(summary.target_only)
+        rprint(
+            f"  [yellow]target-only[/yellow] ({len(summary.target_only)}): {target_list}  [dim](no warm-start)[/dim]"
+        )
+    if summary.source_only:
+        source_list = ", ".join(summary.source_only)
+        rprint(
+            f"  [dim]source-only ({len(summary.source_only)}): {source_list}  (ignored by target sampler)[/dim]"
+        )
+
+    rprint(
+        f"\n[bold]Imported[/bold]: {summary.imported_complete} completed, {summary.imported_pruned} pruned, {summary.skipped_missing_metric} skipped (missing metric)"
+    )
 
 
 @optuna_app.command(name="reset")
