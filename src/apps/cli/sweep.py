@@ -581,6 +581,7 @@ class ImportSummary:
     source_only: list[str] = field(default_factory=list)
     imported_complete: int = 0
     imported_pruned: int = 0
+    imported_chained: int = 0
     skipped_missing_metric: int = 0
     skipped_nan_value: int = 0
 
@@ -737,13 +738,31 @@ def import_trials(
         raise OptunaImportError("\n".join(lines))
 
     target_metric: str = target_config.metric
+
+    # Source metric — used to recover values for trials that were themselves
+    # imported into ``source`` (those have no on-disk metrics.joblib). Safe
+    # fallback only when source and target optimize the same metric.
+    source_config_path = study_config_path(source)
+    source_metric: str | None = None
+    if source_config_path.exists():
+        source_config = OmegaConf.load(source_config_path)
+        if "metric" in source_config:
+            source_metric = str(source_config.metric)
+
     summary = ImportSummary(
         aligned=aligned, target_only=target_only, source_only=source_only
     )
 
     for t in source_study.trials:
         _import_one_trial(
-            t, source, source_dir, target_metric, target_study, include_pruned, summary
+            t,
+            source,
+            source_dir,
+            source_metric,
+            target_metric,
+            target_study,
+            include_pruned,
+            summary,
         )
 
     return summary
@@ -753,12 +772,20 @@ def _import_one_trial(
     trial: Any,
     source_name: str,
     source_dir: Path,
+    source_metric: str | None,
     target_metric: str,
     target_study: Any,
     include_pruned: bool,
     summary: ImportSummary,
 ) -> None:
-    """Import a single source trial into the target study, updating ``summary``."""
+    """Import a single source trial into the target study, updating ``summary``.
+
+    For COMPLETE trials we re-extract ``target_metric`` from each source
+    trial's on-disk ``metrics.joblib``. If that file is missing (the trial
+    was itself injected via ``add_trial`` — i.e. a chained import), we fall
+    back to ``trial.value`` when ``source_metric == target_metric``; the
+    stored value is already the target metric under that condition.
+    """
     import math
 
     import optuna
@@ -768,15 +795,20 @@ def _import_one_trial(
 
     if trial.state == TrialState.COMPLETE:
         metrics_path = source_dir / f"t{trial.number}" / "metrics.joblib"
-        if not metrics_path.exists():
+        chained = False
+        if metrics_path.exists():
+            metrics = joblib.load(metrics_path)
+            if target_metric not in metrics or not metrics[target_metric]:
+                summary.skipped_missing_metric += 1
+                return
+            _, value = metrics[target_metric][-1]
+            value = float(value)
+        elif source_metric == target_metric and trial.value is not None:
+            value = float(trial.value)
+            chained = True
+        else:
             summary.skipped_missing_metric += 1
             return
-        metrics = joblib.load(metrics_path)
-        if target_metric not in metrics or not metrics[target_metric]:
-            summary.skipped_missing_metric += 1
-            return
-        _, value = metrics[target_metric][-1]
-        value = float(value)
         if not math.isfinite(value):
             summary.skipped_nan_value += 1
             return
@@ -788,7 +820,10 @@ def _import_one_trial(
             user_attrs=user_attrs,
         )
         target_study.add_trial(frozen)
-        summary.imported_complete += 1
+        if chained:
+            summary.imported_chained += 1
+        else:
+            summary.imported_complete += 1
     elif trial.state == TrialState.PRUNED and include_pruned:
         frozen = optuna.trial.create_trial(
             params=trial.params,

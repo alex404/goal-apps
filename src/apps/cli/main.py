@@ -482,8 +482,16 @@ def optuna_import(
             f"  [dim]source-only ({len(summary.source_only)}): {source_list}  (ignored by target sampler)[/dim]"
         )
 
+    chained_str = (
+        f", {summary.imported_chained} chained"
+        if summary.imported_chained
+        else ""
+    )
     rprint(
-        f"\n[bold]Imported[/bold]: {summary.imported_complete} completed, {summary.imported_pruned} pruned, {summary.skipped_missing_metric} skipped (missing metric), {summary.skipped_nan_value} skipped (non-finite value)"
+        f"\n[bold]Imported[/bold]: {summary.imported_complete} completed"
+        f"{chained_str}, {summary.imported_pruned} pruned, "
+        f"{summary.skipped_missing_metric} skipped (missing metric), "
+        f"{summary.skipped_nan_value} skipped (non-finite value)"
     )
 
 

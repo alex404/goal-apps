@@ -35,6 +35,9 @@ class NewsgroupsConfig(ClusteringDatasetConfig):
         max_df: Maximum document frequency for TF-IDF (sklearn standard: 0.95)
         seed: Random seed for reproducibility
         use_count_vectorizer: Use count vectorization instead of TF-IDF
+        sublinear_tf: TF-IDF only — apply 1 + log(tf) instead of raw tf
+        norm: TF-IDF only — row-wise normalization: "l1", "l2", or "none"
+        max_ngram: Use n-grams up to this length; ngram_range = (1, max_ngram)
         n_top_words: Number of top words to show in visualization
     """
 
@@ -53,6 +56,9 @@ class NewsgroupsConfig(ClusteringDatasetConfig):
 
     # Vectorization method
     use_count_vectorizer: bool = False  # False for TF-IDF, True for count
+    sublinear_tf: bool = False  # TF-IDF only; sklearn default
+    norm: str = "l2"  # TF-IDF only; "l1", "l2", or "none"
+    max_ngram: int = 1  # ngram_range = (1, max_ngram)
 
     # Visualization
     n_top_words: int = 10
@@ -71,6 +77,9 @@ class NewsgroupsDataset(ClusteringDataset):
     max_features: int | None
     min_df: int
     max_df: float
+    sublinear_tf: bool
+    norm: str
+    max_ngram: int
     n_top_words: int
 
     # Data
@@ -94,6 +103,9 @@ class NewsgroupsDataset(ClusteringDataset):
         min_df: int,
         max_df: float,
         use_count_vectorizer: bool,
+        sublinear_tf: bool,
+        norm: str,
+        max_ngram: int,
         n_top_words: int,
     ) -> "NewsgroupsDataset":
         """Load 20 Newsgroups dataset using standard train/test splits.
@@ -169,12 +181,15 @@ class NewsgroupsDataset(ClusteringDataset):
             target_names = train_newsgroups.target_names
 
         # Apply preprocessing based on parameters
+        ngram_range = (1, max_ngram)
+        norm_arg = None if norm == "none" else norm
         if use_count_vectorizer:
             log.info("Creating count features...")
             vectorizer = CountVectorizer(
                 max_features=max_features,
                 min_df=min_df,
                 max_df=max_df,
+                ngram_range=ngram_range,
                 stop_words="english",
                 lowercase=True,
                 strip_accents="ascii",
@@ -185,6 +200,9 @@ class NewsgroupsDataset(ClusteringDataset):
                 max_features=max_features,
                 min_df=min_df,
                 max_df=max_df,
+                ngram_range=ngram_range,
+                sublinear_tf=sublinear_tf,
+                norm=norm_arg,
                 stop_words="english",
                 lowercase=True,
                 strip_accents="ascii",
@@ -212,6 +230,9 @@ class NewsgroupsDataset(ClusteringDataset):
             max_features=max_features,
             min_df=min_df,
             max_df=max_df,
+            sublinear_tf=sublinear_tf,
+            norm=norm,
+            max_ngram=max_ngram,
             n_top_words=n_top_words,
             _train_data=train_data,
             _test_data=test_data,
