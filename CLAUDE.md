@@ -137,94 +137,33 @@ The `plugins/register_plugins()` function discovers and imports all plugins at s
 
 ### Core Abstractions
 
-**Model Interface** (`src/apps/interface/model.py`):
-- `train(key, handler, logger, dataset)` - Training loop implementation
-- `analyze(key, handler, logger, dataset)` - Post-training analysis
-- `initialize_model(key, data)` - Parameter initialization
-- `get_analyses(dataset)` - Returns list of Analysis instances to run
-- `n_epochs` - Total training epochs
+Read the source for method lists; one-line pointers here:
 
-**Dataset Interface** (`src/apps/interface/dataset.py`):
-- `train_data`, `test_data` - JAX arrays with shape (n_samples, data_dim)
-- `observable_shape` - Abstract property for visualization grid sizing
-- `paint_observable(observable, axes)` - Visualization of single observation
-- `has_labels`, `train_labels`, `test_labels` - Ground truth labels (optional)
-
-**Clustering Interfaces** (`src/apps/interface/clustering/`):
-- `ClusteringDataset` extends `Dataset` with `paint_cluster()`, `cluster_shape`
-- `ClusteringModel` extends `Model` with `n_parameters` (for BIC)
-- Protocols: `HasLogLikelihood`, `IsGenerative`, `HasSoftAssignments`, `CanComputePrototypes`, `HasClusterHierarchy`
-- Shared analyses: `ClusterStatisticsAnalysis`, `CoAssignmentHierarchyAnalysis`, `OptimalMergeAnalysis`, `CoAssignmentMergeAnalysis`
-- `ClusteringRunConfig` and `ClusteringAnalysesConfig` for structured analysis configuration
-
-**Analysis Interface** (`src/apps/interface/analysis.py`):
-- `generate(key, handler, dataset, model, epoch, params)` - Generate artifact
-- `plot(artifact, dataset)` - Create matplotlib Figure from artifact
-- `metrics(artifact)` - Return MetricDict (optional, defaults to `{}`)
-- `process()` - Orchestrates generate/load, then plot and log
-- `artifact_type` - Abstract property returning the artifact class
-
-**Shared Analyses** (`src/apps/interface/analyses/`):
-- `GenerativeSamplesAnalysis` - Generic generative sampling (used by any `IsGenerative` model)
-
-**RunHandler** (`src/apps/runtime/handler.py`):
-- Manages directory structure: `runs/single/<run_name>/epoch_<N>/` (or `runs/tune/<study_name>/...`)
-- Saves/loads model parameters, metrics, artifacts
-- Handles resumption logic
-
-**Logger** (`src/apps/runtime/logger.py`):
-- Buffers metrics for batch logging
-- Supports local file logging and W&B integration
-- Tracks wall clock time from initialization
-- `log_metrics()`, `log_figure()`, `log_artifact()`
-
-**Runtime Metrics** (`src/apps/runtime/metrics.py`):
-- `add_ll_metrics()` - Log-likelihood and BIC metrics
-- `log_with_frequency()` - JIT-compatible frequency-gated logging
-
-**Clustering Metrics** (`src/apps/interface/clustering/metrics.py`):
-- `add_clustering_metrics()` - NMI and accuracy metrics
+- `src/apps/interface/model.py` — `Model` base: `train`, `analyze`, `initialize_model`, `get_analyses`, `n_epochs`.
+- `src/apps/interface/dataset.py` — `Dataset` base: `train_data`, `test_data`, `observable_shape`, `paint_observable`, optional labels.
+- `src/apps/interface/clustering/` — `ClusteringModel`/`ClusteringDataset`, protocols (`HasLogLikelihood`, `IsGenerative`, `HasSoftAssignments`, `CanComputePrototypes`, `HasClusterHierarchy`), shared clustering analyses, `ClusteringRunConfig`/`ClusteringAnalysesConfig`.
+- `src/apps/interface/analysis.py` — `Analysis[Dataset, Model, Artifact]`: `generate`, `plot`, `metrics`, `process`, `artifact_type`.
+- `src/apps/interface/analyses/` — shared analyses reusable across models (e.g. `GenerativeSamplesAnalysis` for any `IsGenerative` model).
+- `src/apps/runtime/handler.py` — `RunHandler`: run directory layout, atomic param/metric/artifact I/O, resume logic.
+- `src/apps/runtime/logger.py` — `Logger`: metric buffering, W&B integration, `check_pruning` (Optuna reporting).
+- `src/apps/runtime/metrics.py` — generic metric helpers (`add_ll_metrics`, `log_with_frequency`).
+- `src/apps/interface/clustering/metrics.py` — clustering metric helpers (`add_clustering_metrics` → NMI/ARI/accuracy).
 
 ### Directory Structure
 
 ```
 goal-apps/
-├── config/default.mplstyle  # Matplotlib style configuration
-├── src/apps/               # Core application framework
-│   ├── cli/                # CLI commands (train, analyze, tune)
-│   ├── interface/          # Abstract base classes
-│   │   ├── clustering/     # Clustering-specific interfaces, protocols, and shared analyses
-│   │   └── analyses/       # Generic reusable analyses (generative samples)
-│   └── runtime/            # RunHandler, Logger, metrics utilities
-│
-├── plugins/                # Pluggable implementations
+├── config/                 # Matplotlib style + Hydra config (base, dataset/, model/)
+├── src/apps/               # Core framework — cli/, interface/ (+ clustering/, analyses/), runtime/
+├── plugins/
 │   ├── datasets/           # MNIST, CIFAR-10, SVHN, Tasic, Neural Traces, 20 Newsgroups
-│   └── models/             # HMOG, MFA, K-means, LDA
-│       ├── hmog/           # Hierarchical Mixture of Gaussians
-│       │   ├── model.py    # HMoGModel base class
-│       │   ├── trainers.py # Pre-training and gradient trainers
-│       │   └── analyses/   # HMoG-specific analyses (KL hierarchy, loadings)
-│       └── mfa/            # Mixture of Factor Analyzers
-│           ├── model.py    # MFAModel (full and diagonal variants)
-│           ├── trainers.py # Gradient-EM trainer (cycled via shared driver)
-│           └── configs.py  # MFAConfig, MFADiagonalConfig
-│
-├── config/hydra/           # Hydra configuration files
-│   ├── config.yaml         # Base run configuration
-│   ├── dataset/            # Pre-configured dataset settings
-│   └── model/              # Pre-configured model settings
-│
+│   └── models/             # HMoG, MFA, K-means, LDA (each plugin registers with ConfigStore)
 ├── scratch/                # Debug/experiment scripts (not part of the package)
-│
 └── runs/                   # Training outputs (created at runtime)
     ├── single/<run_name>/  # Regular training runs
-    └── tune/<study_name>/  # Tuning runs (Optuna studies, W&B sweeps)
-        └── <run_name>/
-            ├── run-config.yaml
-            ├── metrics.joblib
-            └── epoch_<N>/
-                ├── params.joblib
-                └── <analysis_name>.joblib
+    └── tune/<study_name>/  # Optuna studies / W&B sweeps
+        ├── study-config.yaml, study.db
+        └── t<N>/           # One directory per trial: run-config.yaml, metrics.joblib, epoch_<N>/
 ```
 
 ### Training Pipeline
@@ -280,7 +219,10 @@ Where common concerns live across the codebase:
   `runs/tune/<study>/study-config.yaml` (overrides, metric, direction,
   pruner, storage) and `runs/tune/<study>/study.db` (SQLite). Trial runs
   land in `runs/tune/<study>/t<N>/` with the usual `run-config.yaml`,
-  `metrics.joblib`, `epoch_<N>/` layout.
+  `metrics.joblib`, `epoch_<N>/` layout. The `pruner:` key is a nested
+  mapping (`{name, n_startup_trials, n_warmup_steps, …}`); legacy bare
+  strings (`pruner: median`) still load via back-compat in
+  `sweep.py:_normalize_pruner_config`.
 - **Divergence-to-prune flow.** `Logger.monitor_params` is called inside
   jitted training steps. On NaN it enters an `io_callback` that flips the
   module-level `_divergence_raised` flag and raises
@@ -348,34 +290,19 @@ Training supports two distinct strategies controlled by `batch_size` and `batch_
 
 ### HMOG Model Architecture
 
-The Hierarchical Mixture of Gaussians (HMOG) is the primary model with multi-phase training:
-
-1. **LGMPreTrainer**: Pre-train latent Gaussian mixture components
-2. **MixtureGradientTrainer**: Optimize mixture weights and parameters
-3. **FullGradientTrainer**: End-to-end gradient-based optimization
+Hierarchical Mixture of Gaussians — primary model. Inside each cycle it
+runs three gradient sub-phases: `lgm` (LGM params, mixture frozen) →
+`mix` (mixture params, LGM fixed) → `full` (end-to-end). An optional
+`pre` (LGMPreTrainer) phase runs once before cycling begins. See
+`plugins/models/hmog/`.
 
 **Gradient EM and `bound_means` whitening**: `FullGradientTrainer.bound_means()` applies `model.whiten_prior()` to the bounded posterior statistics (the EM target). The gradient is `prior_stats - bounded_posterior_stats`, so whitening the target means the model's mean parameters converge toward a whitened state where the prior is N(0,I). This is intentional and correct — it keeps the latent prior from drifting. Do NOT treat this as a bug or remove the `whiten_prior` call. This same principle applies to MFA and any other model using gradient EM with whitening.
 
-HMOG-specific analyses (`plugins/models/hmog/analyses/`):
-- `KLHierarchyAnalysis`: KL-divergence-based hierarchical clustering of components
-- `KLMergeAnalysis`: KL-divergence-based optimal merge analysis
-- `LoadingMatrixAnalysis`: PCA-like interpretation of latent dimensions
-
-Shared clustering analyses (from `src/apps/interface/clustering/analyses/`):
-- `ClusterStatisticsAnalysis`: Cluster sizes, assignments, prototypes
-- `CoAssignmentHierarchyAnalysis`: Co-assignment-based hierarchical clustering
-- `OptimalMergeAnalysis` / `CoAssignmentMergeAnalysis`: Cluster merge analyses
-- `GenerativeSamplesAnalysis`: Sample new observations (from `src/apps/interface/analyses/`)
-
 ### MFA Model Architecture
 
-The Mixture of Factor Analyzers (MFA) is a simpler clustering model:
-- Supports both full factor analysis and diagonal covariance variants
-- Gradient-EM training via `GradientTrainer` (no pretraining phase)
-- Initialized from k-means cluster centers
-- Registered as `mfa` and `mfa-diagonal` in Hydra
-- Implements `ClusteringModel`, `HasLogLikelihood`, `IsGenerative`, `HasSoftAssignments`, `CanComputePrototypes`
-- Shares the cycle-orchestration driver (`run_cyclic_training`, `cycle_lr_schedule` in `src/apps/interface/clustering/model.py`) with HMoG, so `model.num_cycles` + `model.lr_scales` behave identically across the two — per-cycle checkpoints, per-cycle LR multipliers, resume-at-cycle-boundary. MFA has no pretraining phase, so cycling starts at epoch 0.
+Mixture of Factor Analyzers — simpler than HMoG. Registered as `mfa`
+and `mfa-diagonal`. Single `trainer` phase inside each cycle; k-means
+init, no pretraining. Shares the cyclic driver with HMoG (see below).
 
 ### Cyclic Training and Optuna Pruning
 
@@ -394,6 +321,13 @@ level. The shared driver lives in
 Within a cycle, HMoG still runs three sub-phases (`lgm` / `mix` /
 `full`); MFA runs a single `trainer` phase. The driver is agnostic to
 what happens inside a cycle — the model's `run_cycle` callback owns that.
+
+**Pruning step units.** `Logger.check_pruning` calls
+`trial.report(value, epoch)` — the step passed to Optuna is the raw
+epoch count, not the cycle index. To give trials N free cycles before
+pruning, set `--pruner-warmup-steps` to `N × epochs_per_cycle` (for
+HMoG: `lgm.n_epochs + mix.n_epochs + full.n_epochs`; for MFA:
+`full.n_epochs`). Change epochs-per-cycle → re-tune the flag.
 
 ### Single-Source Seed Convention
 
@@ -422,47 +356,56 @@ The `goal tune` command supports two backends:
 3. `goal tune optuna status <study>` — check progress from any node
 4. `goal tune optuna reset <study>` — wipe DB, keep config
 5. `goal tune optuna clear <study>` — delete entire study
+6. `goal tune optuna import <source> <target>` — port historical
+   trials from another study, re-extracting the target's metric from
+   each source trial's `metrics.joblib`. Tolerates range divergence
+   and asymmetric param sets; errors on distribution-family
+   conflicts on shared names (e.g. float↔categorical).
 
-Search space syntax in overrides: `param=suggest_float:low:high:log`, `param=suggest_int:low:high`, `param=suggest_categorical:a,b,c`.
+Search-space directives in overrides:
+- `param=suggest_float:low:high[:log]`
+- `param=suggest_int:low:high`
+- `param=suggest_categorical:a,b,c`
+- `param=suggest_optional:<off>:<inner>` — boolean gate (at
+  `param__enabled`) chooses `<off>` vs. the inner directive;
+  useful for "maybe apply this regularizer".
 
-Study config is saved as `runs/tune/<study>/study-config.yaml` — editable by hand.
+Pruner configuration (per-study, persisted in `study-config.yaml`):
+- `--pruner` = `median` (default), `percentile`, or `none`.
+- `--pruner-startup-trials` — free trials before any pruning (default 3).
+- `--pruner-warmup-steps` — **epochs** before a trial is prunable. Set
+  to `N × epochs_per_cycle` for N free cycles (see § Cyclic Training).
+- `--pruner-interval-steps`, `--pruner-min-trials` — standard Optuna knobs.
+- `--pruner-percentile N` — keep top N% at each step (25 = aggressive,
+  75 = gentle). Setting this auto-selects `--pruner=percentile`.
+
+Metric validation: `--validate` (default) probes one sampled config,
+instantiates model+dataset, and errors if `--metric` isn't in the
+model's declared `metric_names`. `--no-validate` skips.
+
+Resume semantics: a preempted trial resumes from the last cycle
+boundary checkpoint (mid-cycle state is not restored). Study config
+at `runs/tune/<study>/study-config.yaml` is hand-editable.
 
 ## Development Patterns
 
-### Adding a New Model
+### Adding a New Model / Dataset / Analysis
 
-1. Create `plugins/models/<model_name>/` directory
-2. Implement model class extending `Model` or `ClusteringModel`
-3. Define config dataclass with `_target_` pointing to model class
-4. Register with ConfigStore in `__init__.py`:
-   ```python
-   from hydra.core.config_store import ConfigStore
-   cs = ConfigStore.instance()
-   cs.store(group="model", name="mymodel", node=MyModelConfig)
-   ```
-5. Implement required methods: `train()`, `analyze()`, `initialize_model()`, `get_analyses()`
-6. Create config file: `config/hydra/model/<dataset>-<model>.yaml`
+Copy an existing plugin as a template and adapt it:
 
-### Adding a New Dataset
-
-1. Create `plugins/datasets/<dataset_name>/` directory
-2. Implement dataset class extending `Dataset` or `ClusteringDataset`
-3. Define config dataclass with `_target_` pointing to dataset class
-4. Register with ConfigStore
-5. Implement: `train_data`, `test_data`, `paint_observable()`, `paint_cluster()` (if clustering)
-6. Create config file: `config/hydra/dataset/<name>.yaml`
-
-### Adding a New Analysis
-
-1. Create analysis class (model-specific in `plugins/models/<model>/analyses/`, or shared in `src/apps/interface/clustering/analyses/`)
-2. Extend `Analysis[DatasetType, ModelType, ArtifactType]`
-3. Implement:
-   - `generate()`: Generate artifact from model parameters
-   - `plot()`: Create matplotlib Figure from artifact
-   - `artifact_type`: Property returning the artifact class
-   - `metrics()`: Optional, return MetricDict
-4. Add analysis instance to model's `get_analyses()` method
-5. Analysis results automatically saved to epoch directories via `process()`
+- **Model**: copy `plugins/models/mfa/` (simpler than HMoG). Extend
+  `Model` or `ClusteringModel`, implement `train`/`analyze`/
+  `initialize_model`/`get_analyses`, register with ConfigStore in
+  `__init__.py`, add `config/hydra/model/<dataset>-<model>.yaml`.
+- **Dataset**: copy `plugins/datasets/mnist/`. Extend `Dataset` or
+  `ClusteringDataset`, implement `train_data`/`test_data`/
+  `paint_observable` (and `paint_cluster` for clustering), register,
+  add `config/hydra/dataset/<name>.yaml`.
+- **Analysis**: model-specific go under `plugins/models/<m>/analyses/`;
+  reusable under `src/apps/interface/clustering/analyses/`. Extend
+  `Analysis[DatasetType, ModelType, ArtifactType]`, implement
+  `generate`/`plot`/`artifact_type` (and optionally `metrics`), then
+  add an instance to the model's `get_analyses()`.
 
 ### Working with JAX
 

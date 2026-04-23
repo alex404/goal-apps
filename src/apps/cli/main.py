@@ -175,6 +175,37 @@ tune_app.add_typer(
 )
 
 
+def _build_pruner_config(
+    pruner: str,
+    startup_trials: int | None,
+    warmup_steps: int | None,
+    interval_steps: int | None,
+    min_trials: int | None,
+    percentile: float | None,
+) -> dict[str, Any]:
+    """Assemble the pruner mapping from CLI flags, resolving --pruner-percentile."""
+    if percentile is not None and pruner == "median":
+        pruner = "percentile"
+    elif percentile is not None and pruner != "percentile":
+        rprint(
+            f"[red]--pruner-percentile requires --pruner=percentile, got --pruner={pruner}[/red]"
+        )
+        raise typer.Exit(1)
+
+    cfg: dict[str, Any] = {"name": pruner}
+    kwargs = {
+        "n_startup_trials": startup_trials,
+        "n_warmup_steps": warmup_steps,
+        "interval_steps": interval_steps,
+        "n_min_trials": min_trials,
+        "percentile": percentile,
+    }
+    for k, v in kwargs.items():
+        if v is not None:
+            cfg[k] = v
+    return cfg
+
+
 @optuna_app.command(name="create")
 def optuna_create(
     overrides: list[str] = overrides,
@@ -185,7 +216,43 @@ def optuna_create(
     direction: str = typer.Option(
         "maximize", "--direction", "-d", help="maximize or minimize"
     ),
-    pruner: str = typer.Option("median", "--pruner", help="Pruner type: median, none"),
+    pruner: str = typer.Option(
+        "median", "--pruner", help="Pruner type: median, percentile, none"
+    ),
+    pruner_startup_trials: int | None = typer.Option(
+        None,
+        "--pruner-startup-trials",
+        help="Free trials before any pruning (MedianPruner/PercentilePruner; default 3)",
+    ),
+    pruner_warmup_steps: int | None = typer.Option(
+        None,
+        "--pruner-warmup-steps",
+        help=(
+            "Epochs-since-start before a trial becomes prunable. Units are "
+            "epochs (the step passed to trial.report). For N free cycles, "
+            "pass N * epochs_per_cycle (HMoG: lgm+mix+full; MFA: full). "
+            "Default 1."
+        ),
+    ),
+    pruner_interval_steps: int | None = typer.Option(
+        None,
+        "--pruner-interval-steps",
+        help="Only evaluate pruning every N reports (default 1)",
+    ),
+    pruner_min_trials: int | None = typer.Option(
+        None,
+        "--pruner-min-trials",
+        help="Minimum observations at a step before pruning can fire (default 1)",
+    ),
+    pruner_percentile: float | None = typer.Option(
+        None,
+        "--pruner-percentile",
+        help=(
+            "PercentilePruner: keep the top N%% of trials at each step "
+            "(e.g. 25 = aggressive, keep only top 25%%; 75 = gentle, prune "
+            "bottom 25%%). Setting this implies --pruner=percentile."
+        ),
+    ),
     storage: str | None = typer.Option(
         None, "--storage", help="Optuna storage URL (default: sqlite in runs/tune/)"
     ),
@@ -225,12 +292,21 @@ def optuna_create(
             rprint(f"[red]Validation failed:[/red]\n{e}")
             raise typer.Exit(1) from e
 
+    pruner_config = _build_pruner_config(
+        pruner,
+        pruner_startup_trials,
+        pruner_warmup_steps,
+        pruner_interval_steps,
+        pruner_min_trials,
+        pruner_percentile,
+    )
+
     study = create_optuna_study(
         overrides=overrides,
         study_name=study_name,
         metric=metric,
         direction=direction,
-        pruner_name=pruner,
+        pruner_config=pruner_config,
         storage=storage,
     )
     rprint(f"Created study: {study.study_name}")

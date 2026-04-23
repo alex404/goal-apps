@@ -341,17 +341,57 @@ def default_storage(study_name: str) -> str:
     return f"sqlite:///{_study_dir(study_name).resolve()}/study.db"
 
 
-def _make_pruner(pruner_name: str) -> Any:
+_VALID_PRUNERS = ("median", "percentile", "none")
+
+
+def _normalize_pruner_config(pruner: Any) -> dict[str, Any]:
+    """Coerce a pruner entry from study-config.yaml into a dict.
+
+    Accepts a bare string (legacy shape: ``pruner: median``) or a mapping
+    (``pruner: {name: median, n_warmup_steps: 200, ...}``). Returns a
+    plain dict with a ``name`` key and any user-supplied kwargs.
+    """
+    if pruner is None:
+        return {"name": "median"}
+    if isinstance(pruner, str):
+        return {"name": pruner}
+    # DictConfig or plain dict — both support dict-iteration
+    cfg: dict[str, Any] = {str(k): pruner[k] for k in pruner}
+    if "name" not in cfg:
+        msg = f"pruner config missing 'name' key: {cfg}"
+        raise ValueError(msg)
+    return cfg
+
+
+def _make_pruner(pruner: Any) -> Any:
+    """Build an Optuna pruner from a config mapping (or legacy string)."""
     import optuna
 
-    pruners: dict[str, optuna.pruners.BasePruner] = {
-        "median": optuna.pruners.MedianPruner(n_startup_trials=3, n_warmup_steps=1),
-        "none": optuna.pruners.NopPruner(),
-    }
-    if pruner_name not in pruners:
-        msg = f"Unknown pruner: {pruner_name}. Choose from: {list(pruners.keys())}"
+    cfg = _normalize_pruner_config(pruner)
+    name = cfg["name"]
+    if name not in _VALID_PRUNERS:
+        msg = f"Unknown pruner: {name}. Choose from: {list(_VALID_PRUNERS)}"
         raise ValueError(msg)
-    return pruners[pruner_name]
+
+    if name == "none":
+        return optuna.pruners.NopPruner()
+
+    kwargs: dict[str, Any] = {}
+    for k in ("n_startup_trials", "n_warmup_steps", "interval_steps", "n_min_trials"):
+        if k in cfg and cfg[k] is not None:
+            kwargs[k] = int(cfg[k])
+
+    if name == "median":
+        # Preserve historical defaults when unspecified.
+        kwargs.setdefault("n_startup_trials", 3)
+        kwargs.setdefault("n_warmup_steps", 1)
+        return optuna.pruners.MedianPruner(**kwargs)
+
+    # percentile
+    percentile = float(cfg.get("percentile", 25.0))
+    kwargs.setdefault("n_startup_trials", 3)
+    kwargs.setdefault("n_warmup_steps", 1)
+    return optuna.pruners.PercentilePruner(percentile, **kwargs)
 
 
 def create_optuna_study(
@@ -359,10 +399,16 @@ def create_optuna_study(
     study_name: str,
     metric: str,
     direction: str,
-    pruner_name: str,
+    pruner_config: dict[str, Any],
     storage: str | None = None,
 ) -> Any:
     """Create a new Optuna study and save its config for workers.
+
+    ``pruner_config`` is a mapping with a ``name`` key (one of ``median``,
+    ``percentile``, ``none``) and optional kwargs (``n_startup_trials``,
+    ``n_warmup_steps``, ``interval_steps``, ``n_min_trials``,
+    ``percentile``). Only explicitly-set kwargs should be included — the
+    pruner constructor fills in defaults.
 
     Returns:
         The created Optuna study.
@@ -378,7 +424,7 @@ def create_optuna_study(
             "overrides": overrides,
             "metric": metric,
             "direction": direction,
-            "pruner": pruner_name,
+            "pruner": pruner_config,
             "storage": storage,
         }
     )
@@ -391,7 +437,7 @@ def create_optuna_study(
         study_name=study_name,
         storage=resolved_storage,
         direction=direction,
-        pruner=_make_pruner(pruner_name),
+        pruner=_make_pruner(pruner_config),
         load_if_exists=True,
     )
 
@@ -424,13 +470,12 @@ def run_optuna_trial(
     config = OmegaConf.load(config_path)
     overrides: list[str] = list(config.overrides)
     metric: str = config.metric
-    pruner_name: str = config.pruner
     storage: str = config.storage or default_storage(study_name)
 
     study = optuna.load_study(
         study_name=study_name,
         storage=storage,
-        pruner=_make_pruner(pruner_name),
+        pruner=_make_pruner(config.pruner),
     )
 
     def objective(trial: optuna.trial.Trial) -> float:
