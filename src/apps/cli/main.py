@@ -26,6 +26,7 @@ from .sweep import (
 from .util import (
     format_config_table,
     get_store_groups,
+    is_diverged_trial,
     is_imported_trial,
     print_objective_sparkline,
     print_param_distributions_split,
@@ -384,9 +385,9 @@ def optuna_status(
     native_failed = [t for t in native_trials if t.state == TrialState.FAIL]
     native_running = [t for t in native_trials if t.state == TrialState.RUNNING]
     # Early-stopped: pruned by MedianPruner (has performance signal).
-    # Diverged: pruned due to instability/missing metric (no intermediate values).
-    native_early_stopped = [t for t in native_pruned if t.intermediate_values]
-    native_diverged = [t for t in native_pruned if not t.intermediate_values]
+    # Diverged: pruned due to training instability (NaN / non-finite).
+    native_diverged = [t for t in native_pruned if is_diverged_trial(t)]
+    native_early_stopped = [t for t in native_pruned if not is_diverged_trial(t)]
     native_all_sampled = native_completed + native_pruned
     native_converged = native_completed + native_early_stopped
     n_imported = len(imported_nums)
@@ -442,7 +443,11 @@ def optuna_import(
     include_pruned: bool = typer.Option(
         False,
         "--include-pruned",
-        help="Also import PRUNED trials (param coverage only, no value)",
+        help=(
+            "Also import non-divergent PRUNED trials (param coverage only, "
+            "fate ambiguous). Diverged PRUNEDs are imported by default as "
+            "a definitive bad-neighborhood signal for TPE."
+        ),
     ),
     force: bool = typer.Option(
         False,
@@ -489,7 +494,8 @@ def optuna_import(
     )
     rprint(
         f"\n[bold]Imported[/bold]: {summary.imported_complete} completed"
-        f"{chained_str}, {summary.imported_pruned} pruned, "
+        f"{chained_str}, {summary.imported_diverged} diverged, "
+        f"{summary.imported_pruned} pruned, "
         f"{summary.skipped_missing_metric} skipped (missing metric), "
         f"{summary.skipped_nan_value} skipped (non-finite value)"
     )

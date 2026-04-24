@@ -505,6 +505,7 @@ def run_optuna_trial(
             # Raised directly from analyses (non-finite distance matrices, etc.)
             log.warning(f"Trial {trial.number} diverged: {e}")
             logger.finalize(handler)
+            trial.set_user_attr("diverged", True)
             raise optuna.TrialPruned() from e
         except Exception as e:
             # DivergentTrainingError raised from an io_callback inside JIT is
@@ -513,6 +514,7 @@ def run_optuna_trial(
             if Logger.divergence_raised():
                 log.warning(f"Trial {trial.number} diverged: {e}")
                 logger.finalize(handler)
+                trial.set_user_attr("diverged", True)
                 raise optuna.TrialPruned() from e
             raise
 
@@ -581,6 +583,7 @@ class ImportSummary:
     source_only: list[str] = field(default_factory=list)
     imported_complete: int = 0
     imported_pruned: int = 0
+    imported_diverged: int = 0
     imported_chained: int = 0
     skipped_missing_metric: int = 0
     skipped_nan_value: int = 0
@@ -791,6 +794,8 @@ def _import_one_trial(
     import optuna
     from optuna.trial import TrialState
 
+    from .util import is_diverged_trial
+
     user_attrs = {"imported_from": source_name}
 
     if trial.state == TrialState.COMPLETE:
@@ -824,12 +829,19 @@ def _import_one_trial(
             summary.imported_chained += 1
         else:
             summary.imported_complete += 1
-    elif trial.state == TrialState.PRUNED and include_pruned:
+    elif trial.state == TrialState.PRUNED:
+        diverged = is_diverged_trial(trial)
+        if not diverged and not include_pruned:
+            return
+        attrs = {**user_attrs, "diverged": True} if diverged else user_attrs
         frozen = optuna.trial.create_trial(
             params=trial.params,
             distributions=trial.distributions,
             state=TrialState.PRUNED,
-            user_attrs=user_attrs,
+            user_attrs=attrs,
         )
         target_study.add_trial(frozen)
-        summary.imported_pruned += 1
+        if diverged:
+            summary.imported_diverged += 1
+        else:
+            summary.imported_pruned += 1

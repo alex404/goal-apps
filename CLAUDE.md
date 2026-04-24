@@ -235,7 +235,15 @@ Where common concerns live across the codebase:
   a diverging config means the sampled regularizer regime can't hold
   this model, i.e. effectively −∞ performance. Pruned trials feed TPE's
   density model so it learns to avoid that neighborhood; `FAIL` would
-  discard them.
+  discard them. At the catch site, `sweep.py` sets
+  `trial.user_attrs["diverged"] = True` so divergence is distinguishable
+  from genuine mid-training prunes downstream. Classification goes
+  through `is_diverged_trial` in `cli/util.py`, which reads the tag and
+  falls back to "PRUNED with no intermediate values" for legacy trials
+  that predate the tag. `goal tune optuna import` imports diverged
+  PRUNEDs by default (definitive bad-neighborhood signal for TPE);
+  `--include-pruned` still gates non-divergent PRUNEDs (fate ambiguous,
+  param-coverage only).
 - **Atomic checkpoints.** `handler._atomic_dump` does dump-to-`.tmp` +
   `os.replace` for params, metrics, and artifacts so a crashed write
   never leaves a truncated resume target. `save_debug_state` is

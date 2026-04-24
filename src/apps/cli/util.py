@@ -27,6 +27,22 @@ def is_imported_trial(trial: Any, study_dir: Path) -> bool:
         return True
     return not (study_dir / f"t{trial.number}").exists()
 
+
+def is_diverged_trial(trial: Any) -> bool:
+    """Whether a PRUNED ``trial`` was pruned because training diverged.
+
+    Authoritative signal is ``user_attrs['diverged']`` (set at the
+    TrialPruned catch site in the Optuna objective). Falls back to
+    "pruned with no intermediate values" for legacy trials that
+    predate the tag.
+    """
+    from optuna.trial import TrialState
+
+    if trial.user_attrs.get("diverged"):
+        return True
+    return trial.state == TrialState.PRUNED and not trial.intermediate_values
+
+
 ### Pretty Print Configs ###
 
 
